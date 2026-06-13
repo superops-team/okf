@@ -1,77 +1,84 @@
+<div align="right">
+
+[English](README.md) | [中文](README.zh-CN.md)
+
+</div>
+
 # okf — Open Knowledge Format
 
-> AI Agent 项目级知识库系统，支持从 Git 仓库自动生成知识、规范检查和自动化更新。
+> Project-level knowledge base system for AI Agents, with automatic Git repository scanning, specification linting, and automated updates.
 
-## 功能特性
+## Features
 
-- **📁 Open Knowledge Format** — 基于 Markdown + YAML Frontmatter 的开放知识格式
-- **🔍 自动生成** — 扫描 Git 仓库代码自动生成项目知识库
-- **⚡ 增量更新** — 基于 Git 提交的增量更新
-- **🛠 Git Hook** — 一键安装，每次提交自动更新知识库
-- **📋 Lint 检查** — 内置规范检查（13 条规则）
-- **🔎 高级查询** — 支持按类型、标签、全文搜索
-- **🏗 模块化架构** — 清晰的分层设计
+- **📁 Open Knowledge Format** — Open knowledge format based on Markdown + YAML Frontmatter
+- **🔍 Auto-Generation** — Automatically generates knowledge base by scanning Git repository source code
+- **⚡ Incremental Updates** — Incremental updates based on Git commits
+- **🛠 Git Hook** — One-click installation, automatic knowledge base updates on every commit
+- **📋 Lint Checking** — Built-in specification compliance checker (13 rules)
+- **🔎 Advanced Query** — Filter by type, tags, or full-text search
+- **🏗 Modular Architecture** — Clean, layered design following Go best practices
 
-## 项目结构
+## Project Structure
 
 ```
 .
-├── cmd/okf/          # CLI 入口程序
-│   └── main.go      # 主入口
+├── cmd/okf/          # CLI entry point
+│   └── main.go      # Main application
 ├── pkg/
-│   ├── okf/         # 核心类型和 API
-│   │   ├── types.go # Concept, KnowledgeBundle 类型定义
-│   │   ├── api.go   # 加载/保存 bundle
-│   │   ├── errors.go # 错误类型
-│   │   ├── helpers.go # 辅助函数
-│   │   └── meta/    # 版本信息
-│   ├── parser/      # Markdown + YAML 解析器
+│   ├── okf/         # Core types and public API
+│   │   ├── types.go # Concept, KnowledgeBundle definitions
+│   │   ├── api.go   # LoadBundle, SaveBundle
+│   │   ├── errors.go # Error types
+│   │   ├── helpers.go # Helper functions
+│   │   └── meta/    # Version information
+│   ├── parser/      # Markdown + YAML parser
 │   │   └── parser.go
-│   ├── query/       # 查询引擎
+│   ├── query/       # Query engine
 │   │   └── query.go
-│   ├── lint/        # 规范检查
+│   ├── lint/        # Specification checker
 │   │   └── lint.go
-│   └── git/         # Git 集成
-│       ├── git.go       # Git 操作
-│       └── generator.go # 知识库生成
+│   └── git/         # Git integration
+│       ├── git.go       # Git operations
+│       └── generator.go # Knowledge base generation
 ├── go.mod
-└── README.md
+├── README.md            # English version (default)
+└── README.zh-CN.md      # Chinese version
 ```
 
-## 快速开始
+## Quick Start
 
 ```bash
-# 安装 CLI
+# Build the CLI
 go build -o okf ./cmd/okf/
 
-# 初始化知识库
+# Initialize knowledge base
 cd /your/repo
 ./okf init
 
-# 查看知识库
+# Show knowledge base information
 ./okf show
 
-# 搜索
+# Search concepts
 ./okf search -q "database"
 
-# Lint 检查
+# Lint check
 ./okf lint
 
-# 安装 Git Hook（自动更新）
+# Install Git Hook (automatic updates)
 ./okf hook -type post-commit
 ```
 
-## 模块说明
+## Module Reference
 
-| 模块 | 路径 | 功能 |
-|------|------|------|
-| **okf** | pkg/okf/ | 核心类型定义（Concept, KnowledgeBundle）和公共 API |
-| **parser** | pkg/parser/ | Markdown + YAML frontmatter 解析和序列化 |
-| **query** | pkg/query/ | 高级查询构建器和匹配引擎 |
-| **lint** | pkg/lint/ | OKF 规范检查（13 条规则） |
-| **git** | pkg/git/ | Git 仓库扫描、代码分析、知识库生成 |
+| Module | Path | Purpose |
+|--------|------|---------|
+| **okf** | pkg/okf/ | Core type definitions (Concept, KnowledgeBundle) and public API |
+| **parser** | pkg/parser/ | Markdown + YAML frontmatter parsing and serialization |
+| **query** | pkg/query/ | Advanced query builder and matching engine |
+| **lint** | pkg/lint/ | OKF specification compliance checking (13 rules) |
+| **git** | pkg/git/ | Git repository scanning, code analysis, knowledge base generation |
 
-## OKF 概念格式
+## OKF Concept Format
 
 ```markdown
 ---
@@ -87,10 +94,10 @@ timestamp: "2024-01-15T10:30:00Z"
 
 ## Users Table
 
-存储所有用户账户信息。
+Stores all user account information.
 ```
 
-## API 使用
+## API Usage
 
 ```go
 import (
@@ -99,33 +106,57 @@ import (
     "github.com/superops-team/okf/pkg/lint"
 )
 
-// 加载知识库
+// Load knowledge base
 bundle, err := okf.LoadBundle(".okf/knowledge", nil)
 
-// 搜索
+// Search concepts
 results := bundle.Search("database")
 
-// Lint 检查
+// Lint check
 result := lint.LintBundle(concepts, lint.DefaultConfig())
 
-// 从 Git 生成
+// Generate from Git
 bundle, err := git.GenerateBundle(cfg, false)
 ```
 
-## Lint 规则
+## Lint Rules
 
-| 代码 | 严重度 | 说明 |
-|------|--------|------|
-| OKF001 | ERROR | type 字段不能为空 |
-| OKF002 | ERROR | title 字段不能为空 |
-| OKF003 | WARNING | description 太短 |
-| OKF004 | WARNING | type 应为小写 |
-| OKF005 | WARNING | timestamp 格式不正确 |
-| OKF006 | WARNING | 标签包含大写或空格 |
-| OKF007 | WARNING | 内容体为空 |
-| OKF009 | WARNING | 内容行过长 |
-| OKF010 | WARNING | 重复标签 |
+| Code | Severity | Description |
+|------|----------|-------------|
+| OKF001 | ERROR | type field is required and must not be empty |
+| OKF002 | ERROR | title field is required and must not be empty |
+| OKF003 | WARNING | description is too short |
+| OKF004 | WARNING | type should use lowercase alphanumeric |
+| OKF005 | WARNING | timestamp format is invalid |
+| OKF006 | WARNING | tags contain uppercase or spaces |
+| OKF007 | WARNING | content body is empty |
+| OKF009 | WARNING | content lines are too long |
+| OKF010 | WARNING | duplicate tags found |
+
+## Build & Test
+
+```bash
+# Build
+go build ./...
+
+# Build CLI
+go build -o okf ./cmd/okf/
+
+# Run all tests
+go test ./...
+
+# Run benchmarks
+go test -bench=. -benchmem ./...
+```
 
 ## License
 
 Apache 2.0
+
+---
+
+<div align="center">
+
+[⬆ Back to Top](#okf--open-knowledge-format) &nbsp;•&nbsp; [🇨🇳 切换到中文](README.zh-CN.md)
+
+</div>
