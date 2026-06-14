@@ -12,6 +12,7 @@ import (
 	"github.com/superops-team/okf/pkg/lint"
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/okf/meta"
+	"github.com/superops-team/okf/pkg/query"
 )
 
 const Version = "1.0.0"
@@ -159,7 +160,7 @@ func cmdUpdate(args []string) {
 	start := time.Now()
 	fmt.Println("Updating knowledge base from latest commit...")
 
-	bundle, updated, err := git.UpdateFromLastCommit(cfg)
+	bundle, updated, err := git.UpdateSinceLastIndexedCommit(cfg)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -170,12 +171,10 @@ func cmdUpdate(args []string) {
 		return
 	}
 
-	outputDir := filepath.Join(cfg.RepoPath, cfg.KnowledgeDir)
-	os.MkdirAll(outputDir, 0755)
-
-	// Note: In production, would use parser.SerializeConcept here
-	_ = outputDir
-	_ = bundle
+	if err := git.ApplyIncrementalUpdate(cfg, bundle); err != nil {
+		fmt.Printf("Error saving update: %v\n", err)
+		os.Exit(1)
+	}
 
 	elapsed := time.Since(start)
 	fmt.Printf("✓ Updated %d concepts in %v\n", len(bundle.Concepts), elapsed)
@@ -341,30 +340,9 @@ func cmdSearch(args []string) {
 		os.Exit(1)
 	}
 
-	results := bundle.Search(*queryStr)
-
-	if *cType != "" {
-		var filtered []*okf.Concept
-		for _, c := range results {
-			if c.Type == *cType {
-				filtered = append(filtered, c)
-			}
-		}
-		results = filtered
-	}
-
-	if *tag != "" {
-		var filtered []*okf.Concept
-		for _, c := range results {
-			for _, t := range c.Tags {
-				if t == *tag {
-					filtered = append(filtered, c)
-					break
-				}
-			}
-		}
-		results = filtered
-	}
+	queryBundle := toQueryBundle(bundle)
+	searchResults := query.SearchWithMatches(queryBundle, *queryStr)
+	results := filterSearchResults(searchResults, *cType, *tag)
 
 	if len(results) == 0 {
 		fmt.Println("No results found.")
@@ -372,14 +350,60 @@ func cmdSearch(args []string) {
 	}
 
 	fmt.Printf("Found %d results:\n\n", len(results))
-	for i, c := range results {
+	for i, result := range results {
+		c := result.Concept
 		fmt.Printf("%d. [%s] %s\n", i+1, c.Type, c.Title)
 		fmt.Printf("   %s\n", c.Description)
 		if c.FilePath != "" {
 			fmt.Printf("   → %s\n", c.FilePath)
 		}
+		if matches := result.SymbolMatches; len(matches) > 0 {
+			fmt.Println("   symbol matches:")
+			for _, match := range matches {
+				fmt.Printf("     - %s %s at %s\n", match.Kind, match.Name, match.Location)
+			}
+		}
 		fmt.Println()
 	}
+}
+
+func toQueryBundle(bundle *okf.KnowledgeBundle) *query.KnowledgeBundle {
+	concepts := make([]*query.Concept, 0, len(bundle.Concepts))
+	for _, concept := range bundle.Concepts {
+		concepts = append(concepts, &query.Concept{
+			Type:        concept.Type,
+			Title:       concept.Title,
+			Description: concept.Description,
+			Resource:    concept.Resource,
+			Tags:        concept.Tags,
+			Content:     concept.Content,
+			FilePath:    concept.FilePath,
+		})
+	}
+	return &query.KnowledgeBundle{Concepts: concepts}
+}
+
+func filterSearchResults(results []query.SearchResult, conceptType, tag string) []query.SearchResult {
+	filtered := make([]query.SearchResult, 0, len(results))
+	for _, result := range results {
+		if conceptType != "" && result.Concept.Type != conceptType {
+			continue
+		}
+		if tag != "" && !queryConceptHasTag(result.Concept, tag) {
+			continue
+		}
+		filtered = append(filtered, result)
+	}
+	return filtered
+}
+
+func queryConceptHasTag(concept *query.Concept, tag string) bool {
+	for _, t := range concept.Tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
 }
 
 func cmdHook(args []string) {

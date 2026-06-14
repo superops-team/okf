@@ -52,7 +52,7 @@ func ParseConceptBytes(path string, data []byte) (*Concept, error) {
 	}
 
 	contentStart := endIdx + 3
-	for contentStart < len(data) && data[contentStart] == '\n' {
+	for contentStart < len(data) && (data[contentStart] == '\n' || data[contentStart] == '\r') {
 		contentStart++
 	}
 	content := string(data[contentStart:])

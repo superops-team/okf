@@ -79,11 +79,11 @@ func DefaultConfig() *Config {
 // Result contains the complete lint result.
 type Result struct {
 	ConceptsChecked int
-	Issues         []Issue
-	Errors         int
-	Warnings       int
-	Infos          int
-	Duration       time.Duration
+	Issues          []Issue
+	Errors          int
+	Warnings        int
+	Infos           int
+	Duration        time.Duration
 }
 
 // HasErrors returns true if there are any errors.
@@ -233,6 +233,27 @@ var rules = []Rule{
 			return nil
 		},
 	},
+	{
+		Code:        "OKF011",
+		Description: "Required tags must be present",
+		Severity:    Warning,
+		Check: func(c *Concept, cfg *Config) []Issue {
+			if len(cfg.RequiredTags) == 0 {
+				return nil
+			}
+			tagSet := make(map[string]bool)
+			for _, tag := range c.Tags {
+				tagSet[tag] = true
+			}
+			var issues []Issue
+			for _, requiredTag := range cfg.RequiredTags {
+				if !tagSet[requiredTag] {
+					issues = append(issues, Issue{Code: "OKF011", Severity: Warning, Message: fmt.Sprintf("Required tag '%s' is missing", requiredTag), Suggestion: "Add the required tag", FilePath: c.FilePath, Line: 5})
+				}
+			}
+			return issues
+		},
+	},
 }
 
 // LintConcept checks a single concept.
@@ -270,10 +291,10 @@ func LintBundle(concepts []*Concept, cfg *Config) *Result {
 
 		if titleCounts[c.Title] > 1 {
 			result.Issues = append(result.Issues, Issue{
-				FilePath: c.FilePath,
-				Severity: Warning,
-				Code:     "OKF013",
-				Message:  fmt.Sprintf("Duplicate title '%s'", c.Title),
+				FilePath:   c.FilePath,
+				Severity:   Warning,
+				Code:       "OKF013",
+				Message:    fmt.Sprintf("Duplicate title '%s'", c.Title),
 				Suggestion: "Each concept should have a unique title",
 			})
 		}

@@ -1,7 +1,6 @@
 package git
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,8 +11,29 @@ import (
 	"time"
 
 	"github.com/superops-team/okf/pkg/okf"
-	"gopkg.in/yaml.v3"
+	"github.com/superops-team/okf/pkg/parser"
 )
+
+const relationshipGraphResource = "okf://relationships"
+
+var (
+	packageLinePattern     = regexp.MustCompile("\\*\\*Package:\\*\\* `([^`]+)`")
+	importLinePattern      = regexp.MustCompile("^- `([^`]+)`$")
+	generatedSymbolPattern = regexp.MustCompile("^- `([^`]+)` `([^`]+)` \\(([^)]+)\\) at `([^`]+)`$")
+)
+
+// Relationship records one lightweight code relationship discovered during indexing.
+type Relationship struct {
+	Kind   string
+	Source string
+	Target string
+	Meta   string
+}
+
+// RelationshipGraph contains deterministic relationship records for the knowledge base.
+type RelationshipGraph struct {
+	Relationships []Relationship
+}
 
 // GenerateBundle creates a complete knowledge bundle from a Git repository.
 func GenerateBundle(cfg *Config, force bool) (*okf.KnowledgeBundle, error) {
@@ -58,13 +78,16 @@ func GenerateBundle(cfg *Config, force bool) (*okf.KnowledgeBundle, error) {
 	generated := 0
 	typeCounts := make(map[string]int)
 	authorCounts := make(map[string]int)
+	metadataByFile, err := BatchGitMetadata(repoRoot, relevantFiles)
+	if err != nil {
+		return nil, err
+	}
+	summaries, err := AnalyzeFilesWithMetadata(repoRoot, relevantFiles, metadataByFile, cfg.Workers)
+	if err != nil {
+		return nil, err
+	}
 
-	for _, filePath := range relevantFiles {
-		summary, err := AnalyzeFile(repoRoot, filePath)
-		if err != nil {
-			continue
-		}
-
+	for _, summary := range summaries {
 		concept := conceptFromSummary(summary, cfg, bundle)
 		bundle.Concepts = append(bundle.Concepts, concept)
 		typeCounts[summary.Type]++
@@ -82,6 +105,10 @@ func GenerateBundle(cfg *Config, force bool) (*okf.KnowledgeBundle, error) {
 	dirConcept := createDirectoryStructure(cfg, repoRoot, relevantFiles)
 	bundle.Concepts = append(bundle.Concepts, dirConcept)
 
+	// Add lightweight relationship graph
+	relationshipConcept := createRelationshipGraphConcept(BuildRelationshipGraphFromSummaries(summaries))
+	bundle.Concepts = append(bundle.Concepts, relationshipConcept)
+
 	// Add contributors
 	if len(authorCounts) > 0 {
 		contribConcept := createContributors(cfg, authorCounts)
@@ -89,6 +116,122 @@ func GenerateBundle(cfg *Config, force bool) (*okf.KnowledgeBundle, error) {
 	}
 
 	return bundle, nil
+}
+
+// BuildRelationshipGraphFromSummaries builds file/package import and ownership relationships.
+func BuildRelationshipGraphFromSummaries(summaries []*FileSummary) RelationshipGraph {
+	seen := make(map[string]bool)
+	var relationships []Relationship
+	add := func(kind, source, target, meta string) {
+		if source == "" || target == "" {
+			return
+		}
+		key := kind + "\x00" + source + "\x00" + target + "\x00" + meta
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		relationships = append(relationships, Relationship{Kind: kind, Source: source, Target: target, Meta: meta})
+	}
+
+	for _, summary := range summaries {
+		pkg := packageName(summary)
+		for _, imp := range summary.Imports {
+			add("file_import", summary.RelativePath, imp, "")
+			add("package_import", pkg, imp, "")
+		}
+		for _, symbol := range summary.Symbols {
+			qualified := qualifiedSymbolName(symbol)
+			add("file_owns_symbol", summary.RelativePath, qualified, symbol.Kind)
+			add("package_owns_symbol", symbol.Package, displaySymbolName(symbol), symbol.Kind)
+		}
+	}
+
+	sortRelationships(relationships)
+	return RelationshipGraph{Relationships: relationships}
+}
+
+func packageName(summary *FileSummary) string {
+	for _, symbol := range summary.Symbols {
+		if symbol.Package != "" {
+			return symbol.Package
+		}
+	}
+	return summary.Type
+}
+
+func qualifiedSymbolName(symbol Symbol) string {
+	name := displaySymbolName(symbol)
+	if symbol.Package == "" {
+		return name
+	}
+	return symbol.Package + "." + name
+}
+
+func displaySymbolName(symbol Symbol) string {
+	if symbol.Receiver != "" {
+		return symbol.Receiver + "." + symbol.Name
+	}
+	return symbol.Name
+}
+
+func sortRelationships(relationships []Relationship) {
+	sort.Slice(relationships, func(i, j int) bool {
+		if relationships[i].Kind != relationships[j].Kind {
+			return relationships[i].Kind < relationships[j].Kind
+		}
+		if relationships[i].Source != relationships[j].Source {
+			return relationships[i].Source < relationships[j].Source
+		}
+		if relationships[i].Target != relationships[j].Target {
+			return relationships[i].Target < relationships[j].Target
+		}
+		return relationships[i].Meta < relationships[j].Meta
+	})
+}
+
+func createRelationshipGraphConcept(graph RelationshipGraph) *okf.Concept {
+	c := okf.NewConcept("system", "Relationship Graph")
+	c.FilePath = "project/relationships.md"
+	c.Resource = relationshipGraphResource
+	c.Description = "Lightweight relationship graph for file imports, package imports, and symbol ownership"
+	c.Tags = []string{"relationship", "graph", "generated"}
+
+	sections := []struct {
+		kind  string
+		title string
+		verb  string
+	}{
+		{kind: "file_import", title: "File Imports", verb: "imports"},
+		{kind: "package_import", title: "Package Imports", verb: "imports"},
+		{kind: "file_owns_symbol", title: "File Owns Symbols", verb: "owns"},
+		{kind: "package_owns_symbol", title: "Package Owns Symbols", verb: "owns"},
+	}
+
+	var content strings.Builder
+	fmt.Fprintf(&content, "## Relationship Graph\n\n")
+	fmt.Fprintf(&content, "**Total Relationships:** %d\n\n", len(graph.Relationships))
+	for _, section := range sections {
+		fmt.Fprintf(&content, "### %s\n\n", section.title)
+		wrote := false
+		for _, relationship := range graph.Relationships {
+			if relationship.Kind != section.kind {
+				continue
+			}
+			if relationship.Meta != "" {
+				fmt.Fprintf(&content, "- `%s` %s `%s` (%s)\n", relationship.Source, section.verb, relationship.Target, relationship.Meta)
+			} else {
+				fmt.Fprintf(&content, "- `%s` %s `%s`\n", relationship.Source, section.verb, relationship.Target)
+			}
+			wrote = true
+		}
+		if !wrote {
+			fmt.Fprintf(&content, "- None\n")
+		}
+		fmt.Fprintf(&content, "\n")
+	}
+	c.Content = content.String()
+	return c
 }
 
 func conceptFromSummary(s *FileSummary, cfg *Config, bundle *okf.KnowledgeBundle) *okf.Concept {
@@ -119,6 +262,46 @@ func conceptFromSummary(s *FileSummary, cfg *Config, bundle *okf.KnowledgeBundle
 	}
 	fmt.Fprintf(&content, "**Commit Count:** %d\n\n", s.CommitCount)
 	fmt.Fprintf(&content, "**Last Modified:** %s\n\n", s.LastModified.Format("2006-01-02 15:04:05 MST"))
+	if len(s.Symbols) > 0 {
+		fmt.Fprintf(&content, "**Package:** `%s`\n\n", s.Symbols[0].Package)
+	}
+	if len(s.ParseWarnings) > 0 {
+		fmt.Fprintf(&content, "### Parse Warnings\n\n")
+		for _, warning := range s.ParseWarnings {
+			fmt.Fprintf(&content, "- %s\n", warning)
+		}
+		fmt.Fprintf(&content, "\n")
+	}
+	if len(s.Imports) > 0 {
+		fmt.Fprintf(&content, "### Imports\n\n")
+		for _, imp := range s.Imports {
+			fmt.Fprintf(&content, "- `%s`\n", imp)
+		}
+		fmt.Fprintf(&content, "\n")
+	}
+	if len(s.Functions) > 0 {
+		fmt.Fprintf(&content, "### Functions\n\n")
+		for _, fn := range s.Functions {
+			fmt.Fprintf(&content, "- `%s`\n", fn)
+		}
+		fmt.Fprintf(&content, "\n")
+	}
+	if len(s.Symbols) > 0 {
+		fmt.Fprintf(&content, "### Symbols\n\n")
+		for _, symbol := range s.Symbols {
+			location := fmt.Sprintf("%s:%d-%d", s.RelativePath, symbol.StartLine, symbol.EndLine)
+			exported := "unexported"
+			if symbol.Exported {
+				exported = "exported"
+			}
+			if symbol.Receiver != "" {
+				fmt.Fprintf(&content, "- `%s` `%s.%s` (%s) at `%s`\n", symbol.Kind, symbol.Receiver, symbol.Name, exported, location)
+				continue
+			}
+			fmt.Fprintf(&content, "- `%s` `%s` (%s) at `%s`\n", symbol.Kind, symbol.Name, exported, location)
+		}
+		fmt.Fprintf(&content, "\n")
+	}
 
 	c.Content = content.String()
 	return c
@@ -309,8 +492,13 @@ func UpdateBundle(cfg *Config, changedFiles []string) (*okf.KnowledgeBundle, []s
 		Name:     filepath.Base(repoRoot) + "_incremental",
 		RootPath: filepath.Join(repoRoot, cfg.KnowledgeDir),
 	}
+	metadataByFile, err := BatchGitMetadata(repoRoot, changedFiles)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var updatedPaths []string
+	var filesToAnalyze []string
 
 	for _, file := range changedFiles {
 		if !ShouldInclude(file, cfg) {
@@ -329,18 +517,196 @@ func UpdateBundle(cfg *Config, changedFiles []string) (*okf.KnowledgeBundle, []s
 			updatedPaths = append(updatedPaths, file+" (deleted)")
 			continue
 		}
+		filesToAnalyze = append(filesToAnalyze, file)
+	}
 
-		summary, err := AnalyzeFile(repoRoot, file)
-		if err != nil {
-			continue
-		}
-
+	summaries, err := AnalyzeFilesWithMetadata(repoRoot, filesToAnalyze, metadataByFile, cfg.Workers)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, summary := range summaries {
 		concept := conceptFromSummary(summary, cfg, bundle)
 		bundle.Concepts = append(bundle.Concepts, concept)
-		updatedPaths = append(updatedPaths, file)
+		updatedPaths = append(updatedPaths, summary.RelativePath)
 	}
 
 	return bundle, updatedPaths, nil
+}
+
+// ApplyIncrementalUpdate merges an incremental bundle into the on-disk knowledge base.
+func ApplyIncrementalUpdate(cfg *Config, incremental *okf.KnowledgeBundle) error {
+	if cfg == nil {
+		cfg = DefaultConfig()
+	}
+	if incremental == nil || len(incremental.Concepts) == 0 {
+		return nil
+	}
+
+	repoRoot, err := GetRepoRoot(cfg.RepoPath)
+	if err != nil {
+		return fmt.Errorf("not a git repository: %w", err)
+	}
+	cfg.RepoPath = repoRoot
+
+	knowledgeDir := filepath.Join(repoRoot, cfg.KnowledgeDir)
+	existing, err := okf.LoadBundle(knowledgeDir, okf.DefaultLoadOptions())
+	if err != nil {
+		existing = &okf.KnowledgeBundle{Name: filepath.Base(repoRoot), RootPath: knowledgeDir}
+	}
+
+	byResource := make(map[string]*okf.Concept)
+	byFilePath := make(map[string]*okf.Concept)
+	var unkeyed []*okf.Concept
+	for _, concept := range existing.Concepts {
+		if isRelationshipGraphConcept(concept) {
+			continue
+		}
+		if concept.Resource != "" {
+			byResource[concept.Resource] = concept
+			continue
+		}
+		if concept.FilePath != "" {
+			byFilePath[concept.FilePath] = concept
+			continue
+		}
+		unkeyed = append(unkeyed, concept)
+	}
+
+	for _, concept := range incremental.Concepts {
+		if isRelationshipGraphConcept(concept) {
+			continue
+		}
+		if concept.Type == "deleted" {
+			delete(byResource, concept.Resource)
+			removeKnowledgeFile(knowledgeDir, concept.Resource)
+			continue
+		}
+		if concept.Resource != "" {
+			byResource[concept.Resource] = concept
+			continue
+		}
+		if concept.FilePath != "" {
+			byFilePath[concept.FilePath] = concept
+			continue
+		}
+		unkeyed = append(unkeyed, concept)
+	}
+
+	var resources []string
+	for resource := range byResource {
+		resources = append(resources, resource)
+	}
+	sort.Strings(resources)
+	var filePaths []string
+	for filePath := range byFilePath {
+		filePaths = append(filePaths, filePath)
+	}
+	sort.Strings(filePaths)
+
+	merged := &okf.KnowledgeBundle{Name: filepath.Base(repoRoot), RootPath: knowledgeDir}
+	merged.Concepts = append(merged.Concepts, unkeyed...)
+	for _, filePath := range filePaths {
+		merged.Concepts = append(merged.Concepts, byFilePath[filePath])
+	}
+	for _, resource := range resources {
+		merged.Concepts = append(merged.Concepts, byResource[resource])
+	}
+	merged.Concepts = append(merged.Concepts, createRelationshipGraphConcept(BuildRelationshipGraphFromConcepts(merged.Concepts)))
+
+	_, err = SaveKnowledgeBase(merged, cfg)
+	return err
+}
+
+func isRelationshipGraphConcept(concept *okf.Concept) bool {
+	return concept != nil && (concept.Resource == relationshipGraphResource || concept.FilePath == "project/relationships.md")
+}
+
+// BuildRelationshipGraphFromConcepts rebuilds relationships from generated component concepts.
+func BuildRelationshipGraphFromConcepts(concepts []*okf.Concept) RelationshipGraph {
+	var summaries []*FileSummary
+	for _, concept := range concepts {
+		if concept == nil || concept.Resource == "" || isRelationshipGraphConcept(concept) || concept.Type == "deleted" {
+			continue
+		}
+		summary := summaryFromConcept(concept)
+		if summary == nil {
+			continue
+		}
+		summaries = append(summaries, summary)
+	}
+	return BuildRelationshipGraphFromSummaries(summaries)
+}
+
+func summaryFromConcept(concept *okf.Concept) *FileSummary {
+	summary := &FileSummary{RelativePath: concept.Resource, Type: concept.Type}
+	pkg := ""
+	inImports := false
+	inSymbols := false
+	for _, line := range strings.Split(concept.Content, "\n") {
+		line = strings.TrimSpace(line)
+		if matches := packageLinePattern.FindStringSubmatch(line); len(matches) == 2 {
+			pkg = matches[1]
+			continue
+		}
+		switch line {
+		case "### Imports":
+			inImports = true
+			inSymbols = false
+			continue
+		case "### Symbols":
+			inImports = false
+			inSymbols = true
+			continue
+		}
+		if strings.HasPrefix(line, "### ") {
+			inImports = false
+			inSymbols = false
+			continue
+		}
+		if inImports {
+			if matches := importLinePattern.FindStringSubmatch(line); len(matches) == 2 {
+				summary.Imports = append(summary.Imports, matches[1])
+			}
+			continue
+		}
+		if inSymbols {
+			if symbol, ok := parseGeneratedSymbol(line, pkg, concept.Resource); ok {
+				summary.Symbols = append(summary.Symbols, symbol)
+			}
+		}
+	}
+	if len(summary.Imports) == 0 && len(summary.Symbols) == 0 {
+		return nil
+	}
+	return summary
+}
+
+func parseGeneratedSymbol(line, pkg, filePath string) (Symbol, bool) {
+	matches := generatedSymbolPattern.FindStringSubmatch(line)
+	if len(matches) != 5 {
+		return Symbol{}, false
+	}
+	name := matches[2]
+	receiver := ""
+	if matches[1] == "method" {
+		parts := strings.SplitN(name, ".", 2)
+		if len(parts) == 2 {
+			receiver = parts[0]
+			name = parts[1]
+		}
+	}
+	return Symbol{Kind: matches[1], Name: name, Receiver: receiver, Package: pkg, FilePath: filePath, Exported: matches[3] == "exported"}, true
+}
+
+func removeKnowledgeFile(knowledgeDir, resource string) {
+	if resource == "" {
+		return
+	}
+	path := filepath.Join(knowledgeDir, resource)
+	if !strings.HasSuffix(path, ".md") {
+		path += ".md"
+	}
+	_ = os.Remove(path)
 }
 
 // UpdateFromLastCommit updates based on the last commit.
@@ -379,9 +745,12 @@ func SaveKnowledgeBase(bundle *okf.KnowledgeBundle, cfg *Config) (int, error) {
 	}
 
 	outputDir := filepath.Join(cfg.RepoPath, cfg.KnowledgeDir)
-	os.MkdirAll(outputDir, 0755)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return 0, err
+	}
 
 	saved := 0
+	var failures []string
 	for _, concept := range bundle.Concepts {
 		relPath := concept.FilePath
 		if relPath == "" {
@@ -392,48 +761,38 @@ func SaveKnowledgeBase(bundle *okf.KnowledgeBundle, cfg *Config) (int, error) {
 		}
 
 		fullPath := filepath.Join(outputDir, relPath)
-		os.MkdirAll(filepath.Dir(fullPath), 0755)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+			failures = append(failures, fmt.Sprintf("mkdir %s: %v", filepath.Dir(fullPath), err))
+			continue
+		}
 
-		// Use parser to serialize
-		content, err := serialize(concept, true)
+		content, err := parser.SerializeConcept(&parser.Concept{
+			Type:        concept.Type,
+			Title:       concept.Title,
+			Description: concept.Description,
+			Resource:    concept.Resource,
+			Tags:        concept.Tags,
+			Timestamp:   concept.Timestamp,
+			Content:     concept.Content,
+		}, true)
 		if err != nil {
+			failures = append(failures, fmt.Sprintf("serialize %s: %v", relPath, err))
 			continue
 		}
 		if err := os.WriteFile(fullPath, content, 0644); err != nil {
+			failures = append(failures, fmt.Sprintf("write %s: %v", relPath, err))
 			continue
 		}
 		saved++
 	}
+	if len(failures) > 0 {
+		return saved, fmt.Errorf("failed to save %d concepts: %s", len(failures), strings.Join(failures, "; "))
+	}
+	if commit, err := GetCurrentCommit(cfg.RepoPath); err == nil && commit != "" {
+		if err := WriteState(cfg, &State{LastIndexedCommit: commit}); err != nil {
+			return saved, err
+		}
+	}
 
 	return saved, nil
-}
-
-func serialize(c *okf.Concept, prettyPrint bool) ([]byte, error) {
-	type fm struct {
-		Type        string   `yaml:"type"`
-		Title       string   `yaml:"title"`
-		Description string   `yaml:"description,omitempty"`
-		Resource    string   `yaml:"resource,omitempty"`
-		Tags        []string `yaml:"tags,omitempty"`
-		Timestamp   string   `yaml:"timestamp,omitempty"`
-	}
-
-	f := fm{
-		Type:        c.Type,
-		Title:       c.Title,
-		Description: c.Description,
-		Resource:    c.Resource,
-		Tags:        c.Tags,
-		Timestamp:   c.Timestamp,
-	}
-
-	yamlData, _ := yaml.Marshal(&f)
-
-	var buf bytes.Buffer
-	buf.WriteString("---\n")
-	buf.Write(yamlData)
-	buf.WriteString("---\n")
-	buf.WriteString(c.Content)
-
-	return buf.Bytes(), nil
 }
