@@ -313,6 +313,11 @@ func cmdSearch(args []string) {
 	queryStr := fs.String("q", "", "Search query")
 	cType := fs.String("type", "", "Filter by type")
 	tag := fs.String("tag", "", "Filter by tag")
+	codeLanguage := fs.String("code-language", "", "Filter by code language")
+	codePath := fs.String("code-path", "", "Filter by repository-relative code path")
+	codeSymbolKind := fs.String("code-symbol-kind", "", "Filter by code symbol kind")
+	codeQualifiedName := fs.String("code-qualified-name", "", "Filter by code qualified name")
+	codeRelationKind := fs.String("code-relation-kind", "", "Filter by code relation kind")
 	fs.Parse(args)
 
 	if *path == "" {
@@ -320,8 +325,8 @@ func cmdSearch(args []string) {
 		*path = wd
 	}
 
-	if *queryStr == "" && *cType == "" && *tag == "" {
-		fmt.Println("Error: specify -q, -type, or -tag")
+	if *queryStr == "" && *cType == "" && *tag == "" && *codeLanguage == "" && *codePath == "" && *codeSymbolKind == "" && *codeQualifiedName == "" && *codeRelationKind == "" {
+		fmt.Println("Error: specify -q, -type, -tag, or a code filter")
 		os.Exit(1)
 	}
 
@@ -341,7 +346,7 @@ func cmdSearch(args []string) {
 	}
 
 	queryBundle := toQueryBundle(bundle)
-	searchResults := query.SearchWithMatches(queryBundle, *queryStr)
+	searchResults := executeSearch(queryBundle, *queryStr, *cType, *tag, *codeLanguage, *codePath, *codeSymbolKind, *codeQualifiedName, *codeRelationKind)
 	results := filterSearchResults(searchResults, *cType, *tag)
 
 	if len(results) == 0 {
@@ -365,6 +370,35 @@ func cmdSearch(args []string) {
 		}
 		fmt.Println()
 	}
+}
+
+func executeSearch(bundle *query.KnowledgeBundle, text, conceptType, tag, codeLanguage, codePath, codeSymbolKind, codeQualifiedName, codeRelationKind string) []query.SearchResult {
+	if text == "" && hasCodeFilter(codeLanguage, codePath, codeSymbolKind, codeQualifiedName, codeRelationKind) {
+		builder := query.New().
+			WithCodeLanguage(codeLanguage).
+			WithCodeFilePath(codePath).
+			WithCodeSymbolKind(codeSymbolKind).
+			WithCodeQualifiedName(codeQualifiedName).
+			WithCodeRelationKind(codeRelationKind)
+		if conceptType != "" {
+			builder.WithType(conceptType)
+		}
+		if tag != "" {
+			builder.WithTags(tag)
+		}
+		concepts := builder.Build().Execute(bundle)
+		results := make([]query.SearchResult, 0, len(concepts))
+		for _, concept := range concepts {
+			results = append(results, query.SearchResult{Concept: concept})
+		}
+		return results
+	}
+
+	return query.SearchWithMatches(bundle, text)
+}
+
+func hasCodeFilter(codeLanguage, codePath, codeSymbolKind, codeQualifiedName, codeRelationKind string) bool {
+	return codeLanguage != "" || codePath != "" || codeSymbolKind != "" || codeQualifiedName != "" || codeRelationKind != ""
 }
 
 func toQueryBundle(bundle *okf.KnowledgeBundle) *query.KnowledgeBundle {

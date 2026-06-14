@@ -9,6 +9,7 @@ Icon?
 
 # Go build artifacts
 /okf
+*.bin
 *.exe
 *.exe~
 *.dll
@@ -16,8 +17,13 @@ Icon?
 *.dylib
 *.test
 *.out
+*.coverprofile
+*.prof
+*.pprof
 coverage.out
 coverage.html
+coverage/
+__debug_bin*
 
 # Go workspace and local tool state
 go.work
@@ -31,10 +37,12 @@ go.work.sum
 bin/
 build/
 dist/
+out/
 tmp/
 temp/
 *.tmp
 *.log
+.cache/
 
 # Editor and IDE files
 .idea/

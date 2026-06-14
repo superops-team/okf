@@ -202,6 +202,53 @@ func TestIndexedSearchSeesConceptFieldMutationsAfterInitialQuery(t *testing.T) {
 	}
 }
 
+func TestQueryCodeDimensionFilters(t *testing.T) {
+	t.Parallel()
+
+	bundle := &KnowledgeBundle{Concepts: []*Concept{
+		{
+			Type:     "code_file",
+			Title:    "server.go",
+			Resource: "code://repo/cmd/server.go",
+			Tags:     []string{"code", "generated", "go"},
+			Content: "## Source\n\n- Path: `cmd/server.go`\n- Language: `go`\n\n### Symbols\n\n- `function` `main.StartServer` (exported) at `cmd/server.go:10-20`\n",
+		},
+		{
+			Type:     "code_file",
+			Title:    "client.ts",
+			Resource: "code://repo/web/client.ts",
+			Tags:     []string{"code", "generated", "typescript"},
+			Content: "## Source\n\n- Path: `web/client.ts`\n- Language: `typescript`\n\n### Symbols\n\n- `component` `ClientView` (exported) at `web/client.ts:3-15`\n",
+		},
+		{
+			Type:     "code_relation_index",
+			Title:    "Code Relation Index",
+			Resource: "okf://code/relations",
+			Tags:     []string{"code", "relations", "generated"},
+			Content: "## Code Relation Index\n\n| Kind | Source | Target | Location | Provenance |\n| --- | --- | --- | --- | --- |\n| calls | `code:repo:cmd/server.go#symbol:function:main.StartServer@L10-L20` | `code:repo:cmd/log.go#symbol:function:main.Log@L2-L4` | `cmd/server.go:12` | codegraph |\n",
+		},
+	}}
+
+	tests := []struct {
+		name string
+		q    *Query
+		want []string
+	}{
+		{name: "language", q: New().WithCodeLanguage("go").Build(), want: []string{"server.go"}},
+		{name: "file path", q: New().WithCodeFilePath("web/client.ts").Build(), want: []string{"client.ts"}},
+		{name: "symbol kind", q: New().WithCodeSymbolKind("component").Build(), want: []string{"client.ts"}},
+		{name: "qualified name", q: New().WithCodeQualifiedName("main.StartServer").Build(), want: []string{"server.go", "Code Relation Index"}},
+		{name: "relation kind", q: New().WithCodeRelationKind("calls").Build(), want: []string{"Code Relation Index"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.q.Execute(bundle)
+			assertConceptTitles(t, got, tt.want)
+		})
+	}
+}
+
 func assertConceptTitles(t *testing.T, got []*Concept, want []string) {
 	t.Helper()
 	if len(got) != len(want) {

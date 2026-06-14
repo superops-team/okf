@@ -270,13 +270,13 @@ func TestApplyIncrementalUpdatePersistsAddedModifiedAndDeletedFiles(t *testing.T
 		t.Fatalf("LoadBundle returned error: %v", err)
 	}
 
-	if conceptByResource(loaded, "old.go") != nil {
+	if conceptByResource(loaded, codeFileResource("old.go")) != nil {
 		t.Fatal("expected deleted source concept old.go to be removed")
 	}
-	if conceptByResource(loaded, "new.go") == nil {
+	if conceptByResource(loaded, codeFileResource("new.go")) == nil {
 		t.Fatal("expected added source concept new.go to be saved")
 	}
-	stay := conceptByResource(loaded, "stay.go")
+	stay := conceptByResource(loaded, codeFileResource("stay.go"))
 	if stay == nil || !strings.Contains(stay.Content, "changed") {
 		t.Fatalf("expected modified stay.go concept to include changed function, got %#v", stay)
 	}
@@ -473,6 +473,206 @@ func Run() { fmt.Println("ok") }
 		"- `cmd/app/main.go` imports `example.com/app/pkg/lib`",
 		"- `pkg/lib/lib.go` imports `fmt`",
 	)
+}
+
+func TestCodeEntityStableIDIgnoresExternalExtractorID(t *testing.T) {
+	entity := CodeEntity{
+		ExternalID:    "codegraph-node-1",
+		RepositoryID:  "demo",
+		Kind:          CodeEntityKindSymbol,
+		SymbolKind:    "function",
+		QualifiedName: "main.StartServer",
+		FilePath:      "cmd/server/main.go",
+		StartLine:     12,
+		EndLine:       18,
+	}
+
+	got := StableCodeEntityID(entity)
+	want := "code:demo:cmd/server/main.go#symbol:function:main.StartServer@L12-L18"
+	if got != want {
+		t.Fatalf("StableCodeEntityID() = %q, want %q", got, want)
+	}
+
+	entity.ExternalID = "codegraph-node-2"
+	if got := StableCodeEntityID(entity); got != want {
+		t.Fatalf("StableCodeEntityID changed after external ID update: %q, want %q", got, want)
+	}
+}
+
+func TestMapCodeGraphNodeToCodeEntity(t *testing.T) {
+	node := CodeGraphNode{
+		ID:            "node-123",
+		Kind:          "function",
+		Name:          "StartServer",
+		QualifiedName: "cmd/server/main.go::StartServer",
+		FilePath:      "cmd/server/main.go",
+		Language:      "go",
+		StartLine:     12,
+		EndLine:       18,
+		StartColumn:   0,
+		EndColumn:     1,
+		Docstring:     "StartServer starts the HTTP server.",
+		Signature:     "func StartServer() error",
+		Visibility:    "public",
+		IsExported:    true,
+	}
+
+	entity := MapCodeGraphNodeToEntity("demo", node)
+	if entity.ID == node.ID {
+		t.Fatalf("entity ID = %q, want OKF stable ID rather than CodeGraph node ID", entity.ID)
+	}
+	if entity.ExternalID != "node-123" || entity.Kind != CodeEntityKindSymbol || entity.SymbolKind != "function" {
+		t.Fatalf("mapped entity = %#v, want symbol entity with external CodeGraph ID", entity)
+	}
+	if entity.QualifiedName != node.QualifiedName || entity.FilePath != node.FilePath || entity.StartLine != node.StartLine || entity.EndLine != node.EndLine {
+		t.Fatalf("mapped entity lost navigation fields: %#v", entity)
+	}
+	if entity.Provenance != CodeProvenanceCodeGraph || !entity.Exported {
+		t.Fatalf("mapped entity provenance/exported = %q/%v, want codegraph/exported", entity.Provenance, entity.Exported)
+	}
+}
+
+func TestMapCodeGraphEdgeToCodeRelation(t *testing.T) {
+	source := CodeEntity{
+		ID:           "code:demo:server.go#symbol:function:StartServer@L10-L20",
+		ExternalID:   "source-node",
+		RepositoryID: "demo",
+		Kind:         CodeEntityKindSymbol,
+		SymbolKind:   "function",
+		Name:         "StartServer",
+		FilePath:     "server.go",
+	}
+	target := CodeEntity{
+		ID:           "code:demo:logger.go#symbol:function:Log@L3-L5",
+		ExternalID:   "target-node",
+		RepositoryID: "demo",
+		Kind:         CodeEntityKindSymbol,
+		SymbolKind:   "function",
+		Name:         "Log",
+		FilePath:     "logger.go",
+	}
+	edge := CodeGraphEdge{
+		Source:     "source-node",
+		Target:     "target-node",
+		Kind:       "calls",
+		Metadata:   map[string]string{"call": "Log"},
+		Line:       14,
+		Column:     8,
+		Provenance: "tree-sitter",
+	}
+
+	relation := MapCodeGraphEdgeToRelation(edge, []CodeEntity{source, target})
+	if relation.SourceID != source.ID || relation.TargetID != target.ID {
+		t.Fatalf("relation endpoints = %#v, want mapped OKF source and target IDs", relation)
+	}
+	if relation.Kind != "calls" || relation.Provenance != CodeProvenanceCodeGraph {
+		t.Fatalf("relation kind/provenance = %q/%q, want calls/codegraph", relation.Kind, relation.Provenance)
+	}
+	if relation.FilePath != "server.go" || relation.Line != 14 || relation.Column != 8 {
+		t.Fatalf("relation location = %q:%d:%d, want server.go:14:8", relation.FilePath, relation.Line, relation.Column)
+	}
+	if !strings.Contains(relation.Metadata, "call=Log") || !strings.Contains(relation.Metadata, "codegraph_provenance=tree-sitter") {
+		t.Fatalf("relation metadata = %q, want call and CodeGraph provenance", relation.Metadata)
+	}
+}
+
+func TestMapCodeGraphEdgePreservesUnresolvedTarget(t *testing.T) {
+	source := CodeEntity{
+		ID:           "code:demo:server.go#file:server.go",
+		ExternalID:   "source-node",
+		RepositoryID: "demo",
+		Kind:         CodeEntityKindFile,
+		Name:         "server.go",
+		FilePath:     "server.go",
+	}
+	edge := CodeGraphEdge{Source: "source-node", Target: "missing-node", Kind: "references", Line: 7}
+
+	relation := MapCodeGraphEdgeToRelation(edge, []CodeEntity{source})
+	if relation.SourceID != source.ID {
+		t.Fatalf("relation source = %q, want %q", relation.SourceID, source.ID)
+	}
+	if relation.TargetID != "" || relation.TargetRef != "missing-node" {
+		t.Fatalf("relation target = id %q ref %q, want unresolved target ref", relation.TargetID, relation.TargetRef)
+	}
+	if relation.Kind != "references" || relation.Provenance != CodeProvenanceCodeGraph {
+		t.Fatalf("relation kind/provenance = %q/%q, want references/codegraph", relation.Kind, relation.Provenance)
+	}
+}
+
+func TestMapCodeGraphFileRecordToCodeEntity(t *testing.T) {
+	record := CodeGraphFileRecord{
+		Path:        "cmd/server/main.go",
+		ContentHash: "abc123",
+		Language:    "go",
+		NodeCount:   4,
+		Errors:      []string{"parse warning"},
+	}
+
+	entity := MapCodeGraphFileRecordToEntity("demo", record)
+	if entity.Kind != CodeEntityKindFile || entity.FilePath != record.Path || entity.Language != "go" {
+		t.Fatalf("mapped file entity = %#v, want code file entity", entity)
+	}
+	if entity.ExternalID != "abc123" || entity.Provenance != CodeProvenanceCodeGraph {
+		t.Fatalf("entity external/provenance = %q/%q, want content hash/codegraph", entity.ExternalID, entity.Provenance)
+	}
+	if entity.ID == "" || !strings.Contains(entity.ID, "cmd/server/main.go#file:cmd/server/main.go") {
+		t.Fatalf("entity stable ID = %q, want file path based ID", entity.ID)
+	}
+}
+
+func TestGenerateBundleCreatesCodeKnowledgeDimensionArtifacts(t *testing.T) {
+	dir := initTestRepo(t)
+	cfg := &Config{
+		RepoPath:      dir,
+		KnowledgeDir:  ".okf/knowledge",
+		IncludeFiles:  []string{"*.go"},
+		ExcludeDirs:   []string{".git", ".okf"},
+		MaxFileSizeKB: 100,
+	}
+
+	mustWriteFile(t, filepath.Join(dir, "cmd", "server", "main.go"), `package main
+
+import "fmt"
+
+func StartServer() { fmt.Println("ok") }
+`)
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "add server")
+
+	bundle, err := GenerateBundle(cfg, true)
+	if err != nil {
+		t.Fatalf("GenerateBundle returned error: %v", err)
+	}
+
+	fileConcept := conceptByResource(bundle, "code://repo/cmd/server/main.go")
+	if fileConcept == nil {
+		t.Fatal("expected code_file concept with code:// resource")
+	}
+	if fileConcept.Type != "code_file" {
+		t.Fatalf("file concept type = %q, want code_file", fileConcept.Type)
+	}
+	assertContains(t, fileConcept.Tags, "code")
+	assertContains(t, fileConcept.Tags, "generated")
+	assertContentContains(t, fileConcept.Content, "## Code Metadata")
+	assertContentContains(t, fileConcept.Content, "**Entity ID:** `code:")
+	assertContentContains(t, fileConcept.Content, "- Path: `cmd/server/main.go`")
+	assertContentContains(t, fileConcept.Content, "- `function` `StartServer` (exported) at `cmd/server/main.go:")
+
+	repository := conceptByResource(bundle, "okf://code/repository")
+	if repository == nil || repository.Type != "code_repository" {
+		t.Fatalf("repository code concept = %#v, want code_repository", repository)
+	}
+	assertContentContains(t, repository.Content, "## Code Repository")
+	assertContentContains(t, repository.Content, "**Indexed Files:** 1")
+	assertContentContains(t, repository.Content, "### Symbol Counts")
+	assertContentContains(t, repository.Content, "- **function:** 1")
+
+	relationIndex := conceptByResource(bundle, "okf://code/relations")
+	if relationIndex == nil || relationIndex.Type != "code_relation_index" {
+		t.Fatalf("relation index concept = %#v, want code_relation_index", relationIndex)
+	}
+	assertContentContains(t, relationIndex.Content, "| imports | `code:")
+	assertContentContains(t, relationIndex.Content, "| contains | `code:")
 }
 
 func TestApplyIncrementalUpdateRebuildsRelationshipGraphAfterDelete(t *testing.T) {

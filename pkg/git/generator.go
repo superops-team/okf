@@ -109,6 +109,11 @@ func GenerateBundle(cfg *Config, force bool) (*okf.KnowledgeBundle, error) {
 	relationshipConcept := createRelationshipGraphConcept(BuildRelationshipGraphFromSummaries(summaries))
 	bundle.Concepts = append(bundle.Concepts, relationshipConcept)
 
+	// Add generated code knowledge dimension views.
+	codeIndex := buildCodeKnowledgeIndex(repoRoot, summaries)
+	bundle.Concepts = append(bundle.Concepts, createCodeRepositoryConcept(repoRoot, summaries, codeIndex))
+	bundle.Concepts = append(bundle.Concepts, createCodeRelationIndexConcept(codeIndex))
+
 	// Add contributors
 	if len(authorCounts) > 0 {
 		contribConcept := createContributors(cfg, authorCounts)
@@ -235,13 +240,13 @@ func createRelationshipGraphConcept(graph RelationshipGraph) *okf.Concept {
 }
 
 func conceptFromSummary(s *FileSummary, cfg *Config, bundle *okf.KnowledgeBundle) *okf.Concept {
-	c := okf.NewConcept("component", filepath.Base(s.RelativePath))
+	c := okf.NewConcept("code_file", filepath.Base(s.RelativePath))
 	c.Description = fmt.Sprintf("%s file: %s (%d lines)", strings.ToUpper(s.Type), s.RelativePath, s.LineCount)
-	c.Resource = s.RelativePath
+	c.Resource = codeFileResource(s.RelativePath)
 	c.Timestamp = s.LastModified.Format(time.RFC3339)
 	c.FilePath = s.RelativePath
 
-	tags := []string{s.Type}
+	tags := []string{"code", "generated", s.Type}
 	if s.LastAuthor != "" {
 		tags = append(tags, sanitizeTag(s.LastAuthor))
 	}
@@ -250,8 +255,18 @@ func conceptFromSummary(s *FileSummary, cfg *Config, bundle *okf.KnowledgeBundle
 	}
 	c.Tags = tags
 
+	entity := fileCodeEntity(repositoryID(cfg.RepoPath), s)
+
 	var content strings.Builder
 	fmt.Fprintf(&content, "## File: `%s`\n\n", s.RelativePath)
+	fmt.Fprintf(&content, "## Code Metadata\n\n")
+	fmt.Fprintf(&content, "**Schema Version:** 1\n\n")
+	fmt.Fprintf(&content, "**Entity ID:** `%s`\n\n", entity.ID)
+	fmt.Fprintf(&content, "**Generated:** true\n\n")
+	fmt.Fprintf(&content, "## Source\n\n")
+	fmt.Fprintf(&content, "- Path: `%s`\n", s.RelativePath)
+	fmt.Fprintf(&content, "- Language: `%s`\n", s.Type)
+	fmt.Fprintf(&content, "- Lines: 1-%d\n\n", s.LineCount)
 	fmt.Fprintf(&content, "**Type:** %s\n\n", strings.ToUpper(s.Type))
 	fmt.Fprintf(&content, "**Size:** %d bytes / %d lines\n\n", s.Size, s.LineCount)
 	if s.LastCommit != "" {
@@ -305,6 +320,10 @@ func conceptFromSummary(s *FileSummary, cfg *Config, bundle *okf.KnowledgeBundle
 
 	c.Content = content.String()
 	return c
+}
+
+func codeFileResource(path string) string {
+	return "code://repo/" + path
 }
 
 func createProjectOverview(cfg *Config, repoRoot string, allFiles []string, typeCounts map[string]int, authorCounts map[string]int) *okf.Concept {
@@ -558,7 +577,7 @@ func ApplyIncrementalUpdate(cfg *Config, incremental *okf.KnowledgeBundle) error
 	byFilePath := make(map[string]*okf.Concept)
 	var unkeyed []*okf.Concept
 	for _, concept := range existing.Concepts {
-		if isRelationshipGraphConcept(concept) {
+		if isRelationshipGraphConcept(concept) || isCodeDerivedConcept(concept) {
 			continue
 		}
 		if concept.Resource != "" {
@@ -573,12 +592,13 @@ func ApplyIncrementalUpdate(cfg *Config, incremental *okf.KnowledgeBundle) error
 	}
 
 	for _, concept := range incremental.Concepts {
-		if isRelationshipGraphConcept(concept) {
-			continue
-		}
 		if concept.Type == "deleted" {
 			delete(byResource, concept.Resource)
+			delete(byResource, codeFileResource(concept.Resource))
 			removeKnowledgeFile(knowledgeDir, concept.Resource)
+			continue
+		}
+		if isRelationshipGraphConcept(concept) || isCodeDerivedConcept(concept) {
 			continue
 		}
 		if concept.Resource != "" {
@@ -612,6 +632,10 @@ func ApplyIncrementalUpdate(cfg *Config, incremental *okf.KnowledgeBundle) error
 		merged.Concepts = append(merged.Concepts, byResource[resource])
 	}
 	merged.Concepts = append(merged.Concepts, createRelationshipGraphConcept(BuildRelationshipGraphFromConcepts(merged.Concepts)))
+	codeSummaries := summariesFromConcepts(merged.Concepts)
+	codeIndex := buildCodeKnowledgeIndex(repoRoot, codeSummaries)
+	merged.Concepts = append(merged.Concepts, createCodeRepositoryConcept(repoRoot, codeSummaries, codeIndex))
+	merged.Concepts = append(merged.Concepts, createCodeRelationIndexConcept(codeIndex))
 
 	_, err = SaveKnowledgeBase(merged, cfg)
 	return err
@@ -623,9 +647,13 @@ func isRelationshipGraphConcept(concept *okf.Concept) bool {
 
 // BuildRelationshipGraphFromConcepts rebuilds relationships from generated component concepts.
 func BuildRelationshipGraphFromConcepts(concepts []*okf.Concept) RelationshipGraph {
+	return BuildRelationshipGraphFromSummaries(summariesFromConcepts(concepts))
+}
+
+func summariesFromConcepts(concepts []*okf.Concept) []*FileSummary {
 	var summaries []*FileSummary
 	for _, concept := range concepts {
-		if concept == nil || concept.Resource == "" || isRelationshipGraphConcept(concept) || concept.Type == "deleted" {
+		if concept == nil || concept.Resource == "" || isRelationshipGraphConcept(concept) || isCodeDerivedConcept(concept) || concept.Type == "deleted" {
 			continue
 		}
 		summary := summaryFromConcept(concept)
@@ -634,11 +662,11 @@ func BuildRelationshipGraphFromConcepts(concepts []*okf.Concept) RelationshipGra
 		}
 		summaries = append(summaries, summary)
 	}
-	return BuildRelationshipGraphFromSummaries(summaries)
+	return summaries
 }
 
 func summaryFromConcept(concept *okf.Concept) *FileSummary {
-	summary := &FileSummary{RelativePath: concept.Resource, Type: concept.Type}
+	summary := &FileSummary{RelativePath: sourcePathFromConcept(concept), Type: conceptTypeLanguage(concept)}
 	pkg := ""
 	inImports := false
 	inSymbols := false
@@ -670,7 +698,7 @@ func summaryFromConcept(concept *okf.Concept) *FileSummary {
 			continue
 		}
 		if inSymbols {
-			if symbol, ok := parseGeneratedSymbol(line, pkg, concept.Resource); ok {
+			if symbol, ok := parseGeneratedSymbol(line, pkg, summary.RelativePath); ok {
 				summary.Symbols = append(summary.Symbols, symbol)
 			}
 		}
@@ -679,6 +707,28 @@ func summaryFromConcept(concept *okf.Concept) *FileSummary {
 		return nil
 	}
 	return summary
+}
+
+func sourcePathFromConcept(concept *okf.Concept) string {
+	if strings.HasPrefix(concept.Resource, "code://repo/") {
+		return strings.TrimPrefix(concept.Resource, "code://repo/")
+	}
+	return concept.Resource
+}
+
+func conceptTypeLanguage(concept *okf.Concept) string {
+	if concept.Type != "code_file" {
+		return concept.Type
+	}
+	for _, tag := range concept.Tags {
+		switch tag {
+		case "code", "generated", "frequently-modified":
+			continue
+		default:
+			return tag
+		}
+	}
+	return "unknown"
 }
 
 func parseGeneratedSymbol(line, pkg, filePath string) (Symbol, bool) {

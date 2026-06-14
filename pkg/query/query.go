@@ -9,6 +9,12 @@ import (
 
 var symbolLinePattern = regexp.MustCompile("^- `([^`]+)` `([^`]+)` \\(([^)]+)\\) at `([^`]+)`$")
 
+var (
+	codeLanguagePattern = regexp.MustCompile("(?m)^- Language: `([^`]+)`$")
+	codeFilePathPattern = regexp.MustCompile("(?m)^- Path: `([^`]+)`$")
+	relationRowPattern  = regexp.MustCompile("^\\| ([^|]+) \\| `([^`]+)` \\| `([^`]+)` \\| `([^`]+)` \\| ([^|]+) \\|$")
+)
+
 // Concept represents the minimal concept interface needed for querying.
 type Concept struct {
 	Type        string
@@ -35,6 +41,11 @@ type Index struct {
 	byTag            map[string][]*Concept
 	byResource       map[string][]*Concept
 	byTitle          map[string][]*Concept
+	byCodeLanguage   map[string][]*Concept
+	byCodeFilePath   map[string][]*Concept
+	bySymbolKind     map[string][]*Concept
+	byQualifiedName  map[string][]*Concept
+	byRelationKind   map[string][]*Concept
 	symbolsByName    map[string][]indexedSymbol
 	symbolsByConcept map[*Concept][]SymbolMatch
 }
@@ -68,13 +79,18 @@ type SymbolMatch struct {
 
 // Query represents a search query with multiple criteria.
 type Query struct {
-	Type             string
-	Tags             []string
-	Resource         string
-	Text             string
-	TitleRegex       string
-	DescriptionRegex string
-	ContentRegex     string
+	Type              string
+	Tags              []string
+	Resource          string
+	Text              string
+	TitleRegex        string
+	DescriptionRegex  string
+	ContentRegex      string
+	CodeLanguage      string
+	CodeFilePath      string
+	CodeSymbolKind    string
+	CodeQualifiedName string
+	CodeRelationKind  string
 }
 
 // Builder helps construct complex queries fluently.
@@ -129,6 +145,36 @@ func (b *Builder) WithContentRegex(pattern string) *Builder {
 	return b
 }
 
+// WithCodeLanguage filters code concepts by generated source language metadata.
+func (b *Builder) WithCodeLanguage(language string) *Builder {
+	b.q.CodeLanguage = language
+	return b
+}
+
+// WithCodeFilePath filters code concepts by repository-relative source path.
+func (b *Builder) WithCodeFilePath(filePath string) *Builder {
+	b.q.CodeFilePath = filePath
+	return b
+}
+
+// WithCodeSymbolKind filters code concepts by generated symbol kind.
+func (b *Builder) WithCodeSymbolKind(kind string) *Builder {
+	b.q.CodeSymbolKind = kind
+	return b
+}
+
+// WithCodeQualifiedName filters code concepts by generated symbol or relation qualified name.
+func (b *Builder) WithCodeQualifiedName(name string) *Builder {
+	b.q.CodeQualifiedName = name
+	return b
+}
+
+// WithCodeRelationKind filters generated relation index concepts by relation kind.
+func (b *Builder) WithCodeRelationKind(kind string) *Builder {
+	b.q.CodeRelationKind = kind
+	return b
+}
+
 // Build returns the final query.
 func (b *Builder) Build() *Query {
 	return &b.q
@@ -160,6 +206,21 @@ func (q *Query) indexedCandidates(bundle *KnowledgeBundle, idx *Index) []*Concep
 	}
 	if q.Text != "" {
 		candidates = intersectConcepts(candidates, indexedTextCandidates(bundle, idx, q.Text))
+	}
+	if q.CodeLanguage != "" {
+		candidates = intersectConcepts(candidates, idx.byCodeLanguage[strings.ToLower(q.CodeLanguage)])
+	}
+	if q.CodeFilePath != "" {
+		candidates = intersectConcepts(candidates, indexedContainsCandidates(idx.byCodeFilePath, q.CodeFilePath))
+	}
+	if q.CodeSymbolKind != "" {
+		candidates = intersectConcepts(candidates, idx.bySymbolKind[strings.ToLower(q.CodeSymbolKind)])
+	}
+	if q.CodeQualifiedName != "" {
+		candidates = intersectConcepts(candidates, indexedContainsCandidates(idx.byQualifiedName, q.CodeQualifiedName))
+	}
+	if q.CodeRelationKind != "" {
+		candidates = intersectConcepts(candidates, idx.byRelationKind[strings.ToLower(q.CodeRelationKind)])
 	}
 	return candidates
 }
@@ -215,6 +276,22 @@ func (q *Query) Matches(c *Concept) bool {
 		if !matched {
 			return false
 		}
+	}
+
+	if q.CodeLanguage != "" && !conceptHasCodeLanguage(c, q.CodeLanguage) {
+		return false
+	}
+	if q.CodeFilePath != "" && !conceptHasCodeFilePath(c, q.CodeFilePath) {
+		return false
+	}
+	if q.CodeSymbolKind != "" && !conceptHasCodeSymbolKind(c, q.CodeSymbolKind) {
+		return false
+	}
+	if q.CodeQualifiedName != "" && !conceptHasCodeQualifiedName(c, q.CodeQualifiedName) {
+		return false
+	}
+	if q.CodeRelationKind != "" && !conceptHasCodeRelationKind(c, q.CodeRelationKind) {
+		return false
 	}
 
 	return true
@@ -296,6 +373,11 @@ func buildIndex(concepts []*Concept) *Index {
 		byTag:            make(map[string][]*Concept),
 		byResource:       make(map[string][]*Concept),
 		byTitle:          make(map[string][]*Concept),
+		byCodeLanguage:   make(map[string][]*Concept),
+		byCodeFilePath:   make(map[string][]*Concept),
+		bySymbolKind:     make(map[string][]*Concept),
+		byQualifiedName:  make(map[string][]*Concept),
+		byRelationKind:   make(map[string][]*Concept),
 		symbolsByName:    make(map[string][]indexedSymbol),
 		symbolsByConcept: make(map[*Concept][]SymbolMatch),
 	}
@@ -318,6 +400,7 @@ func buildIndex(concepts []*Concept) *Index {
 		if concept.Title != "" {
 			idx.byTitle[strings.ToLower(concept.Title)] = append(idx.byTitle[strings.ToLower(concept.Title)], concept)
 		}
+		indexCodeMetadata(idx, concept)
 		for _, symbol := range matchingSymbols(concept.Content, "") {
 			key := strings.ToLower(symbol.Name)
 			idx.symbolsByName[key] = append(idx.symbolsByName[key], indexedSymbol{concept: concept, match: symbol})
@@ -448,6 +531,127 @@ func indexedResourceCandidates(index *Index, resource string) []*Concept {
 		}
 	}
 	return candidates
+}
+
+func indexCodeMetadata(idx *Index, concept *Concept) {
+	if idx == nil || concept == nil {
+		return
+	}
+
+	for _, match := range codeLanguagePattern.FindAllStringSubmatch(concept.Content, -1) {
+		idx.byCodeLanguage[normalizedCodeKey(match[1])] = append(idx.byCodeLanguage[normalizedCodeKey(match[1])], concept)
+	}
+	for _, match := range codeFilePathPattern.FindAllStringSubmatch(concept.Content, -1) {
+		idx.byCodeFilePath[normalizedCodeKey(match[1])] = append(idx.byCodeFilePath[normalizedCodeKey(match[1])], concept)
+	}
+
+	for _, symbol := range matchingSymbols(concept.Content, "") {
+		idx.bySymbolKind[normalizedCodeKey(symbol.Kind)] = append(idx.bySymbolKind[normalizedCodeKey(symbol.Kind)], concept)
+		idx.byQualifiedName[normalizedCodeKey(symbol.Name)] = append(idx.byQualifiedName[normalizedCodeKey(symbol.Name)], concept)
+	}
+
+	for _, line := range strings.Split(concept.Content, "\n") {
+		parts := relationRowPattern.FindStringSubmatch(strings.TrimSpace(line))
+		if len(parts) != 6 {
+			continue
+		}
+		idx.byRelationKind[normalizedCodeKey(parts[1])] = append(idx.byRelationKind[normalizedCodeKey(parts[1])], concept)
+		idx.byQualifiedName[normalizedCodeKey(parts[2])] = append(idx.byQualifiedName[normalizedCodeKey(parts[2])], concept)
+		idx.byQualifiedName[normalizedCodeKey(parts[3])] = append(idx.byQualifiedName[normalizedCodeKey(parts[3])], concept)
+	}
+}
+
+func indexedContainsCandidates(m map[string][]*Concept, substr string) []*Concept {
+	if substr == "" {
+		return nil
+	}
+	var candidates []*Concept
+	needle := normalizedCodeKey(substr)
+	for key, concepts := range m {
+		if strings.Contains(key, needle) {
+			candidates = append(candidates, concepts...)
+		}
+	}
+	return candidates
+}
+
+func conceptHasCodeLanguage(c *Concept, language string) bool {
+	if c == nil || language == "" {
+		return false
+	}
+	needle := normalizedCodeKey(language)
+	for _, match := range codeLanguagePattern.FindAllStringSubmatch(c.Content, -1) {
+		if normalizedCodeKey(match[1]) == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func conceptHasCodeFilePath(c *Concept, filePath string) bool {
+	if c == nil || filePath == "" {
+		return false
+	}
+	needle := normalizedCodeKey(filePath)
+	for _, match := range codeFilePathPattern.FindAllStringSubmatch(c.Content, -1) {
+		if strings.Contains(normalizedCodeKey(match[1]), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func conceptHasCodeSymbolKind(c *Concept, kind string) bool {
+	if c == nil || kind == "" {
+		return false
+	}
+	needle := normalizedCodeKey(kind)
+	for _, symbol := range matchingSymbols(c.Content, "") {
+		if normalizedCodeKey(symbol.Kind) == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func conceptHasCodeQualifiedName(c *Concept, name string) bool {
+	if c == nil || name == "" {
+		return false
+	}
+	needle := normalizedCodeKey(name)
+	for _, symbol := range matchingSymbols(c.Content, "") {
+		if strings.Contains(normalizedCodeKey(symbol.Name), needle) {
+			return true
+		}
+	}
+	for _, line := range strings.Split(c.Content, "\n") {
+		parts := relationRowPattern.FindStringSubmatch(strings.TrimSpace(line))
+		if len(parts) != 6 {
+			continue
+		}
+		if strings.Contains(normalizedCodeKey(parts[2]), needle) || strings.Contains(normalizedCodeKey(parts[3]), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func conceptHasCodeRelationKind(c *Concept, kind string) bool {
+	if c == nil || kind == "" {
+		return false
+	}
+	needle := normalizedCodeKey(kind)
+	for _, line := range strings.Split(c.Content, "\n") {
+		parts := relationRowPattern.FindStringSubmatch(strings.TrimSpace(line))
+		if len(parts) == 6 && normalizedCodeKey(parts[1]) == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizedCodeKey(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 func intersectConcepts(left, right []*Concept) []*Concept {

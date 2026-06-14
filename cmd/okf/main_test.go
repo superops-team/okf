@@ -28,6 +28,27 @@ func TestCLISmokeInitSearchUpdateLint(t *testing.T) {
 		t.Fatalf("search output = %q, want main.go", searchOut)
 	}
 
+	codeFilterSearches := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "language", args: []string{"-code-language", "go"}, want: "main.go"},
+		{name: "file path", args: []string{"-code-path", "main.go"}, want: "main.go"},
+		{name: "symbol kind", args: []string{"-code-symbol-kind", "function"}, want: "main.go"},
+		{name: "qualified name", args: []string{"-code-qualified-name", "StartServer"}, want: "main.go"},
+		{name: "relation kind", args: []string{"-code-relation-kind", "contains"}, want: "Code Relation Index"},
+	}
+	for _, tt := range codeFilterSearches {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append([]string{"search", "-path", repo}, tt.args...)
+			out := runOKF(t, bin, args...)
+			if !strings.Contains(out, tt.want) {
+				t.Fatalf("search output = %q, want %s", out, tt.want)
+			}
+		})
+	}
+
 	symbolSearchOut := runOKF(t, bin, "search", "-path", repo, "-q", "StartServer")
 	if !strings.Contains(symbolSearchOut, "symbol matches") || !strings.Contains(symbolSearchOut, "function StartServer") || !strings.Contains(symbolSearchOut, "main.go:") {
 		t.Fatalf("symbol search output = %q, want symbol kind, name, and source location", symbolSearchOut)
