@@ -35,6 +35,12 @@ func ParseConcept(path string) (*Concept, error) {
 
 // ParseConceptBytes parses concept content from raw bytes.
 func ParseConceptBytes(path string, data []byte) (*Concept, error) {
+	if data == nil {
+		return nil, &ParseError{FilePath: path, Message: "data is nil"}
+	}
+	if len(data) == 0 {
+		return nil, &ParseError{FilePath: path, Message: "data is empty"}
+	}
 	endIdx := findFrontmatterEnd(data)
 	if endIdx == -1 {
 		return &Concept{

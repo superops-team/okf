@@ -108,20 +108,15 @@ func TestStressParseSpecialCharacters(t *testing.T) {
 
 func TestStressParseEmptyAndNil(t *testing.T) {
 	t.Parallel()
-	// BUG FOUND: nil bytes should return error but parser does not check for nil
+	// nil bytes should return error
 	_, err := parser.ParseConceptBytes("nil.md", nil)
 	if err == nil {
-		t.Log("BUG: ParseConceptBytes does not handle nil input (no nil check)")
-	} else {
-		t.Logf("nil input correctly returned error: %v", err)
+		t.Fatal("ParseConceptBytes should return error for nil input")
 	}
-	// empty bytes
-	c, err := parser.ParseConceptBytes("empty.md", []byte{})
-	if err != nil {
-		t.Fatalf("unexpected error for empty input: %v", err)
-	}
-	if c.Type != "concept" {
-		t.Fatalf("expected default type 'concept', got %q", c.Type)
+	// empty bytes should return error
+	_, err = parser.ParseConceptBytes("empty.md", []byte{})
+	if err == nil {
+		t.Fatal("ParseConceptBytes should return error for empty input")
 	}
 }
 
@@ -258,14 +253,10 @@ func TestStressBundleNilAndEmpty(t *testing.T) {
 	if bundle.RemoveConcept("nonexistent") {
 		t.Fatal("RemoveConcept on empty bundle returned true")
 	}
-	// BUG FOUND: RelatedConcepts(nil) panics with nil pointer dereference
-	// This is a real bug - the method does not check for nil concept argument
-	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("BUG: RelatedConcepts(nil) panicked: %v", r)
-		}
-	}()
-	_ = bundle.RelatedConcepts(nil)
+	// RelatedConcepts with nil should return nil (not panic)
+	if related := bundle.RelatedConcepts(nil); related != nil {
+		t.Fatalf("RelatedConcepts(nil) should return nil, got %d results", len(related))
+	}
 
 	// Add nil concept
 	bundle.Concepts = append(bundle.Concepts, nil)

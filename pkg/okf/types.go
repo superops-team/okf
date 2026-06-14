@@ -135,6 +135,9 @@ func (b *KnowledgeBundle) AddConcept(c *Concept) *Concept {
 // Returns true if the concept was found and removed.
 func (b *KnowledgeBundle) RemoveConcept(title string) bool {
 	for i, c := range b.Concepts {
+		if c == nil {
+			continue
+		}
 		if c.Title == title {
 			b.Concepts = append(b.Concepts[:i], b.Concepts[i+1:]...)
 			return true
@@ -146,6 +149,9 @@ func (b *KnowledgeBundle) RemoveConcept(title string) bool {
 // GetConcept returns a concept by title, or nil if not found.
 func (b *KnowledgeBundle) GetConcept(title string) *Concept {
 	for _, c := range b.Concepts {
+		if c == nil {
+			continue
+		}
 		if c.Title == title {
 			return c
 		}
@@ -157,6 +163,9 @@ func (b *KnowledgeBundle) GetConcept(title string) *Concept {
 func (b *KnowledgeBundle) FilterConcepts(pred func(*Concept) bool) []*Concept {
 	var result []*Concept
 	for _, c := range b.Concepts {
+		if c == nil {
+			continue
+		}
 		if pred(c) {
 			result = append(result, c)
 		}
@@ -194,6 +203,9 @@ func (b *KnowledgeBundle) FilterByResource(resource string) []*Concept {
 // and content. Returns matching concepts.
 func (b *KnowledgeBundle) Search(query string) []*Concept {
 	return b.FilterConcepts(func(c *Concept) bool {
+		if c == nil {
+			return false
+		}
 		return containsFold(c.Title, query) ||
 			containsFold(c.Description, query) ||
 			containsFold(c.Content, query)
@@ -212,6 +224,9 @@ func (b *KnowledgeBundle) Stats() BundleStats {
 	tagSet := make(map[string]struct{})
 
 	for _, c := range b.Concepts {
+		if c == nil {
+			continue
+		}
 		if c.Type != "" {
 			typeSet[c.Type] = struct{}{}
 			stats.TypeCounts[c.Type]++
@@ -239,6 +254,9 @@ type BundleStats struct {
 
 // RelatedConcepts finds concepts that share tags or resources with the given concept.
 func (b *KnowledgeBundle) RelatedConcepts(c *Concept) []*Concept {
+	if c == nil {
+		return nil
+	}
 	tagSet := make(map[string]bool)
 	for _, t := range c.Tags {
 		tagSet[t] = true
