@@ -1,0 +1,49 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100/
+.Trashes/
+
+# Go build artifacts
+/okf
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Go workspace and local tool state
+go.work
+go.work.sum
+.gopath/
+
+# OKF generated knowledge bases
+.okf/
+
+# Build and temporary directories
+bin/
+build/
+dist/
+tmp/
+temp/
+*.tmp
+*.log
+
+# Editor and IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local environment files
+.env
+.env.*
+!.env.example
