@@ -95,6 +95,110 @@ func helper() {}
 	}
 }
 
+func TestGenerateBundleAddsTrustedGeneratedMetadata(t *testing.T) {
+	dir := initTestRepo(t)
+	mustWriteFile(t, filepath.Join(dir, "main.go"), "package main\nfunc main() {}\n")
+	runGit(t, dir, "add", "main.go")
+	runGit(t, dir, "commit", "-m", "add main")
+
+	cfg := DefaultConfig()
+	cfg.RepoPath = dir
+	bundle, err := GenerateBundle(cfg, true)
+	if err != nil {
+		t.Fatalf("GenerateBundle returned error: %v", err)
+	}
+
+	var generated *okf.Concept
+	for _, concept := range bundle.Concepts {
+		if concept.Resource == codeFileResource("main.go") {
+			generated = concept
+			break
+		}
+	}
+	if generated == nil {
+		t.Fatal("generated main.go concept not found")
+	}
+	fields := generated.CustomFields
+	if fields["generated"] != true || fields["generator"] != "okf.git" || fields["source_path"] != "main.go" || fields["source_kind"] != "file" {
+		t.Fatalf("generated custom fields = %#v, want trusted okf.git metadata", fields)
+	}
+	if fields["generator_version"] != 1 {
+		t.Fatalf("generator_version = %#v, want 1", fields["generator_version"])
+	}
+	if fields["source_commit"] == "" {
+		t.Fatalf("source_commit is empty in %#v", fields)
+	}
+}
+
+func TestIncrementalDeletePreservesHumanConceptWithoutGeneratedMetadata(t *testing.T) {
+	dir := initTestRepo(t)
+	mustWriteFile(t, filepath.Join(dir, "main.go"), "package main\nfunc main() {}\n")
+	runGit(t, dir, "add", "main.go")
+	runGit(t, dir, "commit", "-m", "add main")
+
+	cfg := DefaultConfig()
+	cfg.RepoPath = dir
+	bundle, err := GenerateBundle(cfg, true)
+	if err != nil {
+		t.Fatalf("GenerateBundle returned error: %v", err)
+	}
+	if _, err := SaveKnowledgeBase(bundle, cfg); err != nil {
+		t.Fatalf("SaveKnowledgeBase returned error: %v", err)
+	}
+	knowledgeFile := filepath.Join(dir, cfg.KnowledgeDir, "main.go.md")
+	mustWriteFile(t, knowledgeFile, `---
+type: code_file
+title: main.go
+resource: code://repo/main.go
+---
+Human-authored notes that resemble a generated code concept.
+`)
+
+	runGit(t, dir, "rm", "main.go")
+	runGit(t, dir, "commit", "-m", "delete main")
+	incremental, _, err := UpdateSinceLastIndexedCommit(cfg)
+	if err != nil {
+		t.Fatalf("UpdateSinceLastIndexedCommit returned error: %v", err)
+	}
+	if err := ApplyIncrementalUpdate(cfg, incremental); err != nil {
+		t.Fatalf("ApplyIncrementalUpdate returned error: %v", err)
+	}
+
+	if _, err := os.Stat(knowledgeFile); err != nil {
+		t.Fatalf("human-authored concept was deleted or inaccessible: %v", err)
+	}
+}
+
+func TestStatePathFollowsCustomKnowledgeDir(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RepoPath = string(filepath.Separator) + "repo"
+	cfg.KnowledgeDir = filepath.Join("custom", "knowledge")
+
+	got := statePath(cfg)
+	want := filepath.Join(string(filepath.Separator)+"repo", "custom", "state.json")
+	if got != want {
+		t.Fatalf("statePath = %q, want %q", got, want)
+	}
+}
+
+func TestSaveKnowledgeBaseRespectsAbsoluteKnowledgeDir(t *testing.T) {
+	dir := initTestRepo(t)
+	knowledgeDir := filepath.Join(t.TempDir(), "knowledge")
+	cfg := DefaultConfig()
+	cfg.RepoPath = dir
+	cfg.KnowledgeDir = knowledgeDir
+	bundle := okf.NewBundle("absolute")
+	bundle.AddConcept(okf.NewConcept("concept", "Absolute Dir"))
+
+	if _, err := SaveKnowledgeBase(bundle, cfg); err != nil {
+		t.Fatalf("SaveKnowledgeBase returned error: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(knowledgeDir, "concepts", "Absolute Dir.md")); err != nil {
+		t.Fatalf("absolute knowledge file was not created at configured dir: %v", err)
+	}
+}
+
 func TestAnalyzeFileFallsBackOnMalformedGoAndRecordsWarning(t *testing.T) {
 	dir := initTestRepo(t)
 	mustWriteFile(t, filepath.Join(dir, "broken.go"), "package main\nfunc broken(\nfunc fallback() {}\n")

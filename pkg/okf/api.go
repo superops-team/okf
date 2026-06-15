@@ -66,14 +66,15 @@ func LoadBundle(path string, opts *LoadOptions) (*KnowledgeBundle, error) {
 
 		// Convert parser.Concept to okf.Concept
 		concept := &Concept{
-			Type:        pc.Type,
-			Title:       pc.Title,
-			Description: pc.Description,
-			Resource:    pc.Resource,
-			Tags:        pc.Tags,
-			Timestamp:   pc.Timestamp,
-			Content:     pc.Content,
-			FilePath:    relPath,
+			Type:         pc.Type,
+			Title:        pc.Title,
+			Description:  pc.Description,
+			Resource:     pc.Resource,
+			Tags:         pc.Tags,
+			Timestamp:    pc.Timestamp,
+			Content:      pc.Content,
+			FilePath:     relPath,
+			CustomFields: pc.CustomFields,
 		}
 
 		bundle.Concepts = append(bundle.Concepts, concept)
@@ -134,13 +135,14 @@ func SaveBundle(b *KnowledgeBundle, path string, opts *SaveOptions) error {
 
 		// Convert okf.Concept to parser.Concept for serialization
 		pc := &parser.Concept{
-			Type:        concept.Type,
-			Title:       concept.Title,
-			Description: concept.Description,
-			Resource:    concept.Resource,
-			Tags:        concept.Tags,
-			Timestamp:   concept.Timestamp,
-			Content:     concept.Content,
+			Type:         concept.Type,
+			Title:        concept.Title,
+			Description:  concept.Description,
+			Resource:     concept.Resource,
+			Tags:         concept.Tags,
+			Timestamp:    concept.Timestamp,
+			Content:      concept.Content,
+			CustomFields: concept.CustomFields,
 		}
 
 		data, err := parser.SerializeConcept(pc, opts.PrettyPrint)

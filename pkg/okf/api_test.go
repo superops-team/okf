@@ -42,6 +42,37 @@ func TestSaveBundleLoadBundleRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSaveBundleLoadBundlePreservesCustomFields(t *testing.T) {
+	dir := t.TempDir()
+	bundle := NewBundle("generated")
+	concept := NewConcept("code_file", "handler.go")
+	concept.CustomFields = map[string]interface{}{
+		"generated":         true,
+		"generator":         "okf.git",
+		"generator_version": 1,
+		"source_path":       "internal/handler.go",
+		"source_kind":       "file",
+		"source_commit":     "abc123",
+	}
+	bundle.AddConcept(concept)
+
+	if err := SaveBundle(bundle, dir, DefaultSaveOptions()); err != nil {
+		t.Fatalf("SaveBundle returned error: %v", err)
+	}
+
+	loaded, err := LoadBundle(dir, DefaultLoadOptions())
+	if err != nil {
+		t.Fatalf("LoadBundle returned error: %v", err)
+	}
+	if len(loaded.Concepts) != 1 {
+		t.Fatalf("loaded %d concepts, want 1", len(loaded.Concepts))
+	}
+	fields := loaded.Concepts[0].CustomFields
+	if fields["generated"] != true || fields["generator"] != "okf.git" || fields["source_path"] != "internal/handler.go" {
+		t.Fatalf("custom fields = %#v, want generated okf.git internal/handler.go", fields)
+	}
+}
+
 func BenchmarkSaveLoadRoundTrip(b *testing.B) {
 	bundle := NewBundle("bench")
 	for i := 0; i < 200; i++ {

@@ -60,7 +60,7 @@ func GenerateBundle(cfg *Config, force bool) (*okf.KnowledgeBundle, error) {
 
 	bundle := &okf.KnowledgeBundle{
 		Name:     filepath.Base(repoRoot),
-		RootPath: filepath.Join(repoRoot, cfg.KnowledgeDir),
+		RootPath: resolveKnowledgeDir(repoRoot, cfg.KnowledgeDir),
 	}
 
 	files, err := ListTrackedFiles(repoRoot)
@@ -245,6 +245,7 @@ func conceptFromSummary(s *FileSummary, cfg *Config, bundle *okf.KnowledgeBundle
 	c.Resource = codeFileResource(s.RelativePath)
 	c.Timestamp = s.LastModified.Format(time.RFC3339)
 	c.FilePath = s.RelativePath
+	attachGeneratedMetadata(c, s.RelativePath, "file", s.LastCommit)
 
 	tags := []string{"code", "generated", s.Type}
 	if s.LastAuthor != "" {
@@ -509,7 +510,7 @@ func UpdateBundle(cfg *Config, changedFiles []string) (*okf.KnowledgeBundle, []s
 
 	bundle := &okf.KnowledgeBundle{
 		Name:     filepath.Base(repoRoot) + "_incremental",
-		RootPath: filepath.Join(repoRoot, cfg.KnowledgeDir),
+		RootPath: resolveKnowledgeDir(repoRoot, cfg.KnowledgeDir),
 	}
 	metadataByFile, err := BatchGitMetadata(repoRoot, changedFiles)
 	if err != nil {
@@ -567,7 +568,7 @@ func ApplyIncrementalUpdate(cfg *Config, incremental *okf.KnowledgeBundle) error
 	}
 	cfg.RepoPath = repoRoot
 
-	knowledgeDir := filepath.Join(repoRoot, cfg.KnowledgeDir)
+	knowledgeDir := resolveKnowledgeDir(repoRoot, cfg.KnowledgeDir)
 	existing, err := okf.LoadBundle(knowledgeDir, okf.DefaultLoadOptions())
 	if err != nil {
 		existing = &okf.KnowledgeBundle{Name: filepath.Base(repoRoot), RootPath: knowledgeDir}
@@ -710,6 +711,11 @@ func summaryFromConcept(concept *okf.Concept) *FileSummary {
 }
 
 func sourcePathFromConcept(concept *okf.Concept) string {
+	if concept.CustomFields != nil {
+		if sourcePath, ok := concept.CustomFields["source_path"].(string); ok && sourcePath != "" {
+			return sourcePath
+		}
+	}
 	if strings.HasPrefix(concept.Resource, "code://repo/") {
 		return strings.TrimPrefix(concept.Resource, "code://repo/")
 	}
@@ -756,7 +762,44 @@ func removeKnowledgeFile(knowledgeDir, resource string) {
 	if !strings.HasSuffix(path, ".md") {
 		path += ".md"
 	}
+	concept, err := parser.ParseConcept(path)
+	if err != nil || !hasTrustedGeneratedMetadata(concept.CustomFields, resource) {
+		return
+	}
 	_ = os.Remove(path)
+}
+
+func attachGeneratedMetadata(concept *okf.Concept, sourcePath, sourceKind, sourceCommit string) {
+	if concept.CustomFields == nil {
+		concept.CustomFields = map[string]interface{}{}
+	}
+	concept.CustomFields["generated"] = true
+	concept.CustomFields["generator"] = "okf.git"
+	concept.CustomFields["generator_version"] = 1
+	concept.CustomFields["source_path"] = sourcePath
+	concept.CustomFields["source_kind"] = sourceKind
+	if sourceCommit != "" {
+		concept.CustomFields["source_commit"] = sourceCommit
+	}
+}
+
+func hasTrustedGeneratedMetadata(fields map[string]interface{}, sourcePath string) bool {
+	if fields == nil {
+		return false
+	}
+	generated, ok := fields["generated"].(bool)
+	if !ok || !generated {
+		return false
+	}
+	generator, ok := fields["generator"].(string)
+	if !ok || generator != "okf.git" {
+		return false
+	}
+	metadataSourcePath, ok := fields["source_path"].(string)
+	if !ok || metadataSourcePath == "" {
+		return false
+	}
+	return metadataSourcePath == sourcePath || codeFileResource(metadataSourcePath) == sourcePath
 }
 
 // UpdateFromLastCommit updates based on the last commit.
@@ -794,7 +837,7 @@ func SaveKnowledgeBase(bundle *okf.KnowledgeBundle, cfg *Config) (int, error) {
 		cfg = DefaultConfig()
 	}
 
-	outputDir := filepath.Join(cfg.RepoPath, cfg.KnowledgeDir)
+	outputDir := resolveKnowledgeDir(cfg.RepoPath, cfg.KnowledgeDir)
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return 0, err
 	}
@@ -817,13 +860,14 @@ func SaveKnowledgeBase(bundle *okf.KnowledgeBundle, cfg *Config) (int, error) {
 		}
 
 		content, err := parser.SerializeConcept(&parser.Concept{
-			Type:        concept.Type,
-			Title:       concept.Title,
-			Description: concept.Description,
-			Resource:    concept.Resource,
-			Tags:        concept.Tags,
-			Timestamp:   concept.Timestamp,
-			Content:     concept.Content,
+			Type:         concept.Type,
+			Title:        concept.Title,
+			Description:  concept.Description,
+			Resource:     concept.Resource,
+			Tags:         concept.Tags,
+			Timestamp:    concept.Timestamp,
+			Content:      concept.Content,
+			CustomFields: concept.CustomFields,
 		}, true)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("serialize %s: %v", relPath, err))

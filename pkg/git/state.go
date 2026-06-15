@@ -64,7 +64,17 @@ func WriteState(cfg *Config, state *State) error {
 }
 
 func statePath(cfg *Config) string {
-	return filepath.Join(cfg.RepoPath, ".okf", "state.json")
+	return filepath.Join(filepath.Dir(resolveKnowledgeDir(cfg.RepoPath, cfg.KnowledgeDir)), "state.json")
+}
+
+func resolveKnowledgeDir(repoRoot, knowledgeDir string) string {
+	if knowledgeDir == "" {
+		knowledgeDir = DefaultConfig().KnowledgeDir
+	}
+	if filepath.IsAbs(knowledgeDir) {
+		return knowledgeDir
+	}
+	return filepath.Join(repoRoot, knowledgeDir)
 }
 
 // UpdateSinceLastIndexedCommit updates based on the state checkpoint range.

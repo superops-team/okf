@@ -13,14 +13,15 @@ import (
 
 // Concept represents a parsed concept with YAML frontmatter parsed.
 type Concept struct {
-	Type        string
-	Title       string
-	Description string
-	Resource    string
-	Tags        []string
-	Timestamp   string
-	Content     string
-	FilePath    string
+	Type         string
+	Title        string
+	Description  string
+	Resource     string
+	Tags         []string
+	Timestamp    string
+	Content      string
+	FilePath     string
+	CustomFields map[string]interface{}
 }
 
 // ParseConcept parses a single markdown file with YAML frontmatter.
@@ -64,14 +65,15 @@ func ParseConceptBytes(path string, data []byte) (*Concept, error) {
 	content := string(data[contentStart:])
 
 	concept := &Concept{
-		Type:        fm.Type,
-		Title:       fm.Title,
-		Description: fm.Description,
-		Resource:    fm.Resource,
-		Tags:        fm.Tags,
-		Timestamp:   fm.Timestamp,
-		Content:     content,
-		FilePath:    path,
+		Type:         fm.Type,
+		Title:        fm.Title,
+		Description:  fm.Description,
+		Resource:     fm.Resource,
+		Tags:         fm.Tags,
+		Timestamp:    fm.Timestamp,
+		Content:      content,
+		FilePath:     path,
+		CustomFields: fm.CustomFields,
 	}
 
 	if concept.Title == "" {
@@ -87,12 +89,13 @@ func ParseConceptBytes(path string, data []byte) (*Concept, error) {
 // SerializeConcept converts a concept back to markdown with YAML frontmatter.
 func SerializeConcept(c *Concept, prettyPrint bool) ([]byte, error) {
 	fm := frontmatter{
-		Type:        c.Type,
-		Title:       c.Title,
-		Description: c.Description,
-		Resource:    c.Resource,
-		Tags:        c.Tags,
-		Timestamp:   c.Timestamp,
+		Type:         c.Type,
+		Title:        c.Title,
+		Description:  c.Description,
+		Resource:     c.Resource,
+		Tags:         c.Tags,
+		Timestamp:    c.Timestamp,
+		CustomFields: c.CustomFields,
 	}
 
 	yamlData, err := yaml.Marshal(&fm)
@@ -129,12 +132,13 @@ func (e *ParseError) Error() string {
 
 // frontmatter represents the YAML structure at the start of a concept file.
 type frontmatter struct {
-	Type        string   `yaml:"type"`
-	Title       string   `yaml:"title"`
-	Description string   `yaml:"description,omitempty"`
-	Resource    string   `yaml:"resource,omitempty"`
-	Tags        []string `yaml:"tags,omitempty"`
-	Timestamp   string   `yaml:"timestamp,omitempty"`
+	Type         string                 `yaml:"type"`
+	Title        string                 `yaml:"title"`
+	Description  string                 `yaml:"description,omitempty"`
+	Resource     string                 `yaml:"resource,omitempty"`
+	Tags         []string               `yaml:"tags,omitempty"`
+	Timestamp    string                 `yaml:"timestamp,omitempty"`
+	CustomFields map[string]interface{} `yaml:",inline"`
 }
 
 func findFrontmatterEnd(data []byte) int {
