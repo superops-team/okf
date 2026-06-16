@@ -28,7 +28,10 @@ Commands:
   lint        Check knowledge base for specification compliance
   show        Show knowledge base information
   search      Search the knowledge base
-  add         Import files, directories, or archives into knowledge base
+  add         Import files, directories, or archives into knowledge base (with smart detection)
+  sync        Synchronize all indexed files (detect changes and apply strategies)
+  watch       Watch source directories and auto-sync on file changes (requires .watch.yaml)
+  metadata    Manage the metadata index (inspect|rebuild|clean)
   config      Manage configuration
   hook        Install git hook for automatic updates
   version     Show version information
@@ -39,6 +42,13 @@ Options:
   -dir PATH        Knowledge directory (default: .okf/knowledge)
   -verbose         Show detailed output
   -strict          Strict lint mode (warnings fail)
+
+Smart Import Options (for 'add'):
+  -strategy STRATEGY   Merge strategy: skip|overwrite|merge|patch
+  -patch-fields LIST   Comma-separated frontmatter fields for patch strategy
+  -detect-only         Only detect changes without performing import
+  -dry-run             Preview changes without applying them
+  -force               Overwrite existing files (shorthand for -strategy=overwrite)
 `
 
 func main() {
@@ -60,6 +70,12 @@ func main() {
 		cmdSearch(os.Args[2:])
 	case "add":
 		os.Exit(cmdAdd(os.Args[2:]))
+	case "sync":
+		os.Exit(cmdSync(os.Args[2:]))
+	case "watch":
+		os.Exit(cmdWatch(os.Args[2:]))
+	case "metadata":
+		os.Exit(cmdMetadata(os.Args[2:]))
 	case "config":
 		os.Exit(cmdConfig(os.Args[2:]))
 	case "hook":
