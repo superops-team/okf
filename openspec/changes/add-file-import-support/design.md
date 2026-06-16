@@ -12,7 +12,7 @@ This design implements support for importing files, directories, and archive fil
 ├─────────────────────────────────────────────────────────────────┤
 │  CLI Flag (-dir)  ──┐                                          │
 │                     │                                          │
-│  Env Variable      ──┼──> ConfigResolver.Resolve() ──> Final Path│
+│  Env Variable      ──┼──> ResolveKnowledgeDir() ──> Final Path │
 │  (OKF_KNOWLEDGE_DIR) │                                          │
 │                     │                                          │
 │  Platform Default ──┘                                          │
@@ -47,7 +47,6 @@ This design implements support for importing files, directories, and archive fil
 ```go
 type Config struct {
     KnowledgeDir string `yaml:"knowledge_dir"`
-    // ... other config options
 }
 ```
 
@@ -55,10 +54,9 @@ type Config struct {
 
 ```go
 type ImportOptions struct {
-    DryRun    bool
-    Force     bool
-    Silent    bool
-    Recursive bool // default: true
+    DryRun    bool   // Preview mode, no changes
+    Force     bool   // Overwrite existing files
+    Silent    bool   // Suppress informational output
 }
 ```
 
@@ -70,7 +68,13 @@ type ImportResult struct {
     ImportedFiles  int
     SkippedFiles   int
     FailedFiles    int
-    Errors         []error
+    Errors         []ImportError
+}
+
+type ImportError struct {
+    FilePath string
+    Message  string
+    Err      error
 }
 ```
 
@@ -79,9 +83,10 @@ type ImportResult struct {
 ```
 pkg/
 ├── okf/
-│   ├── config.go        # Configuration management
+│   ├── config.go        # Configuration management (Load/Save/Resolve)
 │   ├── config_test.go
-│   └── import.go        # File import logic
+│   ├── import.go        # File import logic (ImportFile/ImportDirectory/ImportArchive)
+│   └── import_test.go
 └── cmd/okf/
     ├── cmd_add.go       # okf add command
     └── cmd_config.go    # okf config command
@@ -93,19 +98,32 @@ pkg/
 
 | Function | Purpose |
 |----------|---------|
-| `LoadConfig()` | Load config from file |
-| `SaveConfig(cfg)` | Save config to file |
-| `ResolveKnowledgeDir(flags)` | Resolve path with precedence |
-| `GetPlatformDefault()` | Return platform-specific default |
+| `LoadConfig(path)` | Load config from file (returns default if not exists) |
+| `SaveConfig(cfg, path)` | Save config to file |
+| `ResolveKnowledgeDir(cliDir)` | Resolve path with precedence: CLI > Env > Default |
+| `GetPlatformDefault()` | Return platform-specific default path |
+
+#### Path Resolution Rules
+
+1. **CLI Flag** (`-dir`) - Highest priority
+2. **Environment Variable** (`OKF_KNOWLEDGE_DIR`)
+3. **Existing Local KB** - If `.okf/knowledge` exists in current directory
+4. **Platform Default** - Lowest priority
 
 ### Import API
 
 | Function | Purpose |
 |----------|---------|
-| `ImportFile(path, opts)` | Import single file |
-| `ImportDirectory(path, opts)` | Import directory recursively |
-| `ImportArchive(path, opts)` | Extract and import archive |
-| `Import(path, opts)` | Auto-detect and import |
+| `ImportFile(srcPath, dstBase, opts)` | Import single file, preserve relative path |
+| `ImportDirectory(srcDir, dstBase, opts)` | Import directory recursively |
+| `ImportArchive(srcPath, dstBase, opts)` | Extract and import archive contents |
+| `Import(srcPath, dstBase, opts)` | Auto-detect type and import |
+
+#### Path Handling Semantics
+
+- **Single File** (`okf add /a/b/file.md`) → `<dst>/file.md`
+- **Directory** (`okf add /a/b/`) → `<dst>/<relative_path>/file.md`
+- **Archive** (`okf add archive.zip`) → `<dst>/<archive_content>/file.md`
 
 ## CLI Commands
 
@@ -117,21 +135,31 @@ okf add <path> [options]
 Options:
   -dir PATH        Knowledge base directory (default: resolved config)
   -force           Overwrite existing files
-  -dry-run         Show what would be imported
-  -silent          Suppress informational output
+  -dry-run         Show what would be imported (no changes made)
+  -silent          Suppress informational output (only show errors)
+
+Examples:
+  okf add document.md                    # Import single file
+  okf add ./docs                        # Import directory recursively
+  okf add backup.zip                    # Extract and import archive
+  okf add ./docs -dir ~/knowledge       # Custom destination
 ```
 
 ### `okf config`
 
 ```
-okf config list                    # Show all config
-okf config get <key>               # Get specific config
-okf config set <key> <value>       # Set config value
+okf config list                    # Show all configuration
+okf config get <key>               # Get specific configuration value
+okf config set <key> <value>       # Set configuration value
+
+Examples:
+  okf config get knowledge_dir     # Show current knowledge base path
+  okf config set knowledge_dir ~/kb # Set custom path
 ```
 
 ## Platform Default Paths
 
-| Platform | Path |
+| Platform | Default Path |
 |----------|------|
 | Linux | `$HOME/.okf/knowledge` |
 | macOS | `$HOME/Library/Application Support/okf/knowledge` |
@@ -139,21 +167,85 @@ okf config set <key> <value>       # Set config value
 
 ## Security Considerations
 
-1. **Path Traversal Protection**: Sanitize all paths during archive extraction
-2. **Permission Handling**: Strip dangerous permission bits (setuid/setgid)
-3. **Size Limits**: Consider adding limits on archive size to prevent DoS
-4. **Validation**: Validate all imported files against OKF spec
+### Path Traversal Protection
+- **Sanitize all paths** using `filepath.Clean()` before extraction
+- **Prefix check** - ensure resolved path is within destination directory
+- **Strip leading slashes** from archive entries
+- **Log warnings** for suspicious path patterns
+
+### Resource Limits
+- **Maximum archive size**: 50MB (configurable)
+- **Maximum file count per import**: 10000
+- **Maximum directory depth**: 10 levels
+- **Single file size limit**: 10MB
+
+### Permission Handling
+- **Files**: 0644 (rw-r--r--)
+- **Directories**: 0755 (rwxr-xr-x)
+- **Strip dangerous bits**: Remove setuid/setgid from imported files
 
 ## Error Handling
 
-- **Invalid OKF Format**: Return specific error with line number and field name
-- **Missing Permissions**: Clear error message about write access
-- **Archive Corruption**: Handle decompression errors gracefully
-- **Network Issues**: If fetching remote files (future enhancement)
+### Error Types
+
+| Type | Description | Recovery |
+|------|-------------|----------|
+| `ErrInvalidFormat` | Missing required frontmatter fields | Fix YAML frontmatter |
+| `ErrPathTraversal` | Suspicious path in archive | Review archive content |
+| `ErrPermissionDenied` | Cannot write to destination | Check directory permissions |
+| `ErrArchiveCorrupt` | Cannot decompress archive | Verify archive integrity |
+| `ErrFileTooLarge` | File exceeds size limit | Split or increase limit |
+
+### Error Handling Strategy
+- **Continue on error**: Invalid files don't block entire import
+- **Aggregate errors**: Collect all errors and report at end
+- **Clear messages**: Include file path and specific issue
+- **Exit code**: Non-zero if any files failed to import
 
 ## Testing Strategy
 
-- **Unit Tests**: Test config resolution, path sanitization, validation
-- **Integration Tests**: Test actual file/directory/archive imports
-- **Platform Tests**: Verify platform defaults on different OS
-- **Edge Cases**: Empty directories, malformed archives, permission issues
+### Unit Tests
+- **Configuration**: Platform detection, path resolution, config file I/O
+- **Path Handling**: Sanitization, traversal protection, boundary cases
+- **Validation**: OKF format validation, error reporting
+- **Archive Handling**: Format detection, extraction, cleanup
+
+### Integration Tests
+- **Full Import Flow**: Directory import, archive extraction
+- **Error Scenarios**: Invalid files, permission issues, corrupt archives
+- **Concurrency**: Config file concurrent access (future)
+
+### End-to-End Tests
+- **CLI Commands**: `okf add`, `okf config` complete workflows
+- **Platform Compatibility**: Path handling on Linux/macOS/Windows
+- **Edge Cases**: Empty directories, nested archives, large imports
+
+### Test Utilities
+- **Mock Environment**: Override platform detection for testing
+- **Test Archives**: Embedded small test archives (ZIP/TAR)
+- **Temp Directories**: Isolated test environments
+
+## Backward Compatibility
+
+### Migration Strategy
+1. **Detect existing local KB**: Check `.okf/knowledge` in current directory
+2. **Priority order**: Local KB > Config > Env > Default
+3. **Migration prompt**: Suggest migrating to centralized location (optional)
+
+### Deprecation Plan
+- **Soft deprecation**: No breaking changes, just new defaults
+- **Configuration override**: Users can always specify `-dir` or set env var
+- **Documentation**: Update examples to reflect new behavior
+
+## Extensibility Considerations
+
+### Future Enhancements
+- **Remote sources**: HTTP/HTTPS URL import
+- **Additional formats**: RAR, 7z support
+- **Transformation hooks**: Pre/post processing pipelines
+- **Indexing options**: Control over what gets indexed
+
+### Extension Points
+- **Archive handlers**: Implement `ArchiveExtractor` interface for new formats
+- **Validation hooks**: Add custom validators via configuration
+- **Storage backends**: Abstract file system access for cloud storage
