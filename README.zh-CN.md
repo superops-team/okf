@@ -8,6 +8,55 @@
 
 > 面向 AI Agent 的项目级知识库系统，支持从 Git 仓库自动生成知识、规范检查和自动化更新。
 
+[![Latest Release](https://img.shields.io/github/v/release/superops-team/okf?label=release&logo=github&style=flat-square)](https://github.com/superops-team/okf/releases)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)](#安装方式)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/superops-team/okf?logo=go&style=flat-square)](go.mod)
+
+## 安装方式 · 30 秒上手
+
+从以下三种方式中任选一种：
+
+### 1. 一键安装脚本（推荐）
+
+**Linux / macOS：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell)：
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
+```
+
+安装脚本功能：
+- 自动检测操作系统（Linux / macOS / Windows）与 CPU 架构（amd64 / arm64）
+- 从 GitHub Releases 下载最新预编译二进制
+- 校验 SHA256 完整性
+- 安装到 `/usr/local/bin/`（无需 sudo 时使用 `~/.local/bin/`）
+
+### 2. 通过 Go 安装
+
+```bash
+go install github.com/superops-team/okf/cmd/okf@latest
+```
+
+### 3. 手动下载 Release 二进制
+
+从 [Releases](https://github.com/superops-team/okf/releases) 页面下载你平台对应的预编译文件。
+
+| 操作系统 | 架构 | 文件名 |
+|--------|------|--------|
+| Linux | amd64 (x86_64) | `okf_<version>_linux_amd64.tar.gz` |
+| Linux | arm64 (aarch64) | `okf_<version>_linux_arm64.tar.gz` |
+| macOS | amd64 (Intel) | `okf_<version>_darwin_amd64.tar.gz` |
+| macOS | arm64 (Apple Silicon) | `okf_<version>_darwin_arm64.tar.gz` |
+| Windows | amd64 | `okf_<version>_windows_amd64.zip` |
+| Windows | arm64 | `okf_<version>_windows_arm64.zip` |
+
+---
+
 ## 功能特性
 
 - **📁 开放知识格式** — 基于 Markdown + YAML Frontmatter 的开放知识格式
@@ -45,33 +94,7 @@
 └── README.zh-CN.md      # 中文版
 ```
 
-## 安装方式
-
-### 一键安装（推荐）
-
-**Linux / macOS：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash
-```
-
-**Windows (PowerShell)：
-
-```powershell
-iwr -useb https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
-```
-
-**从 Release 页面下载二进制：
-
-查看 [Releases](https://github.com/superops-team/okf/releases) 页面获取 Linux / macOS / Windows 版本。
-
-**或使用 Go 安装：
-
-```bash
-go install github.com/superops-team/okf/cmd/okf@latest
-```
-
-## 快速开始
+## 使用示例
 
 ```bash
 # 初始化知识库

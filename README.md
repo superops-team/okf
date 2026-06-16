@@ -8,6 +8,56 @@
 
 > Project-level knowledge base system for AI Agents, with automatic Git repository scanning, specification linting, and automated updates.
 
+[![Latest Release](https://img.shields.io/github/v/release/superops-team/okf?label=release&logo=github&style=flat-square)](https://github.com/superops-team/okf/releases)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)](#installation)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/superops-team/okf?logo=go&style=flat-square)](go.mod)
+
+## Installation — Quick Start (30 seconds)
+
+Pick one of these three install methods:
+
+### 1. One-click installer (recommended)
+
+**Linux / macOS:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
+```
+
+The installer:
+- Automatically detects your OS (Linux / macOS) and CPU architecture (amd64 / arm64)
+- Downloads the latest pre-built binary from GitHub Releases
+- Verifies SHA256 checksums
+- Installs to `/usr/local/bin/` (or `~/.local/bin/` without sudo)
+
+### 2. Install via Go
+
+```bash
+go install github.com/superops-team/okf/cmd/okf@latest
+```
+
+### 3. Download from releases
+
+Download pre-built binaries for your platform from the
+[Releases](https://github.com/superops-team/okf/releases) page.
+
+| OS | Architecture | Archive |
+|----|-------------|---------|
+| Linux | amd64 (x86_64) | `okf_<version>_linux_amd64.tar.gz` |
+| Linux | arm64 (aarch64) | `okf_<version>_linux_arm64.tar.gz` |
+| macOS | amd64 (Intel) | `okf_<version>_darwin_amd64.tar.gz` |
+| macOS | arm64 (Apple Silicon) | `okf_<version>_darwin_arm64.tar.gz` |
+| Windows | amd64 | `okf_<version>_windows_amd64.zip` |
+| Windows | arm64 | `okf_<version>_windows_arm64.zip` |
+
+---
+
 ## Features
 
 - **📁 Open Knowledge Format** — Open knowledge format based on Markdown + YAML Frontmatter
@@ -45,36 +95,10 @@
 └── README.zh-CN.md      # Chinese version
 ```
 
-## Installation
-
-### One-click install (recommended)
-
-**Linux / macOS:**
+## Usage
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash
-```
-
-**Windows (PowerShell):
-
-```powershell
-iwr -useb https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
-```
-
-**Install from the latest release binaries:**
-
-See [Releases](https://github.com/superops-team/okf/releases) page for Linux/macOS/Windows.
-
-**Or install via Go:
-
-```bash
-go install github.com/superops-team/okf/cmd/okf@latest
-```
-
-## Quick Start
-
-```bash
-# Initialize knowledge base
+# Initialize knowledge base from your repo
 cd /your/repo
 okf init
 
