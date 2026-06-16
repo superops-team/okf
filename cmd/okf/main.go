@@ -15,7 +15,7 @@ import (
 	"github.com/superops-team/okf/pkg/query"
 )
 
-const Version = "1.0.0"
+const Version = "1.2.0"
 
 const usage = `okf - Open Knowledge Format CLI
 
@@ -28,6 +28,8 @@ Commands:
   lint        Check knowledge base for specification compliance
   show        Show knowledge base information
   search      Search the knowledge base
+  add         Import files, directories, or archives into knowledge base
+  config      Manage configuration
   hook        Install git hook for automatic updates
   version     Show version information
   help        Show this help message
@@ -56,6 +58,10 @@ func main() {
 		cmdShow(os.Args[2:])
 	case "search":
 		cmdSearch(os.Args[2:])
+	case "add":
+		os.Exit(cmdAdd(os.Args[2:]))
+	case "config":
+		os.Exit(cmdConfig(os.Args[2:]))
 	case "hook":
 		cmdHook(os.Args[2:])
 	case "version", "--version", "-v":
