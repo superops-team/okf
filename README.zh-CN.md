@@ -45,27 +45,50 @@
 └── README.zh-CN.md      # 中文版
 ```
 
+## 安装方式
+
+### 一键安装（推荐）
+
+**Linux / macOS：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell)：
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
+```
+
+**从 Release 页面下载二进制：
+
+查看 [Releases](https://github.com/superops-team/okf/releases) 页面获取 Linux / macOS / Windows 版本。
+
+**或使用 Go 安装：
+
+```bash
+go install github.com/superops-team/okf/cmd/okf@latest
+```
+
 ## 快速开始
 
 ```bash
-# 编译 CLI
-go build -o okf ./cmd/okf/
-
 # 初始化知识库
 cd /your/repo
-./okf init
+okf init
 
 # 查看知识库信息
-./okf show
+okf show
 
 # 搜索
-./okf search -q "database"
+okf search -q "database"
 
 # Lint 检查
-./okf lint
+okf lint
 
-# 安装 Git Hook（自动更新）
-./okf hook -type post-commit
+# 安装 Git Hook（每次提交自动更新）
+okf hook -type post-commit
 ```
 
 ## 模块说明

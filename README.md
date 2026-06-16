@@ -45,27 +45,50 @@
 └── README.zh-CN.md      # Chinese version
 ```
 
+## Installation
+
+### One-click install (recommended)
+
+**Linux / macOS:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
+```
+
+**Install from the latest release binaries:**
+
+See [Releases](https://github.com/superops-team/okf/releases) page for Linux/macOS/Windows.
+
+**Or install via Go:
+
+```bash
+go install github.com/superops-team/okf/cmd/okf@latest
+```
+
 ## Quick Start
 
 ```bash
-# Build the CLI
-go build -o okf ./cmd/okf/
-
 # Initialize knowledge base
 cd /your/repo
-./okf init
+okf init
 
 # Show knowledge base information
-./okf show
+okf show
 
 # Search concepts
-./okf search -q "database"
+okf search -q "database"
 
 # Lint check
-./okf lint
+okf lint
 
-# Install Git Hook (automatic updates)
-./okf hook -type post-commit
+# Install Git Hook (automatic updates on every commit)
+okf hook -type post-commit
 ```
 
 ## Module Reference
