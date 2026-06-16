@@ -1,0 +1,18 @@
+id: add-file-import-support
+name: File Import Support
+description: Add support for importing files, directories, and archive files into the OKF knowledge base with configurable paths
+author: okf-team
+version: 1.0.0
+status: proposed
+created_at: "2026-06-16"
+related_changes:
+  - improve-indexing-correctness
+  - add-code-knowledge-dimension
+specs:
+  - specs/file-import/spec.md
+requires:
+  - okf >= 1.2.0
+impacts:
+  - pkg/okf: add config.go, import.go
+  - cmd/okf: add cmd_add.go, cmd_config.go
+  - tests: add config_test.go, import_test.go
