@@ -130,6 +130,17 @@ func TestGenerateBundleAddsTrustedGeneratedMetadata(t *testing.T) {
 	}
 }
 
+func TestGetCurrentCommitReturnsEmptyStringOnUnbornHead(t *testing.T) {
+	dir := initTestRepo(t)
+	commit, err := GetCurrentCommit(dir)
+	if err == nil {
+		t.Fatal("GetCurrentCommit() error = nil, want unborn HEAD error")
+	}
+	if commit != "" {
+		t.Fatalf("GetCurrentCommit() = %q, want empty string on unborn HEAD", commit)
+	}
+}
+
 func TestIncrementalDeletePreservesHumanConceptWithoutGeneratedMetadata(t *testing.T) {
 	dir := initTestRepo(t)
 	mustWriteFile(t, filepath.Join(dir, "main.go"), "package main\nfunc main() {}\n")

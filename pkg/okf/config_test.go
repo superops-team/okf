@@ -187,7 +187,7 @@ func TestResolveKnowledgeDir_CLIFlag(t *testing.T) {
 	// Clear env
 	os.Unsetenv("OKF_KNOWLEDGE_DIR")
 
-	cliDir := "/cli/path"
+	cliDir := filepath.Join(t.TempDir(), "cli", "knowledge")
 	resolved, err := ResolveKnowledgeDir(cliDir)
 	if err != nil {
 		t.Fatalf("ResolveKnowledgeDir() error = %v", err)
@@ -212,15 +212,16 @@ func TestResolveKnowledgeDir_EnvVar(t *testing.T) {
 			os.Unsetenv("OKF_KNOWLEDGE_DIR")
 		}
 	}()
-	os.Setenv("OKF_KNOWLEDGE_DIR", "/env/path")
+	envDir := filepath.Join(t.TempDir(), "env", "knowledge")
+	os.Setenv("OKF_KNOWLEDGE_DIR", envDir)
 
 	resolved, err := ResolveKnowledgeDir(cliDir)
 	if err != nil {
 		t.Fatalf("ResolveKnowledgeDir() error = %v", err)
 	}
 
-	if resolved != "/env/path" {
-		t.Errorf("ResolveKnowledgeDir() with env var = %q, want %q", resolved, "/env/path")
+	if resolved != envDir {
+		t.Errorf("ResolveKnowledgeDir() with env var = %q, want %q", resolved, envDir)
 	}
 }
 
@@ -286,8 +287,8 @@ func TestResolveKnowledgeDir_LocalKB(t *testing.T) {
 		t.Fatalf("ResolveKnowledgeDir() error = %v", err)
 	}
 
-	if resolved != localKB {
-		t.Errorf("ResolveKnowledgeDir() with local KB = %q, want %q", resolved, localKB)
+	if canonicalKnowledgePathKey(resolved) != canonicalKnowledgePathKey(localKB) {
+		t.Errorf("ResolveKnowledgeDir() with local KB = %q, want canonical %q", resolved, localKB)
 	}
 }
 
@@ -327,8 +328,8 @@ func TestResolveKnowledgeDir_Precedence(t *testing.T) {
 		envDir string
 		want   string
 	}{
-		{"CLI overrides all", "/cli/path", false, "", "/cli/path"},
-		{"Env overrides platform default", "", true, "/env/path", "/env/path"},
+		{"CLI overrides all", filepath.Join(tmpDir, "cli", "knowledge"), false, "", filepath.Join(tmpDir, "cli", "knowledge")},
+		{"Env overrides platform default", "", true, filepath.Join(tmpDir, "env", "knowledge"), filepath.Join(tmpDir, "env", "knowledge")},
 		{"Platform default fallback", "", false, "", GetPlatformDefault()},
 	}
 
@@ -350,5 +351,195 @@ func TestResolveKnowledgeDir_Precedence(t *testing.T) {
 				t.Errorf("ResolveKnowledgeDir() = %q, want %q", resolved, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveKnowledgePaths_ConfigKnowledgeDirParticipates(t *testing.T) {
+	t.Setenv("OKF_KNOWLEDGE_DIR", "")
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configuredDir := filepath.Join(tmpDir, "configured", "knowledge")
+	if err := SaveConfig(&Config{KnowledgeDir: configuredDir}, configPath); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	resolved, err := ResolveKnowledgePaths(ResolveKnowledgePathsOptions{
+		ConfigPath: configPath,
+		WorkingDir: tmpDir,
+		ReadOnly:   true,
+	})
+	if err != nil {
+		t.Fatalf("ResolveKnowledgePaths() error = %v", err)
+	}
+
+	if resolved.WritePath != configuredDir {
+		t.Fatalf("WritePath = %q, want %q", resolved.WritePath, configuredDir)
+	}
+	if resolved.WriteSource != KnowledgePathSourceConfig {
+		t.Fatalf("WriteSource = %q, want %q", resolved.WriteSource, KnowledgePathSourceConfig)
+	}
+	if len(resolved.ReadPaths) != 1 {
+		t.Fatalf("ReadPaths length = %d, want 1", len(resolved.ReadPaths))
+	}
+	if resolved.ReadPaths[0].Path != configuredDir {
+		t.Fatalf("ReadPaths[0].Path = %q, want %q", resolved.ReadPaths[0].Path, configuredDir)
+	}
+}
+
+func TestResolveKnowledgePaths_ReadOnlyDoesNotCreateMissingPaths(t *testing.T) {
+	t.Setenv("OKF_KNOWLEDGE_DIR", "")
+
+	tmpDir := t.TempDir()
+	missingConfig := filepath.Join(tmpDir, "missing", "config.yaml")
+	missingWriteDir := filepath.Join(tmpDir, "write", "knowledge")
+
+	resolved, err := ResolveKnowledgePaths(ResolveKnowledgePathsOptions{
+		CLIDir:     missingWriteDir,
+		ConfigPath: missingConfig,
+		WorkingDir: tmpDir,
+		ReadOnly:   true,
+	})
+	if err != nil {
+		t.Fatalf("ResolveKnowledgePaths() error = %v", err)
+	}
+	if resolved.WritePath != missingWriteDir {
+		t.Fatalf("WritePath = %q, want %q", resolved.WritePath, missingWriteDir)
+	}
+	if _, err := os.Stat(missingConfig); !os.IsNotExist(err) {
+		t.Fatalf("read-only resolver created config file or unexpected stat error: %v", err)
+	}
+	if _, err := os.Stat(missingWriteDir); !os.IsNotExist(err) {
+		t.Fatalf("read-only resolver created write directory or unexpected stat error: %v", err)
+	}
+}
+
+func TestResolveKnowledgePaths_RepoLocalPrecedesWorkingDirLocal(t *testing.T) {
+	t.Setenv("OKF_KNOWLEDGE_DIR", "")
+
+	tmpDir := t.TempDir()
+	repoRoot := filepath.Join(tmpDir, "repo")
+	workingDir := filepath.Join(tmpDir, "work")
+	repoLocal := filepath.Join(repoRoot, ".okf", "knowledge")
+	workingLocal := filepath.Join(workingDir, ".okf", "knowledge")
+	for _, dir := range []string{repoLocal, workingLocal} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	resolved, err := ResolveKnowledgePaths(ResolveKnowledgePathsOptions{
+		ConfigPath: filepath.Join(tmpDir, "config.yaml"),
+		RepoRoot:   repoRoot,
+		WorkingDir: workingDir,
+		ReadOnly:   true,
+	})
+	if err != nil {
+		t.Fatalf("ResolveKnowledgePaths() error = %v", err)
+	}
+
+	if resolved.WritePath != repoLocal {
+		t.Fatalf("WritePath = %q, want repo local %q", resolved.WritePath, repoLocal)
+	}
+	if resolved.WriteSource != KnowledgePathSourceRepoLocal {
+		t.Fatalf("WriteSource = %q, want %q", resolved.WriteSource, KnowledgePathSourceRepoLocal)
+	}
+}
+
+func TestResolveKnowledgePaths_OverlayOrderAndDeduplication(t *testing.T) {
+	t.Setenv("OKF_KNOWLEDGE_DIR", "")
+
+	tmpDir := t.TempDir()
+	writeDir := filepath.Join(tmpDir, "write")
+	overlayA := filepath.Join(tmpDir, "overlay-a")
+	overlayB := filepath.Join(tmpDir, "overlay-b")
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := SaveConfig(&Config{
+		KnowledgeDir:   writeDir,
+		KnowledgePaths: []string{overlayA, writeDir, overlayB, overlayA},
+	}, configPath); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	resolved, err := ResolveKnowledgePaths(ResolveKnowledgePathsOptions{
+		ConfigPath: configPath,
+		WorkingDir: tmpDir,
+		ReadOnly:   true,
+	})
+	if err != nil {
+		t.Fatalf("ResolveKnowledgePaths() error = %v", err)
+	}
+
+	want := []string{writeDir, overlayA, overlayB}
+	if len(resolved.ReadPaths) != len(want) {
+		t.Fatalf("ReadPaths length = %d, want %d: %#v", len(resolved.ReadPaths), len(want), resolved.ReadPaths)
+	}
+	for i, wantPath := range want {
+		if resolved.ReadPaths[i].Path != wantPath || resolved.ReadPaths[i].Rank != i {
+			t.Fatalf("ReadPaths[%d] = %#v, want path %q rank %d", i, resolved.ReadPaths[i], wantPath, i)
+		}
+	}
+}
+
+func TestResolveKnowledgePaths_LegacySingleDirReadPaths(t *testing.T) {
+	t.Setenv("OKF_KNOWLEDGE_DIR", "")
+
+	tmpDir := t.TempDir()
+	configuredDir := filepath.Join(tmpDir, "legacy", "knowledge")
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := SaveConfig(&Config{KnowledgeDir: configuredDir}, configPath); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	resolved, err := ResolveKnowledgePaths(ResolveKnowledgePathsOptions{
+		ConfigPath: configPath,
+		WorkingDir: tmpDir,
+		ReadOnly:   true,
+	})
+	if err != nil {
+		t.Fatalf("ResolveKnowledgePaths() error = %v", err)
+	}
+	if len(resolved.ReadPaths) != 1 {
+		t.Fatalf("ReadPaths length = %d, want exactly one legacy path", len(resolved.ReadPaths))
+	}
+	if resolved.WritePath != configuredDir {
+		t.Fatalf("WritePath = %q, want legacy configured dir %q", resolved.WritePath, configuredDir)
+	}
+	if resolved.WriteSource != KnowledgePathSourceConfig {
+		t.Fatalf("WriteSource = %q, want %q", resolved.WriteSource, KnowledgePathSourceConfig)
+	}
+	if resolved.ReadPaths[0].Path != configuredDir {
+		t.Fatalf("ReadPaths[0].Path = %q, want %q", resolved.ReadPaths[0].Path, configuredDir)
+	}
+	if resolved.ReadPaths[0].Source != KnowledgePathSourceConfig || resolved.ReadPaths[0].Rank != 0 {
+		t.Fatalf("ReadPaths[0] = %#v, want legacy config source rank 0", resolved.ReadPaths[0])
+	}
+}
+
+func TestResolveKnowledgePaths_DefaultsToRepoRelativeKnowledgeDir(t *testing.T) {
+	t.Setenv("OKF_KNOWLEDGE_DIR", "")
+
+	tmpDir := t.TempDir()
+	repoRoot := filepath.Join(tmpDir, "repo")
+	if err := os.MkdirAll(repoRoot, 0755); err != nil {
+		t.Fatalf("mkdir repo root: %v", err)
+	}
+
+	resolved, err := ResolveKnowledgePaths(ResolveKnowledgePathsOptions{
+		ConfigPath: filepath.Join(tmpDir, "config.yaml"),
+		RepoRoot:   repoRoot,
+		WorkingDir: repoRoot,
+		ReadOnly:   true,
+	})
+	if err != nil {
+		t.Fatalf("ResolveKnowledgePaths() error = %v", err)
+	}
+
+	want := filepath.Join(repoRoot, ".okf", "knowledge")
+	if resolved.WritePath != want {
+		t.Fatalf("WritePath = %q, want %q", resolved.WritePath, want)
+	}
+	if resolved.WriteSource != KnowledgePathSourceRepoLocal {
+		t.Fatalf("WriteSource = %q, want %q", resolved.WriteSource, KnowledgePathSourceRepoLocal)
 	}
 }

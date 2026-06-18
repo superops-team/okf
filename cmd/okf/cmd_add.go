@@ -99,9 +99,6 @@ func cmdAdd(args []string) int {
 		idx = okf.NewMetadataIndex()
 	}
 
-	// Build SmartImporter
-	importer := okf.NewSmartImporter(idx, kbDir)
-
 	// Show what we're doing
 	if !*silent {
 		fmt.Printf("Importing from: %s\n", srcPath)
@@ -114,77 +111,21 @@ func cmdAdd(args []string) int {
 		}
 	}
 
-	// Collect source files
-	info, err := os.Stat(srcPath)
+	result, err := okf.SmartImportSource(srcPath, kbDir, idx, smartOpts)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: source path not accessible: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
 
-	var sourceFiles []string
-	if info.IsDir() {
-		sourceFiles, err = collectMarkdownFiles(srcPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: failed to collect files: %v\n", err)
-			return 1
-		}
-	} else {
-		sourceFiles = []string{srcPath}
-	}
-
-	if len(sourceFiles) == 0 {
+	if result.TotalFiles == 0 {
 		if !*silent {
 			fmt.Println("No markdown files found.")
 		}
 		return 0
 	}
 
-	// Iterate and import
-	var totalFound, imported, skipped, failed int
-
-	for _, src := range sourceFiles {
-		relTarget := computeTargetPath(src, srcPath, info.IsDir())
-
-		if smartOpts.DetectOnly {
-			reports, rerr := importer.DetectChanges([]string{src}, nil)
-			if rerr != nil {
-				failed++
-				continue
-			}
-			totalFound++
-			if len(reports) > 0 {
-				r := reports[0]
-				if r.Result == okf.DetectNoChange {
-					skipped++
-				} else {
-					imported++
-				}
-				if !*silent {
-					fmt.Printf("  [%s] %s\n", r.Result, src)
-				}
-			}
-			continue
-		}
-
-		// Normal smart import flow
-		result, ierr := importer.ImportFile(src, relTarget, smartOpts)
-		totalFound++
-		if ierr != nil {
-			failed++
-			continue
-		}
-		if result != nil && result.Changed {
-			imported++
-			if !*silent {
-				fmt.Printf("  [%-9s] %s\n", result.Strategy, src)
-			}
-		} else {
-			skipped++
-		}
-	}
-
 	// Persist metadata index (only if modifications were made and not dry-run/detect-only)
-	if !smartOpts.DetectOnly && !smartOpts.HashOnly && totalFound > 0 {
+	if !smartOpts.DetectOnly && !smartOpts.HashOnly && result.TotalFiles > 0 {
 		if serr := idx.Save(metaPath); serr != nil {
 			fmt.Fprintf(os.Stderr, "Error: failed to save metadata: %v\n", serr)
 			return 1
@@ -195,13 +136,13 @@ func cmdAdd(args []string) int {
 	if !*silent {
 		fmt.Println("")
 		fmt.Println("Import summary:")
-		fmt.Printf("  Total files found: %d\n", totalFound)
-		fmt.Printf("  Imported: %d\n", imported)
-		fmt.Printf("  Skipped: %d\n", skipped)
-		fmt.Printf("  Failed: %d\n", failed)
+		fmt.Printf("  Total files found: %d\n", result.TotalFiles)
+		fmt.Printf("  Imported: %d\n", result.ImportedFiles)
+		fmt.Printf("  Skipped: %d\n", result.SkippedFiles)
+		fmt.Printf("  Failed: %d\n", result.FailedFiles)
 	}
 
-	if failed > 0 {
+	if result.FailedFiles > 0 {
 		return 1
 	}
 

@@ -47,12 +47,20 @@ func NewSmartImporter(idx *MetadataIndex, knowledgeDir string) *SmartImporter {
 //     - DetectSourceMissing → 标记 SourceExists=false
 //  3. 持久化元数据
 func (s *SmartImporter) ImportFile(source, target string, opts *SmartImportOptions) (*MergeResult, error) {
+	return s.ImportFileWithIdentity(source, source, target, opts)
+}
+
+// ImportFileWithIdentity 智能导入单个文件，并允许调用方提供稳定的源身份键（如 archive::entry）。
+func (s *SmartImporter) ImportFileWithIdentity(source, sourceIdentity, target string, opts *SmartImportOptions) (*MergeResult, error) {
 	if opts == nil {
 		opts = DefaultSmartImportOptions()
 	}
+	if sourceIdentity == "" {
+		sourceIdentity = source
+	}
 
 	// 1. 变更检测
-	result := s.idx.DetectChange(source)
+	result := s.detectChangeForIdentity(source, sourceIdentity)
 
 	// 解析目标绝对路径
 	targetPath := s.resolveTargetPath(target)
@@ -61,7 +69,7 @@ func (s *SmartImporter) ImportFile(source, target string, opts *SmartImportOptio
 	switch result {
 	case DetectSourceMissing:
 		// 标记 SourceExists=false
-		if meta, ok := s.idx.GetBySource(source); ok {
+		if meta, ok := s.idx.GetBySource(sourceIdentity); ok {
 			meta.SourceExists = false
 			s.idx.Update(meta)
 		}
@@ -72,7 +80,7 @@ func (s *SmartImporter) ImportFile(source, target string, opts *SmartImportOptio
 
 	case DetectMetaChanged:
 		// 静默更新元数据中的 mtime/size
-		if meta, ok := s.idx.GetBySource(source); ok {
+		if meta, ok := s.idx.GetBySource(sourceIdentity); ok {
 			if info, err := os.Stat(source); err == nil {
 				meta.LastModified = info.ModTime()
 				meta.FileSize = info.Size()
@@ -84,20 +92,57 @@ func (s *SmartImporter) ImportFile(source, target string, opts *SmartImportOptio
 
 	case DetectNewFile:
 		// 新文件：直接导入（默认 overwrite）
-		return s.importNewFile(source, target, targetPath, opts)
+		if err := ValidateOKFMarkdownCandidateFile(source); err != nil {
+			return nil, err
+		}
+		return s.importNewFile(source, sourceIdentity, target, targetPath, opts)
 
 	case DetectContentChanged:
 		// 有变更：决策策略 → 执行
-		meta, _ := s.idx.GetBySource(source)
+		meta, _ := s.idx.GetBySource(sourceIdentity)
 		strategy := DecideStrategy(meta, opts)
+		if strategy != StrategySkip {
+			if err := ValidateOKFMarkdownCandidateFile(source); err != nil {
+				return nil, err
+			}
+		}
 		return s.applyStrategy(strategy, source, target, targetPath, meta, opts)
 	}
 
 	return &MergeResult{Changed: false}, nil
 }
 
+func (s *SmartImporter) detectChangeForIdentity(source, sourceIdentity string) DetectResult {
+	info, err := os.Stat(source)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if _, ok := s.idx.GetBySource(sourceIdentity); ok {
+				return DetectSourceMissing
+			}
+			return DetectNewFile
+		}
+		return DetectContentChanged
+	}
+
+	meta, ok := s.idx.GetBySource(sourceIdentity)
+	if !ok {
+		return DetectNewFile
+	}
+	if meta.FileSize == info.Size() && mtimeEqualish(meta.LastModified, info.ModTime()) {
+		return DetectNoChange
+	}
+	hash, err := ComputeFileHash(source)
+	if err != nil {
+		return DetectContentChanged
+	}
+	if hash == meta.ContentHash {
+		return DetectMetaChanged
+	}
+	return DetectContentChanged
+}
+
 // importNewFile 导入新文件
-func (s *SmartImporter) importNewFile(source, target, targetPath string, opts *SmartImportOptions) (*MergeResult, error) {
+func (s *SmartImporter) importNewFile(source, sourceIdentity, target, targetPath string, opts *SmartImportOptions) (*MergeResult, error) {
 	content, err := os.ReadFile(source)
 	if err != nil {
 		return nil, fmt.Errorf("read source: %w", err)
@@ -115,7 +160,7 @@ func (s *SmartImporter) importNewFile(source, target, targetPath string, opts *S
 	hash, _ := ComputeFileHash(source)
 	info, _ := os.Stat(source)
 	meta := &FileMetadata{
-		SourcePath:   source,
+		SourcePath:   sourceIdentity,
 		TargetPath:   target,
 		ContentHash:  hash,
 		LastModified: info.ModTime(),

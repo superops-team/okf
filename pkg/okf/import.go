@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -46,9 +48,9 @@ func DefaultImportOptions() *ImportOptions {
 type ImportResult struct {
 	TotalFiles    int
 	ImportedFiles int
-	SkippedFiles int
-	FailedFiles  int
-	Errors       []ImportError
+	SkippedFiles  int
+	FailedFiles   int
+	Errors        []ImportError
 }
 
 // ImportError represents an error that occurred during import.
@@ -60,6 +62,118 @@ type ImportError struct {
 
 func (e *ImportError) Error() string {
 	return fmt.Sprintf("%s: %s", e.FilePath, e.Message)
+}
+
+func SmartImportSource(srcPath, knowledgeDir string, idx *MetadataIndex, opts *SmartImportOptions) (*ImportResult, error) {
+	if opts == nil {
+		opts = DefaultSmartImportOptions()
+	}
+	if idx == nil {
+		idx = NewMetadataIndex()
+	}
+
+	info, err := os.Stat(srcPath)
+	if err != nil {
+		return nil, fmt.Errorf("source path not accessible: %w", err)
+	}
+
+	root := srcPath
+	archiveSourcePrefix := ""
+	cleanup := func() {}
+	if IsArchive(srcPath) {
+		canonicalArchivePath, err := canonicalArchiveSourcePath(srcPath)
+		if err != nil {
+			return nil, err
+		}
+		tmpDir, err := os.MkdirTemp("", "okf-import-*")
+		if err != nil {
+			return nil, fmt.Errorf("create temp extraction dir: %w", err)
+		}
+		cleanup = func() { _ = os.RemoveAll(tmpDir) }
+		defer cleanup()
+		if _, err := ExtractArchive(srcPath, tmpDir); err != nil {
+			return nil, err
+		}
+		root = tmpDir
+		archiveSourcePrefix = canonicalArchivePath
+		info = nil
+	}
+
+	var sourceFiles []string
+	rootIsDir := info == nil || info.IsDir()
+	if rootIsDir {
+		sourceFiles, err = CollectFiles(root)
+		if err != nil {
+			return nil, fmt.Errorf("collect markdown files: %w", err)
+		}
+	} else if strings.HasSuffix(strings.ToLower(srcPath), ".md") {
+		sourceFiles = []string{srcPath}
+	}
+
+	result := &ImportResult{}
+	importer := NewSmartImporter(idx, knowledgeDir)
+	for _, source := range sourceFiles {
+		result.TotalFiles++
+		target := smartImportTargetPath(source, root, rootIsDir)
+		detectSource := source
+		if archiveSourcePrefix != "" {
+			detectSource = archiveStableSourcePath(archiveSourcePrefix, source, root)
+		}
+
+		if opts.DetectOnly || opts.HashOnly {
+			detectResult := importer.detectChangeForIdentity(source, detectSource)
+			if detectResult == DetectNoChange {
+				result.SkippedFiles++
+			} else {
+				result.ImportedFiles++
+			}
+			continue
+		}
+
+		mergeResult, err := importer.ImportFileWithIdentity(source, detectSource, target, opts)
+		if err != nil {
+			result.FailedFiles++
+			result.Errors = append(result.Errors, ImportError{FilePath: source, Message: err.Error(), Err: err})
+			continue
+		}
+		if mergeResult != nil && mergeResult.Changed {
+			result.ImportedFiles++
+		} else {
+			result.SkippedFiles++
+		}
+	}
+
+	return result, nil
+}
+
+func smartImportTargetPath(src, srcRoot string, rootIsDir bool) string {
+	if !rootIsDir {
+		return filepath.Base(src)
+	}
+	rel, err := filepath.Rel(srcRoot, src)
+	if err != nil {
+		return filepath.Base(src)
+	}
+	return rel
+}
+
+func archiveStableSourcePath(archivePath, extractedPath, extractRoot string) string {
+	rel, err := filepath.Rel(extractRoot, extractedPath)
+	if err != nil {
+		rel = filepath.Base(extractedPath)
+	}
+	return archivePath + "::" + filepath.ToSlash(rel)
+}
+
+func canonicalArchiveSourcePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize archive path: %w", err)
+	}
+	if evaluated, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = evaluated
+	}
+	return filepath.Clean(abs), nil
 }
 
 // =============================================================================
@@ -75,7 +189,7 @@ func CollectFiles(path string) ([]string, error) {
 
 	if !info.IsDir() {
 		// Single file - check if it's markdown
-		if !strings.HasSuffix(path, ".md") {
+		if !strings.HasSuffix(strings.ToLower(path), ".md") {
 			return []string{}, nil
 		}
 		return []string{path}, nil
@@ -94,7 +208,7 @@ func CollectFiles(path string) ([]string, error) {
 		}
 
 		// Only collect markdown files
-		if strings.HasSuffix(filePath, ".md") {
+		if strings.HasSuffix(strings.ToLower(filePath), ".md") {
 			files = append(files, filePath)
 		}
 
@@ -176,9 +290,14 @@ func extractZip(archivePath, destDir string) ([]string, error) {
 	for _, file := range reader.File {
 		// Check for path traversal
 		cleanName := filepath.Clean(file.Name)
-		if strings.HasPrefix(cleanName, "..") {
-			fmt.Printf("Warning: blocked path traversal attempt in archive: %s\n", file.Name)
-			continue
+		if err := validateArchiveEntryName(file.Name); err != nil {
+			return nil, err
+		}
+		if file.FileInfo().Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("symlink entry rejected: %s", file.Name)
+		}
+		if file.UncompressedSize64 > MaxFileSize {
+			return nil, fmt.Errorf("file size exceeds maximum size limit: %s", file.Name)
 		}
 
 		// Skip directories
@@ -187,7 +306,7 @@ func extractZip(archivePath, destDir string) ([]string, error) {
 		}
 
 		// Only extract markdown files
-		if !strings.HasSuffix(file.Name, ".md") {
+		if !strings.HasSuffix(strings.ToLower(file.Name), ".md") {
 			continue
 		}
 
@@ -246,7 +365,6 @@ func extractTarGz(archivePath, destDir string) ([]string, error) {
 
 	tarReader := tar.NewReader(reader)
 	var extractedFiles []string
-
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
@@ -258,9 +376,11 @@ func extractTarGz(archivePath, destDir string) ([]string, error) {
 
 		// Check for path traversal
 		cleanName := filepath.Clean(header.Name)
-		if strings.HasPrefix(cleanName, "..") {
-			fmt.Printf("Warning: blocked path traversal attempt in archive: %s\n", header.Name)
-			continue
+		if err := validateArchiveEntryName(header.Name); err != nil {
+			return nil, err
+		}
+		if err := validateTarEntry(header); err != nil {
+			return nil, err
 		}
 
 		// Skip directories
@@ -269,7 +389,7 @@ func extractTarGz(archivePath, destDir string) ([]string, error) {
 		}
 
 		// Only extract markdown files
-		if !strings.HasSuffix(header.Name, ".md") {
+		if !strings.HasSuffix(strings.ToLower(header.Name), ".md") {
 			continue
 		}
 
@@ -309,7 +429,6 @@ func extractTarBz2(archivePath, destDir string) ([]string, error) {
 	bz2Reader := bzip2.NewReader(file)
 	tarReader := tar.NewReader(bz2Reader)
 	var extractedFiles []string
-
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
@@ -321,9 +440,11 @@ func extractTarBz2(archivePath, destDir string) ([]string, error) {
 
 		// Check for path traversal
 		cleanName := filepath.Clean(header.Name)
-		if strings.HasPrefix(cleanName, "..") {
-			fmt.Printf("Warning: blocked path traversal attempt in archive: %s\n", header.Name)
-			continue
+		if err := validateArchiveEntryName(header.Name); err != nil {
+			return nil, err
+		}
+		if err := validateTarEntry(header); err != nil {
+			return nil, err
 		}
 
 		// Skip directories
@@ -332,7 +453,7 @@ func extractTarBz2(archivePath, destDir string) ([]string, error) {
 		}
 
 		// Only extract markdown files
-		if !strings.HasSuffix(header.Name, ".md") {
+		if !strings.HasSuffix(strings.ToLower(header.Name), ".md") {
 			continue
 		}
 
@@ -360,6 +481,36 @@ func extractTarBz2(archivePath, destDir string) ([]string, error) {
 	return extractedFiles, nil
 }
 
+func validateArchiveEntryName(name string) error {
+	cleanName := filepath.Clean(name)
+	if filepath.IsAbs(name) || filepath.IsAbs(cleanName) {
+		return fmt.Errorf("absolute path entry rejected: %s", name)
+	}
+	if cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) || strings.Contains(cleanName, string(filepath.Separator)+".."+string(filepath.Separator)) {
+		return fmt.Errorf("path traversal entry rejected: %s", name)
+	}
+	return nil
+}
+
+func validateTarEntry(header *tar.Header) error {
+	if header == nil {
+		return fmt.Errorf("nil tar entry")
+	}
+	if header.Typeflag == tar.TypeSymlink {
+		return fmt.Errorf("symlink entry rejected: %s", header.Name)
+	}
+	if header.Typeflag == tar.TypeLink {
+		return fmt.Errorf("hardlink entry rejected: %s", header.Name)
+	}
+	if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA && header.Typeflag != tar.TypeDir {
+		return fmt.Errorf("special file entry rejected: %s", header.Name)
+	}
+	if header.Size > MaxFileSize {
+		return fmt.Errorf("file size exceeds maximum size limit: %s", header.Name)
+	}
+	return nil
+}
+
 // =============================================================================
 // Phase 2: File Import - OKF Validation
 // =============================================================================
@@ -381,6 +532,38 @@ func ValidateConcept(content []byte, filePath string) (*Concept, error) {
 	}
 
 	return concept, nil
+}
+
+func ValidateConceptFile(filePath string) error {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("read concept file: %w", err)
+	}
+	_, err = ValidateConcept(content, filePath)
+	return err
+}
+
+func ValidateOKFMarkdownCandidateFile(filePath string) error {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("read concept file: %w", err)
+	}
+	return ValidateMarkdownFrontmatter(content)
+}
+
+func ValidateMarkdownFrontmatter(content []byte) error {
+	if !bytes.HasPrefix(content, []byte("---\n")) && !bytes.HasPrefix(content, []byte("---\r\n")) {
+		return nil
+	}
+	frontmatterLines := bytes.SplitN(content[3:], []byte("\n---"), 2)
+	if len(frontmatterLines) < 2 {
+		return fmt.Errorf("unterminated frontmatter")
+	}
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(frontmatterLines[0], &raw); err != nil {
+		return fmt.Errorf("invalid frontmatter: %w", err)
+	}
+	return nil
 }
 
 func parseConceptFromBytes(content []byte) (*Concept, error) {
@@ -409,6 +592,10 @@ func parseConceptFromBytes(content []byte) (*Concept, error) {
 
 	frontmatter := frontmatterLines[0]
 	contentBody := frontmatterLines[1]
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(frontmatter, &raw); err != nil {
+		return nil, err
+	}
 
 	// Remove leading newline from content if present
 	if len(contentBody) > 0 && contentBody[0] == '\n' {

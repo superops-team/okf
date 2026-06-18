@@ -4,8 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
-	"runtime"
 
 	okf "github.com/superops-team/okf/pkg/okf"
 )
@@ -76,7 +74,7 @@ func configList() int {
 	}
 
 	// Resolve knowledge directory
-	kbDir, err := okf.ResolveKnowledgeDir("")
+	resolved, err := okf.ResolveKnowledgePaths(okf.ResolveKnowledgePathsOptions{ReadOnly: true})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to resolve knowledge directory: %v\n", err)
 		return 1
@@ -87,13 +85,23 @@ func configList() int {
 	fmt.Println("")
 
 	// Show knowledge_dir
-	fmt.Printf("knowledge_dir: %s\n", kbDir)
+	fmt.Printf("knowledge_dir: %s\n", resolved.WritePath)
 	if cfg != nil && cfg.KnowledgeDir != "" {
 		fmt.Printf("  (from config: %s)\n", cfg.KnowledgeDir)
 	} else if os.Getenv("OKF_KNOWLEDGE_DIR") != "" {
 		fmt.Printf("  (from env: %s)\n", os.Getenv("OKF_KNOWLEDGE_DIR"))
 	} else {
-		fmt.Printf("  (platform default)\n")
+		fmt.Printf("  (source: %s)\n", resolved.WriteSource)
+	}
+	if len(cfg.KnowledgePaths) > 0 {
+		fmt.Println("knowledge_paths:")
+		for _, path := range cfg.KnowledgePaths {
+			fmt.Printf("  - %s\n", path)
+		}
+	}
+	fmt.Println("read_paths:")
+	for _, path := range resolved.ReadPaths {
+		fmt.Printf("  - [%d] %s (source: %s)\n", path.Rank, path.Path, path.Source)
 	}
 	fmt.Println("")
 
@@ -107,12 +115,12 @@ func configList() int {
 func configGet(key string) int {
 	switch key {
 	case "knowledge_dir":
-		kbDir, err := okf.ResolveKnowledgeDir("")
+		resolved, err := okf.ResolveKnowledgePaths(okf.ResolveKnowledgePathsOptions{ReadOnly: true})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
-		fmt.Println(kbDir)
+		fmt.Printf("%s (source: %s)\n", resolved.WritePath, resolved.WriteSource)
 	case "platform_default":
 		fmt.Println(okf.GetPlatformDefault())
 	case "config_path":
@@ -153,30 +161,5 @@ func configSet(key, value string) int {
 }
 
 func getConfigPath() string {
-	// Use OKF_CONFIG_PATH env var or default to ~/.okf/config.yaml
-	if configPath := os.Getenv("OKF_CONFIG_PATH"); configPath != "" {
-		return configPath
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		// Fallback to current directory
-		return ".okf/config.yaml"
-	}
-
-	switch getRuntimeOS() {
-	case "darwin", "linux":
-		return filepath.Join(home, ".okf", "config.yaml")
-	case "windows":
-		if appData := os.Getenv("APPDATA"); appData != "" {
-			return filepath.Join(appData, "okf", "config.yaml")
-		}
-		return filepath.Join(home, "okf", "config.yaml")
-	default:
-		return filepath.Join(home, ".okf", "config.yaml")
-	}
-}
-
-func getRuntimeOS() string {
-	return runtime.GOOS
+	return okf.GetDefaultConfigPath()
 }

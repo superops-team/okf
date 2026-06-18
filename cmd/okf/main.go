@@ -33,6 +33,7 @@ Commands:
   watch       Watch source directories and auto-sync on file changes (requires .watch.yaml)
   metadata    Manage the metadata index (inspect|rebuild|clean)
   config      Manage configuration
+  tool        Agent-facing JSON tool operations (status|init|refresh|query|context)
   hook        Install git hook for automatic updates
   version     Show version information
   help        Show this help message
@@ -78,6 +79,8 @@ func main() {
 		os.Exit(cmdMetadata(os.Args[2:]))
 	case "config":
 		os.Exit(cmdConfig(os.Args[2:]))
+	case "tool":
+		os.Exit(cmdTool(os.Args[2:]))
 	case "hook":
 		cmdHook(os.Args[2:])
 	case "version", "--version", "-v":

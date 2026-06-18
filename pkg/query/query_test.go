@@ -202,6 +202,41 @@ func TestIndexedSearchSeesConceptFieldMutationsAfterInitialQuery(t *testing.T) {
 	}
 }
 
+func TestIndexedSearchSeesCustomFieldMutationsAfterInitialQuery(t *testing.T) {
+	t.Parallel()
+
+	concept := &Concept{
+		Type:         "code_symbol",
+		Title:        "RouteAlphaSymbol",
+		CustomFields: map[string]interface{}{"qualified_name": "alpha.OldSymbol"},
+		Content:      "RouteAlphaSymbol content",
+	}
+	bundle := &KnowledgeBundle{Concepts: []*Concept{concept}}
+	if got := New().WithCodeQualifiedName("alpha.OldSymbol").Build().Execute(bundle); len(got) != 1 {
+		t.Fatalf("initial custom field query returned %d concepts, want 1", len(got))
+	}
+
+	concept.CustomFields["source_path"] = "internal/alpha/service.go"
+	concept.CustomFields["language"] = "go"
+	concept.CustomFields["symbol_kind"] = "function"
+	concept.CustomFields["qualified_name"] = "alpha.RouteAlphaSymbol"
+	concept.CustomFields["relation_kind"] = "file_import"
+	concept.CustomFields["relation_source"] = "internal/alpha/service.go"
+	concept.CustomFields["relation_target"] = "internal/beta/service.go"
+
+	q := New().
+		WithCodeFilePath("internal/alpha/service.go").
+		WithCodeLanguage("go").
+		WithCodeSymbolKind("function").
+		WithCodeQualifiedName("alpha.RouteAlphaSymbol").
+		WithCodeRelationKind("file_import").
+		WithCodeRelationSource("internal/alpha/service.go").
+		WithCodeRelationTarget("internal/beta/service.go").
+		Build()
+	got := q.Execute(bundle)
+	assertConceptTitles(t, got, []string{"RouteAlphaSymbol"})
+}
+
 func TestQueryCodeDimensionFilters(t *testing.T) {
 	t.Parallel()
 
@@ -211,21 +246,21 @@ func TestQueryCodeDimensionFilters(t *testing.T) {
 			Title:    "server.go",
 			Resource: "code://repo/cmd/server.go",
 			Tags:     []string{"code", "generated", "go"},
-			Content: "## Source\n\n- Path: `cmd/server.go`\n- Language: `go`\n\n### Symbols\n\n- `function` `main.StartServer` (exported) at `cmd/server.go:10-20`\n",
+			Content:  "## Source\n\n- Path: `cmd/server.go`\n- Language: `go`\n\n### Symbols\n\n- `function` `main.StartServer` (exported) at `cmd/server.go:10-20`\n",
 		},
 		{
 			Type:     "code_file",
 			Title:    "client.ts",
 			Resource: "code://repo/web/client.ts",
 			Tags:     []string{"code", "generated", "typescript"},
-			Content: "## Source\n\n- Path: `web/client.ts`\n- Language: `typescript`\n\n### Symbols\n\n- `component` `ClientView` (exported) at `web/client.ts:3-15`\n",
+			Content:  "## Source\n\n- Path: `web/client.ts`\n- Language: `typescript`\n\n### Symbols\n\n- `component` `ClientView` (exported) at `web/client.ts:3-15`\n",
 		},
 		{
 			Type:     "code_relation_index",
 			Title:    "Code Relation Index",
 			Resource: "okf://code/relations",
 			Tags:     []string{"code", "relations", "generated"},
-			Content: "## Code Relation Index\n\n| Kind | Source | Target | Location | Provenance |\n| --- | --- | --- | --- | --- |\n| calls | `code:repo:cmd/server.go#symbol:function:main.StartServer@L10-L20` | `code:repo:cmd/log.go#symbol:function:main.Log@L2-L4` | `cmd/server.go:12` | codegraph |\n",
+			Content:  "## Code Relation Index\n\n| Kind | Source | Target | Location | Provenance |\n| --- | --- | --- | --- | --- |\n| calls | `code:repo:cmd/server.go#symbol:function:main.StartServer@L10-L20` | `code:repo:cmd/log.go#symbol:function:main.Log@L2-L4` | `cmd/server.go:12` | codegraph |\n",
 		},
 	}}
 
@@ -247,6 +282,56 @@ func TestQueryCodeDimensionFilters(t *testing.T) {
 			assertConceptTitles(t, got, tt.want)
 		})
 	}
+}
+
+func TestCodeMetadataFiltersUseFrontmatterCustomFields(t *testing.T) {
+	t.Parallel()
+
+	bundle := &KnowledgeBundle{Concepts: []*Concept{
+		{
+			Type:     "code_symbol",
+			Title:    "RouteAlphaSymbol",
+			Resource: "code://repo/internal/alpha/service.go",
+			CustomFields: map[string]interface{}{
+				"source_path":     "internal/alpha/service.go",
+				"language":        "go",
+				"symbol_kind":     "function",
+				"qualified_name":  "alpha.RouteAlphaSymbol",
+				"relation_kind":   "file_import",
+				"relation_source": "internal/alpha/service.go",
+				"relation_target": "internal/beta/service.go",
+			},
+			Content: "RouteAlphaSymbol generated concept with structured frontmatter.",
+		},
+		{
+			Type:     "code_symbol",
+			Title:    "RouteAlphaSymbolBeta",
+			Resource: "code://repo/internal/beta/service.go",
+			CustomFields: map[string]interface{}{
+				"source_path":     "internal/beta/service.go",
+				"language":        "go",
+				"symbol_kind":     "function",
+				"qualified_name":  "beta.RouteAlphaSymbolBeta",
+				"relation_kind":   "file_import",
+				"relation_source": "internal/beta/service.go",
+				"relation_target": "internal/gamma/service.go",
+			},
+			Content: "RouteAlphaSymbol generated concept with different structured frontmatter.",
+		},
+	}}
+
+	q := New().
+		WithCodeLanguage("go").
+		WithCodeFilePath("internal/alpha/service.go").
+		WithCodeSymbolKind("function").
+		WithCodeQualifiedName("alpha.RouteAlphaSymbol").
+		WithCodeRelationKind("file_import").
+		WithCodeRelationSource("internal/alpha/service.go").
+		WithCodeRelationTarget("internal/beta/service.go").
+		Build()
+
+	got := q.Execute(bundle)
+	assertConceptTitles(t, got, []string{"RouteAlphaSymbol"})
 }
 
 func assertConceptTitles(t *testing.T, got []*Concept, want []string) {

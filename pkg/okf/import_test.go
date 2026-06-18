@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -101,7 +102,6 @@ func TestCollectFiles_IgnoresNonMarkdown(t *testing.T) {
 	createTestFile(t, filepath.Join(tmpDir, "data.json"), `{"key": "value"}`)
 	createTestFile(t, filepath.Join(tmpDir, "script.sh"), "#!/bin/bash")
 	createTestFile(t, filepath.Join(tmpDir, "noextension"), "no extension")
-	createTestFile(t, filepath.Join(tmpDir, "README.MD"), "uppercase") // should be ignored (case sensitive)
 
 	files, err := CollectFiles(tmpDir)
 	if err != nil {
@@ -110,6 +110,28 @@ func TestCollectFiles_IgnoresNonMarkdown(t *testing.T) {
 
 	if len(files) != 0 {
 		t.Errorf("CollectFiles() returned %d files, want 0 (non-markdown should be ignored)", len(files))
+	}
+}
+
+func TestCollectFiles_IncludesMarkdownExtensionCaseInsensitive(t *testing.T) {
+	tmpDir := t.TempDir()
+	upperPath := filepath.Join(tmpDir, "README.MD")
+	createTestFile(t, upperPath, validConceptContent("Uppercase Markdown"))
+
+	files, err := CollectFiles(tmpDir)
+	if err != nil {
+		t.Fatalf("CollectFiles() error = %v", err)
+	}
+	if len(files) != 1 || files[0] != upperPath {
+		t.Fatalf("CollectFiles() = %#v, want uppercase markdown file", files)
+	}
+
+	single, err := CollectFiles(upperPath)
+	if err != nil {
+		t.Fatalf("CollectFiles(single) error = %v", err)
+	}
+	if len(single) != 1 || single[0] != upperPath {
+		t.Fatalf("CollectFiles(single) = %#v, want uppercase markdown file", single)
 	}
 }
 
@@ -172,7 +194,7 @@ func TestExtractArchive_Zip(t *testing.T) {
 
 	// Verify file contents
 	expectedFiles := map[string]string{
-		"file1.md":           "content 1",
+		"file1.md":                          "content 1",
 		filepath.Join("subdir", "file2.md"): "content 2",
 	}
 
@@ -217,6 +239,106 @@ func TestExtractArchive_Zip(t *testing.T) {
 	}
 }
 
+func TestExtractArchive_ZipIncludesMarkdownExtensionCaseInsensitive(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "test.zip")
+	createTestZip(t, zipPath, []testFile{{Name: "README.MD", Content: validConceptContent("Uppercase Archive")}})
+
+	files, err := ExtractArchive(zipPath, filepath.Join(tmpDir, "extracted"))
+	if err != nil {
+		t.Fatalf("ExtractArchive() error = %v", err)
+	}
+	if len(files) != 1 || !strings.HasSuffix(files[0], "README.MD") {
+		t.Fatalf("ExtractArchive() = %#v, want uppercase markdown entry", files)
+	}
+}
+
+func TestSmartImportSourceArchiveIsIdempotent(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "bundle.zip")
+	createTestZip(t, zipPath, []testFile{{Name: "concepts/service.md", Content: validConceptContent("Archive Service")}})
+	knowledgeDir := filepath.Join(tmpDir, "knowledge")
+	idx := NewMetadataIndex()
+
+	first, err := SmartImportSource(zipPath, knowledgeDir, idx, DefaultSmartImportOptions())
+	if err != nil {
+		t.Fatalf("first SmartImportSource() error = %v", err)
+	}
+	if first.ImportedFiles != 1 || first.FailedFiles != 0 {
+		t.Fatalf("first result = %#v, want one imported file", first)
+	}
+	canonicalZipPath, err := canonicalArchiveSourcePath(zipPath)
+	if err != nil {
+		t.Fatalf("canonicalArchiveSourcePath() error = %v", err)
+	}
+	meta, ok := idx.GetBySource(canonicalZipPath + "::concepts/service.md")
+	if !ok {
+		t.Fatalf("metadata source key missing stable archive identity")
+	}
+	firstModified := meta.LastModified
+
+	second, err := SmartImportSource(zipPath, knowledgeDir, idx, DefaultSmartImportOptions())
+	if err != nil {
+		t.Fatalf("second SmartImportSource() error = %v", err)
+	}
+	if second.FailedFiles != 0 || second.ImportedFiles != 0 || second.SkippedFiles != 1 {
+		t.Fatalf("second result = %#v, want idempotent skip without duplicate target failure", second)
+	}
+	meta, ok = idx.GetBySource(canonicalZipPath + "::concepts/service.md")
+	if !ok {
+		t.Fatalf("metadata source key missing after second import")
+	}
+	if !meta.LastModified.Equal(firstModified) {
+		t.Fatalf("metadata last modified changed from %s to %s for unchanged archive entry", firstModified, meta.LastModified)
+	}
+}
+
+func TestSmartImportSourceArchiveIdentityCanonicalizesArchivePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "bundle.zip")
+	createTestZip(t, zipPath, []testFile{{Name: "concepts/service.md", Content: validConceptContent("Archive Service")}})
+	knowledgeDir := filepath.Join(tmpDir, "knowledge")
+	idx := NewMetadataIndex()
+	t.Chdir(tmpDir)
+
+	first, err := SmartImportSource("bundle.zip", knowledgeDir, idx, DefaultSmartImportOptions())
+	if err != nil {
+		t.Fatalf("relative SmartImportSource() error = %v", err)
+	}
+	if first.ImportedFiles != 1 || first.FailedFiles != 0 {
+		t.Fatalf("relative result = %#v, want one imported file", first)
+	}
+
+	second, err := SmartImportSource(zipPath, knowledgeDir, idx, DefaultSmartImportOptions())
+	if err != nil {
+		t.Fatalf("absolute SmartImportSource() error = %v", err)
+	}
+	if second.FailedFiles != 0 || second.ImportedFiles != 0 || second.SkippedFiles != 1 {
+		t.Fatalf("absolute result = %#v, want same archive identity to skip", second)
+	}
+	canonicalZipPath, err := canonicalArchiveSourcePath(zipPath)
+	if err != nil {
+		t.Fatalf("canonicalArchiveSourcePath() error = %v", err)
+	}
+	if _, ok := idx.GetBySource(canonicalZipPath + "::concepts/service.md"); !ok {
+		t.Fatalf("metadata source key missing canonical absolute archive identity")
+	}
+}
+
+func TestExtractArchive_TarGzIncludesMarkdownExtensionCaseInsensitive(t *testing.T) {
+	tmpDir := t.TempDir()
+	tarPath := filepath.Join(tmpDir, "test.tar.gz")
+	createTestTarGz(t, tarPath, []testFile{{Name: "README.MD", Content: validConceptContent("Uppercase Archive")}})
+
+	files, err := ExtractArchive(tarPath, filepath.Join(tmpDir, "extracted"))
+	if err != nil {
+		t.Fatalf("ExtractArchive() error = %v", err)
+	}
+	if len(files) != 1 || !strings.HasSuffix(files[0], "README.MD") {
+		t.Fatalf("ExtractArchive() = %#v, want uppercase tar markdown entry", files)
+	}
+}
+
 // TestExtractArchive_TarGz tests TAR.GZ archive extraction
 func TestExtractArchive_TarGz(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -257,17 +379,98 @@ func TestExtractArchive_PathTraversal(t *testing.T) {
 		t.Fatalf("Failed to create extract dir: %v", err)
 	}
 
-	files, err := ExtractArchive(zipPath, extractDir)
+	_, err := ExtractArchive(zipPath, extractDir)
+	if err == nil {
+		t.Fatal("ExtractArchive() error = nil, want path traversal rejection")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "path traversal") {
+		t.Fatalf("ExtractArchive() error = %v, want path traversal", err)
+	}
+}
+
+func TestExtractArchive_RejectsAbsolutePathEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "absolute.zip")
+	createTestZip(t, zipPath, []testFile{{Name: "/tmp/evil.md", Content: validConceptContent("Absolute")}})
+
+	_, err := ExtractArchive(zipPath, filepath.Join(tmpDir, "extracted"))
+	if err == nil {
+		t.Fatal("ExtractArchive() error = nil, want absolute path rejection")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "absolute") {
+		t.Fatalf("ExtractArchive() error = %v, want absolute path", err)
+	}
+}
+
+func TestExtractArchive_RejectsOversizedEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "oversized-entry.zip")
+	if err := os.MkdirAll(filepath.Dir(zipPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	zipFile, err := os.Create(zipPath)
 	if err != nil {
-		t.Fatalf("ExtractArchive() error = %v", err)
+		t.Fatalf("create zip: %v", err)
+	}
+	zipWriter := zip.NewWriter(zipFile)
+	header := &zip.FileHeader{Name: "large.md", Method: zip.Store}
+	header.SetMode(0644)
+	header.UncompressedSize64 = MaxFileSize + 1
+	entry, err := zipWriter.CreateHeader(header)
+	if err != nil {
+		t.Fatalf("create zip entry: %v", err)
+	}
+	largeContent := append([]byte("---\ntype: concept\ntitle: Large\n---\n"), make([]byte, MaxFileSize+1)...)
+	if _, err := entry.Write(largeContent); err != nil {
+		t.Fatalf("write zip entry: %v", err)
+	}
+	if err := zipWriter.Close(); err != nil {
+		t.Fatalf("close zip writer: %v", err)
+	}
+	if err := zipFile.Close(); err != nil {
+		t.Fatalf("close zip file: %v", err)
 	}
 
-	// Path traversal files should be blocked
-	for _, f := range files {
-		rel, _ := filepath.Rel(extractDir, f)
-		if rel != filepath.Clean(rel) || rel != filepath.Base(rel) {
-			t.Errorf("Path traversal file was extracted: %s", f)
-		}
+	_, err = ExtractArchive(zipPath, filepath.Join(tmpDir, "extracted"))
+	if err == nil {
+		t.Fatal("ExtractArchive() error = nil, want oversized file rejection")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "size") {
+		t.Fatalf("ExtractArchive() error = %v, want size limit", err)
+	}
+}
+
+func TestExtractArchive_RejectsSymlinkTarEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+	tarPath := filepath.Join(tmpDir, "symlink.tar.gz")
+	if err := os.MkdirAll(filepath.Dir(tarPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	file, err := os.Create(tarPath)
+	if err != nil {
+		t.Fatalf("create tar: %v", err)
+	}
+	gzWriter := gzip.NewWriter(file)
+	tarWriter := tar.NewWriter(gzWriter)
+	if err := tarWriter.WriteHeader(&tar.Header{Name: "link.md", Typeflag: tar.TypeSymlink, Linkname: "/tmp/evil.md"}); err != nil {
+		t.Fatalf("write symlink header: %v", err)
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	_, err = ExtractArchive(tarPath, filepath.Join(tmpDir, "extracted"))
+	if err == nil {
+		t.Fatal("ExtractArchive() error = nil, want symlink rejection")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("ExtractArchive() error = %v, want symlink", err)
 	}
 }
 
@@ -406,12 +609,10 @@ Content here
 // TestValidateConcept_InvalidYAML tests handling of content with issues
 // Note: Our simple parser doesn't validate YAML syntax strictly
 func TestValidateConcept_InvalidYAML(t *testing.T) {
-	// Content that looks malformed - our simple parser will accept it
-	// but validation should still fail on missing required fields
 	content := `---
 type: api
 title: Test
-description: ok
+description: [unterminated
   - tag1
   - tag2
 ---
@@ -419,21 +620,34 @@ description: ok
 Content here
 `
 
-	concept, err := ValidateConcept([]byte(content), "test.md")
-	// The simple parser will parse this successfully
-	// but validation passes because type and title are present
-	if err != nil {
-		t.Errorf("ValidateConcept() unexpected error = %v", err)
+	_, err := ValidateConcept([]byte(content), "test.md")
+	if err == nil {
+		t.Fatal("ValidateConcept() error = nil, want malformed YAML rejection")
 	}
+}
 
-	if concept == nil {
-		t.Error("ValidateConcept() returned nil concept")
-		return
+func TestSmartImporterRejectsInvalidMarkdownWithoutWriting(t *testing.T) {
+	tmpDir := t.TempDir()
+	source := filepath.Join(tmpDir, "invalid.md")
+	knowledgeDir := filepath.Join(tmpDir, "knowledge")
+	createTestFile(t, source, `---
+type: concept
+title: [unterminated
+---
+bad
+`)
+
+	idx := NewMetadataIndex()
+	importer := NewSmartImporter(idx, knowledgeDir)
+	_, err := importer.ImportFile(source, "invalid.md", nil)
+	if err == nil {
+		t.Fatal("ImportFile() error = nil, want invalid markdown rejection")
 	}
-
-	// Verify it was parsed correctly
-	if concept.Type != "api" {
-		t.Errorf("ValidateConcept().Type = %q, want %q", concept.Type, "api")
+	if _, statErr := os.Stat(filepath.Join(knowledgeDir, "invalid.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("invalid import wrote target or returned unexpected stat error: %v", statErr)
+	}
+	if idx.Len() != 0 {
+		t.Fatalf("metadata entries = %d, want 0", idx.Len())
 	}
 }
 
@@ -661,6 +875,10 @@ func createTestFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("Failed to create file %s: %v", path, err)
 	}
+}
+
+func validConceptContent(title string) string {
+	return "---\ntype: concept\ntitle: " + title + "\n---\ncontent\n"
 }
 
 func createTestZip(t *testing.T, zipPath string, files []testFile) {

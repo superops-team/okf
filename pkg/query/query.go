@@ -15,15 +15,26 @@ var (
 	relationRowPattern  = regexp.MustCompile("^\\| ([^|]+) \\| `([^`]+)` \\| `([^`]+)` \\| `([^`]+)` \\| ([^|]+) \\|$")
 )
 
+var indexedCustomFieldKeys = []string{
+	"source_path",
+	"language",
+	"symbol_kind",
+	"qualified_name",
+	"relation_kind",
+	"relation_source",
+	"relation_target",
+}
+
 // Concept represents the minimal concept interface needed for querying.
 type Concept struct {
-	Type        string
-	Title       string
-	Description string
-	Resource    string
-	Tags        []string
-	Content     string
-	FilePath    string
+	Type         string
+	Title        string
+	Description  string
+	Resource     string
+	Tags         []string
+	Content      string
+	FilePath     string
+	CustomFields map[string]interface{}
 }
 
 // KnowledgeBundle represents a collection of concepts for querying.
@@ -46,6 +57,8 @@ type Index struct {
 	bySymbolKind     map[string][]*Concept
 	byQualifiedName  map[string][]*Concept
 	byRelationKind   map[string][]*Concept
+	byRelationSource map[string][]*Concept
+	byRelationTarget map[string][]*Concept
 	symbolsByName    map[string][]indexedSymbol
 	symbolsByConcept map[*Concept][]SymbolMatch
 }
@@ -56,11 +69,12 @@ type indexedSymbol struct {
 }
 
 type conceptSnapshot struct {
-	Type     string
-	Title    string
-	Resource string
-	Tags     []string
-	Content  string
+	Type         string
+	Title        string
+	Resource     string
+	Tags         []string
+	Content      string
+	CustomFields map[string]string
 }
 
 // SearchResult describes a concept match with optional structured symbol hits.
@@ -79,18 +93,20 @@ type SymbolMatch struct {
 
 // Query represents a search query with multiple criteria.
 type Query struct {
-	Type              string
-	Tags              []string
-	Resource          string
-	Text              string
-	TitleRegex        string
-	DescriptionRegex  string
-	ContentRegex      string
-	CodeLanguage      string
-	CodeFilePath      string
-	CodeSymbolKind    string
-	CodeQualifiedName string
-	CodeRelationKind  string
+	Type               string
+	Tags               []string
+	Resource           string
+	Text               string
+	TitleRegex         string
+	DescriptionRegex   string
+	ContentRegex       string
+	CodeLanguage       string
+	CodeFilePath       string
+	CodeSymbolKind     string
+	CodeQualifiedName  string
+	CodeRelationKind   string
+	CodeRelationSource string
+	CodeRelationTarget string
 }
 
 // Builder helps construct complex queries fluently.
@@ -175,6 +191,18 @@ func (b *Builder) WithCodeRelationKind(kind string) *Builder {
 	return b
 }
 
+// WithCodeRelationSource filters generated relation concepts by relation source.
+func (b *Builder) WithCodeRelationSource(source string) *Builder {
+	b.q.CodeRelationSource = source
+	return b
+}
+
+// WithCodeRelationTarget filters generated relation concepts by relation target.
+func (b *Builder) WithCodeRelationTarget(target string) *Builder {
+	b.q.CodeRelationTarget = target
+	return b
+}
+
 // Build returns the final query.
 func (b *Builder) Build() *Query {
 	return &b.q
@@ -221,6 +249,12 @@ func (q *Query) indexedCandidates(bundle *KnowledgeBundle, idx *Index) []*Concep
 	}
 	if q.CodeRelationKind != "" {
 		candidates = intersectConcepts(candidates, idx.byRelationKind[strings.ToLower(q.CodeRelationKind)])
+	}
+	if q.CodeRelationSource != "" {
+		candidates = intersectConcepts(candidates, indexedContainsCandidates(idx.byRelationSource, q.CodeRelationSource))
+	}
+	if q.CodeRelationTarget != "" {
+		candidates = intersectConcepts(candidates, indexedContainsCandidates(idx.byRelationTarget, q.CodeRelationTarget))
 	}
 	return candidates
 }
@@ -291,6 +325,12 @@ func (q *Query) Matches(c *Concept) bool {
 		return false
 	}
 	if q.CodeRelationKind != "" && !conceptHasCodeRelationKind(c, q.CodeRelationKind) {
+		return false
+	}
+	if q.CodeRelationSource != "" && !conceptHasCodeRelationSource(c, q.CodeRelationSource) {
+		return false
+	}
+	if q.CodeRelationTarget != "" && !conceptHasCodeRelationTarget(c, q.CodeRelationTarget) {
 		return false
 	}
 
@@ -378,6 +418,8 @@ func buildIndex(concepts []*Concept) *Index {
 		bySymbolKind:     make(map[string][]*Concept),
 		byQualifiedName:  make(map[string][]*Concept),
 		byRelationKind:   make(map[string][]*Concept),
+		byRelationSource: make(map[string][]*Concept),
+		byRelationTarget: make(map[string][]*Concept),
 		symbolsByName:    make(map[string][]indexedSymbol),
 		symbolsByConcept: make(map[*Concept][]SymbolMatch),
 	}
@@ -453,17 +495,18 @@ func snapshotConcept(concept *Concept) conceptSnapshot {
 		return conceptSnapshot{}
 	}
 	return conceptSnapshot{
-		Type:     concept.Type,
-		Title:    concept.Title,
-		Resource: concept.Resource,
-		Tags:     append([]string(nil), concept.Tags...),
-		Content:  concept.Content,
+		Type:         concept.Type,
+		Title:        concept.Title,
+		Resource:     concept.Resource,
+		Tags:         append([]string(nil), concept.Tags...),
+		Content:      concept.Content,
+		CustomFields: snapshotIndexedCustomFields(concept),
 	}
 }
 
 func (s conceptSnapshot) matches(concept *Concept) bool {
 	if concept == nil {
-		return s.Type == "" && s.Title == "" && s.Resource == "" && s.Content == "" && len(s.Tags) == 0
+		return s.Type == "" && s.Title == "" && s.Resource == "" && s.Content == "" && len(s.Tags) == 0 && len(s.CustomFields) == 0
 	}
 	if s.Type != concept.Type || s.Title != concept.Title || s.Resource != concept.Resource || s.Content != concept.Content || len(s.Tags) != len(concept.Tags) {
 		return false
@@ -473,7 +516,24 @@ func (s conceptSnapshot) matches(concept *Concept) bool {
 			return false
 		}
 	}
+	currentFields := snapshotIndexedCustomFields(concept)
+	if len(s.CustomFields) != len(currentFields) {
+		return false
+	}
+	for key, value := range s.CustomFields {
+		if currentFields[key] != value {
+			return false
+		}
+	}
 	return true
+}
+
+func snapshotIndexedCustomFields(concept *Concept) map[string]string {
+	fields := make(map[string]string, len(indexedCustomFieldKeys))
+	for _, key := range indexedCustomFieldKeys {
+		fields[key] = conceptStringField(concept, key)
+	}
+	return fields
 }
 
 func indexedTextCandidates(bundle *KnowledgeBundle, idx *Index, text string) []*Concept {
@@ -537,6 +597,13 @@ func indexCodeMetadata(idx *Index, concept *Concept) {
 	if idx == nil || concept == nil {
 		return
 	}
+	indexCustomField(idx.byCodeFilePath, concept, conceptStringField(concept, "source_path"))
+	indexCustomField(idx.byCodeLanguage, concept, conceptStringField(concept, "language"))
+	indexCustomField(idx.bySymbolKind, concept, conceptStringField(concept, "symbol_kind"))
+	indexCustomField(idx.byQualifiedName, concept, conceptStringField(concept, "qualified_name"))
+	indexCustomField(idx.byRelationKind, concept, conceptStringField(concept, "relation_kind"))
+	indexCustomField(idx.byRelationSource, concept, conceptStringField(concept, "relation_source"))
+	indexCustomField(idx.byRelationTarget, concept, conceptStringField(concept, "relation_target"))
 
 	for _, match := range codeLanguagePattern.FindAllStringSubmatch(concept.Content, -1) {
 		idx.byCodeLanguage[normalizedCodeKey(match[1])] = append(idx.byCodeLanguage[normalizedCodeKey(match[1])], concept)
@@ -558,7 +625,16 @@ func indexCodeMetadata(idx *Index, concept *Concept) {
 		idx.byRelationKind[normalizedCodeKey(parts[1])] = append(idx.byRelationKind[normalizedCodeKey(parts[1])], concept)
 		idx.byQualifiedName[normalizedCodeKey(parts[2])] = append(idx.byQualifiedName[normalizedCodeKey(parts[2])], concept)
 		idx.byQualifiedName[normalizedCodeKey(parts[3])] = append(idx.byQualifiedName[normalizedCodeKey(parts[3])], concept)
+		idx.byRelationSource[normalizedCodeKey(parts[2])] = append(idx.byRelationSource[normalizedCodeKey(parts[2])], concept)
+		idx.byRelationTarget[normalizedCodeKey(parts[3])] = append(idx.byRelationTarget[normalizedCodeKey(parts[3])], concept)
 	}
+}
+
+func indexCustomField(index map[string][]*Concept, concept *Concept, value string) {
+	if index == nil || concept == nil || value == "" {
+		return
+	}
+	index[normalizedCodeKey(value)] = append(index[normalizedCodeKey(value)], concept)
 }
 
 func indexedContainsCandidates(m map[string][]*Concept, substr string) []*Concept {
@@ -580,6 +656,9 @@ func conceptHasCodeLanguage(c *Concept, language string) bool {
 		return false
 	}
 	needle := normalizedCodeKey(language)
+	if normalizedCodeKey(conceptStringField(c, "language")) == needle {
+		return true
+	}
 	for _, match := range codeLanguagePattern.FindAllStringSubmatch(c.Content, -1) {
 		if normalizedCodeKey(match[1]) == needle {
 			return true
@@ -593,6 +672,9 @@ func conceptHasCodeFilePath(c *Concept, filePath string) bool {
 		return false
 	}
 	needle := normalizedCodeKey(filePath)
+	if strings.Contains(normalizedCodeKey(conceptStringField(c, "source_path")), needle) {
+		return true
+	}
 	for _, match := range codeFilePathPattern.FindAllStringSubmatch(c.Content, -1) {
 		if strings.Contains(normalizedCodeKey(match[1]), needle) {
 			return true
@@ -606,6 +688,9 @@ func conceptHasCodeSymbolKind(c *Concept, kind string) bool {
 		return false
 	}
 	needle := normalizedCodeKey(kind)
+	if normalizedCodeKey(conceptStringField(c, "symbol_kind")) == needle {
+		return true
+	}
 	for _, symbol := range matchingSymbols(c.Content, "") {
 		if normalizedCodeKey(symbol.Kind) == needle {
 			return true
@@ -619,6 +704,9 @@ func conceptHasCodeQualifiedName(c *Concept, name string) bool {
 		return false
 	}
 	needle := normalizedCodeKey(name)
+	if strings.Contains(normalizedCodeKey(conceptStringField(c, "qualified_name")), needle) {
+		return true
+	}
 	for _, symbol := range matchingSymbols(c.Content, "") {
 		if strings.Contains(normalizedCodeKey(symbol.Name), needle) {
 			return true
@@ -641,6 +729,9 @@ func conceptHasCodeRelationKind(c *Concept, kind string) bool {
 		return false
 	}
 	needle := normalizedCodeKey(kind)
+	if normalizedCodeKey(conceptStringField(c, "relation_kind")) == needle {
+		return true
+	}
 	for _, line := range strings.Split(c.Content, "\n") {
 		parts := relationRowPattern.FindStringSubmatch(strings.TrimSpace(line))
 		if len(parts) == 6 && normalizedCodeKey(parts[1]) == needle {
@@ -648,6 +739,52 @@ func conceptHasCodeRelationKind(c *Concept, kind string) bool {
 		}
 	}
 	return false
+}
+
+func conceptHasCodeRelationSource(c *Concept, source string) bool {
+	if c == nil || source == "" {
+		return false
+	}
+	needle := normalizedCodeKey(source)
+	if strings.Contains(normalizedCodeKey(conceptStringField(c, "relation_source")), needle) {
+		return true
+	}
+	for _, line := range strings.Split(c.Content, "\n") {
+		parts := relationRowPattern.FindStringSubmatch(strings.TrimSpace(line))
+		if len(parts) == 6 && strings.Contains(normalizedCodeKey(parts[2]), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func conceptHasCodeRelationTarget(c *Concept, target string) bool {
+	if c == nil || target == "" {
+		return false
+	}
+	needle := normalizedCodeKey(target)
+	if strings.Contains(normalizedCodeKey(conceptStringField(c, "relation_target")), needle) {
+		return true
+	}
+	for _, line := range strings.Split(c.Content, "\n") {
+		parts := relationRowPattern.FindStringSubmatch(strings.TrimSpace(line))
+		if len(parts) == 6 && strings.Contains(normalizedCodeKey(parts[3]), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func conceptStringField(c *Concept, key string) string {
+	if c == nil || c.CustomFields == nil {
+		return ""
+	}
+	value, ok := c.CustomFields[key]
+	if !ok {
+		return ""
+	}
+	s, _ := value.(string)
+	return s
 }
 
 func normalizedCodeKey(s string) string {
