@@ -879,7 +879,7 @@ func bestHitForSourcePath(sourcePath string, concepts []*okf.Concept, conceptsBy
 			Score:               score,
 			Reason:              "relation neighbor",
 			Provenance:          provenanceForConcept(concept),
-			Generated:           boolCustomField(concept.CustomFields, "generated"),
+			Generated:           concept.Generated != nil || boolCustomField(concept.CustomFields, "generated"),
 			Generator:           stringCustomFieldOrEmpty(concept.CustomFields, "generator"),
 			KnowledgePath:       stringCustomFieldOrEmpty(concept.CustomFields, "knowledge_path"),
 			KnowledgePathSource: stringCustomFieldOrEmpty(concept.CustomFields, "knowledge_path_source"),
@@ -1067,7 +1067,7 @@ func appendDuplicateSource(concept *okf.Concept, readPath okf.ResolvedKnowledgeP
 }
 
 func generatedConceptIdentity(concept *okf.Concept) string {
-	if concept == nil || !boolCustomField(concept.CustomFields, "generated") {
+	if concept == nil || (concept.Generated == nil && !boolCustomField(concept.CustomFields, "generated")) {
 		return ""
 	}
 	generator := stringCustomFieldOrEmpty(concept.CustomFields, "generator")
@@ -1370,7 +1370,7 @@ func rankConcepts(concepts []*okf.Concept, query string, filters queryFilters) [
 			Score:               score,
 			Reason:              reason,
 			Provenance:          provenanceForConcept(concept),
-			Generated:           boolCustomField(concept.CustomFields, "generated"),
+			Generated:           concept.Generated != nil || boolCustomField(concept.CustomFields, "generated"),
 			Generator:           stringCustomFieldOrEmpty(concept.CustomFields, "generator"),
 			KnowledgePath:       knowledgePath,
 			KnowledgePathSource: knowledgePathSource,

@@ -42,10 +42,12 @@ func TestParseConceptBytes(t *testing.T) {
 			wantContent: "Body\r\n",
 		},
 		{
-			name:    "missing title returns error",
-			path:    "bad.md",
-			input:   "---\ntype: api\n---\nBody\n",
-			wantErr: true,
+			name:        "missing title derives from filename (v0.2: title is optional)",
+			path:        "bad.md",
+			input:       "---\ntype: api\n---\nBody\n",
+			wantType:    "api",
+			wantTitle:   "bad",
+			wantContent: "Body\n",
 		},
 		{
 			name:    "malformed YAML returns error",
@@ -80,7 +82,7 @@ func TestParseConceptBytesPreservesCustomFrontmatter(t *testing.T) {
 	got, err := ParseConceptBytes("generated.md", []byte(`---
 type: code_file
 title: handler.go
-generated: true
+is_generated: true
 generator: okf.git
 generator_version: 1
 source_path: internal/handler.go
@@ -93,8 +95,8 @@ Body
 		t.Fatalf("ParseConceptBytes returned error: %v", err)
 	}
 
-	if got.CustomFields["generated"] != true {
-		t.Fatalf("generated = %#v, want true", got.CustomFields["generated"])
+	if got.CustomFields["is_generated"] != true {
+		t.Fatalf("is_generated = %#v, want true", got.CustomFields["is_generated"])
 	}
 	if got.CustomFields["generator"] != "okf.git" {
 		t.Fatalf("generator = %#v, want okf.git", got.CustomFields["generator"])
@@ -111,7 +113,7 @@ func TestSerializeConceptWritesCustomFrontmatter(t *testing.T) {
 		Type:  "code_file",
 		Title: "handler.go",
 		CustomFields: map[string]interface{}{
-			"generated":         true,
+			"is_generated":      true,
 			"generator":         "okf.git",
 			"generator_version": 1,
 			"source_path":       "internal/handler.go",
@@ -125,7 +127,7 @@ func TestSerializeConceptWritesCustomFrontmatter(t *testing.T) {
 	}
 
 	for _, want := range [][]byte{
-		[]byte("generated: true"),
+		[]byte("is_generated: true"),
 		[]byte("generator: okf.git"),
 		[]byte("generator_version: 1"),
 		[]byte("source_path: internal/handler.go"),

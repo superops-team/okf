@@ -47,7 +47,7 @@ func TestSaveBundleLoadBundlePreservesCustomFields(t *testing.T) {
 	bundle := NewBundle("generated")
 	concept := NewConcept("code_file", "handler.go")
 	concept.CustomFields = map[string]interface{}{
-		"generated":         true,
+		"is_generated":      true,
 		"generator":         "okf.git",
 		"generator_version": 1,
 		"source_path":       "internal/handler.go",
@@ -68,8 +68,8 @@ func TestSaveBundleLoadBundlePreservesCustomFields(t *testing.T) {
 		t.Fatalf("loaded %d concepts, want 1", len(loaded.Concepts))
 	}
 	fields := loaded.Concepts[0].CustomFields
-	if fields["generated"] != true || fields["generator"] != "okf.git" || fields["source_path"] != "internal/handler.go" {
-		t.Fatalf("custom fields = %#v, want generated okf.git internal/handler.go", fields)
+	if fields["is_generated"] != true || fields["generator"] != "okf.git" || fields["source_path"] != "internal/handler.go" {
+		t.Fatalf("custom fields = %#v, want is_generated okf.git internal/handler.go", fields)
 	}
 }
 

@@ -572,6 +572,16 @@ func lintBundleWithConfig(b *okf.KnowledgeBundle, cfg *lint.Config) *lint.Result
 			Timestamp:   c.Timestamp,
 			Content:     c.Content,
 			FilePath:    c.FilePath,
+			// v0.2 fields
+			HasSources:  len(c.Sources) > 0,
+			HasVerified: len(c.Verified) > 0,
+			Status:      string(c.Status),
+			StaleAfter:  c.StaleAfter,
+			Runtime:     c.Runtime,
+		}
+		if c.Generated != nil {
+			concepts[i].GeneratedBy = c.Generated.By
+			concepts[i].GeneratedAt = c.Generated.At
 		}
 	}
 

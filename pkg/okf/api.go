@@ -75,6 +75,49 @@ func LoadBundle(path string, opts *LoadOptions) (*KnowledgeBundle, error) {
 			Content:      pc.Content,
 			FilePath:     relPath,
 			CustomFields: pc.CustomFields,
+			// v0.2 fields
+			Status:      ConceptStatus(pc.Status),
+			StaleAfter:  pc.StaleAfter,
+			Runtime:     pc.Runtime,
+			Computation: pc.Computation,
+		}
+		// Convert v0.2 nested types
+		if len(pc.Sources) > 0 {
+			concept.Sources = make([]Source, len(pc.Sources))
+			for i, s := range pc.Sources {
+				concept.Sources[i] = Source{
+					ID:           s.ID,
+					Resource:     s.Resource,
+					Title:        s.Title,
+					Author:       s.Author,
+					UsageCount:   s.UsageCount,
+					LastModified: s.LastModified,
+				}
+			}
+		}
+		if pc.UsageWindow != nil {
+			concept.UsageWindow = &UsageWindow{From: pc.UsageWindow.From, To: pc.UsageWindow.To}
+		}
+		if pc.Generated != nil {
+			concept.Generated = &GeneratedInfo{By: pc.Generated.By, At: pc.Generated.At}
+		}
+		if len(pc.Verified) > 0 {
+			concept.Verified = make([]VerificationEvent, len(pc.Verified))
+			for i, v := range pc.Verified {
+				concept.Verified[i] = VerificationEvent{By: v.By, At: v.At}
+			}
+		}
+		if len(pc.Parameters) > 0 {
+			concept.Parameters = make([]Parameter, len(pc.Parameters))
+			for i, p := range pc.Parameters {
+				concept.Parameters[i] = Parameter{Name: p.Name, Type: p.Type, Required: p.Required}
+			}
+		}
+		if pc.Executor != nil {
+			concept.Executor = &ExecutorRef{Resource: pc.Executor.Resource, Receipt: pc.Executor.Receipt}
+		}
+		if pc.Attester != nil {
+			concept.Attester = &AttesterRef{Resource: pc.Attester.Resource}
 		}
 
 		bundle.Concepts = append(bundle.Concepts, concept)
@@ -143,6 +186,49 @@ func SaveBundle(b *KnowledgeBundle, path string, opts *SaveOptions) error {
 			Timestamp:    concept.Timestamp,
 			Content:      concept.Content,
 			CustomFields: concept.CustomFields,
+			// v0.2 fields
+			Status:      string(concept.Status),
+			StaleAfter:  concept.StaleAfter,
+			Runtime:     concept.Runtime,
+			Computation: concept.Computation,
+		}
+		// Convert v0.2 nested types
+		if len(concept.Sources) > 0 {
+			pc.Sources = make([]parser.Source, len(concept.Sources))
+			for i, s := range concept.Sources {
+				pc.Sources[i] = parser.Source{
+					ID:           s.ID,
+					Resource:     s.Resource,
+					Title:        s.Title,
+					Author:       s.Author,
+					UsageCount:   s.UsageCount,
+					LastModified: s.LastModified,
+				}
+			}
+		}
+		if concept.UsageWindow != nil {
+			pc.UsageWindow = &parser.UsageWindow{From: concept.UsageWindow.From, To: concept.UsageWindow.To}
+		}
+		if concept.Generated != nil {
+			pc.Generated = &parser.GeneratedInfo{By: concept.Generated.By, At: concept.Generated.At}
+		}
+		if len(concept.Verified) > 0 {
+			pc.Verified = make([]parser.VerificationEvent, len(concept.Verified))
+			for i, v := range concept.Verified {
+				pc.Verified[i] = parser.VerificationEvent{By: v.By, At: v.At}
+			}
+		}
+		if len(concept.Parameters) > 0 {
+			pc.Parameters = make([]parser.Parameter, len(concept.Parameters))
+			for i, p := range concept.Parameters {
+				pc.Parameters[i] = parser.Parameter{Name: p.Name, Type: p.Type, Required: p.Required}
+			}
+		}
+		if concept.Executor != nil {
+			pc.Executor = &parser.ExecutorRef{Resource: concept.Executor.Resource, Receipt: concept.Executor.Receipt}
+		}
+		if concept.Attester != nil {
+			pc.Attester = &parser.AttesterRef{Resource: concept.Attester.Resource}
 		}
 
 		data, err := parser.SerializeConcept(pc, opts.PrettyPrint)
