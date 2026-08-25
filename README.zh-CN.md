@@ -1,7 +1,5 @@
 <div align="right">
-
 [English](README.md) | [中文](README.zh-CN.md)
-
 </div>
 
 # okf — 开放知识格式 (Open Knowledge Format)
@@ -24,11 +22,16 @@
 curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash
 ```
 
-**Windows (PowerShell)：
+**Windows (PowerShell)：**
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
 ```
+
+> 如果一行命令报 `Unexpected token` / `&#34;` 解析错误（通常是代理将响应做了 HTML 编码导致），请改用先下载再执行的方式：
+> ```powershell
+> iwr -useb "https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1" -OutFile install.ps1; .\install.ps1
+> ```
 
 安装脚本功能：
 - 自动检测操作系统（Linux / macOS / Windows）与 CPU 架构（amd64 / arm64）
@@ -117,7 +120,7 @@ okf hook -type post-commit
 ## 模块说明
 
 | 模块 | 路径 | 功能 |
-|------|------|------|
+|--------|------|------|
 | **okf** | pkg/okf/ | 核心类型定义（Concept, KnowledgeBundle）和公共 API |
 | **parser** | pkg/parser/ | Markdown + YAML frontmatter 解析和序列化 |
 | **query** | pkg/query/ | 高级查询构建器和匹配引擎 |
@@ -139,7 +142,6 @@ timestamp: "2024-01-15T10:30:00Z"
 ---
 
 ## 用户表
-
 存储所有用户账户信息。
 ```
 
@@ -202,7 +204,5 @@ Apache 2.0
 ---
 
 <div align="center">
-
 [⬆ 返回顶部](#okf--开放知识格式-open-knowledge-format) &nbsp;•&nbsp; [🇬🇧 Switch to English](README.md)
-
 </div>
