@@ -2,8 +2,15 @@
 # Downloads pre-built binary from GitHub Releases
 #
 # Usage (PowerShell):
-#   iwr -useb https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
-#   iwr -useb "https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1" -OutFile install.ps1; .\install.ps1 v1.2.0
+#   Recommended (avoids HTML-encoding pipe issues):
+#     irm https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
+#   Alternative (download first, then execute):
+#     iwr -useb "https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1" -OutFile install.ps1; .\install.ps1
+#     .\install.ps1 v1.2.0
+#
+# If you see "Unexpected token" errors with &#34; in the message, your
+# network/proxy is HTML-encoding the raw response. Use the "download first"
+# method above, or run:  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 #
 # Environment variables:
 #   $env:OKF_VERSION    - specific version to install (default: latest)
@@ -15,6 +22,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Force TLS 1.2 for GitHub connections (older PowerShell defaults to TLS 1.0)
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -27,10 +36,10 @@ New-Item -ItemType Directory -Path $TmpDir -Force | Out-Null
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-function Write-Step($msg)    { Write-Host "  `" -ForegroundColor Cyan -NoNewline; Write-Host $msg }
-function Write-Ok($msg)      { Write-Host "  [OK] " -ForegroundColor Green -NoNewline; Write-Host $msg }
-function Write-Warn($msg)    { Write-Host "  [WARN] " -ForegroundColor Yellow -NoNewline; Write-Host $msg }
-function Write-Err($msg)     { Write-Host "  [ERR] " -ForegroundColor Red -NoNewline; Write-Host $msg }
+function Write-Step($msg)    { Write-Host '  >' -ForegroundColor Cyan -NoNewline; Write-Host " $msg" }
+function Write-Ok($msg)      { Write-Host '  [OK] ' -ForegroundColor Green -NoNewline; Write-Host $msg }
+function Write-Warn($msg)    { Write-Host '  [WARN] ' -ForegroundColor Yellow -NoNewline; Write-Host $msg }
+function Write-Err($msg)     { Write-Host '  [ERR] ' -ForegroundColor Red -NoNewline; Write-Host $msg }
 
 function Write-Banner {
     Write-Host ""

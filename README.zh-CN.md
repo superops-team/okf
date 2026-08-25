@@ -24,11 +24,16 @@
 curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash
 ```
 
-**Windows (PowerShell)：
+**Windows (PowerShell)：**
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
 ```
+
+> 如果一行命令报 `Unexpected token` / `&#34;` 解析错误（通常是代理将响应做了 HTML 编码导致），请改用先下载再执行的方式：
+> ```powershell
+> iwr -useb "https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1" -OutFile install.ps1; .\install.ps1
+> ```
 
 安装脚本功能：
 - 自动检测操作系统（Linux / macOS / Windows）与 CPU 架构（amd64 / arm64）

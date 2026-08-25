@@ -27,8 +27,13 @@ curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/inst
 **Windows (PowerShell):**
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1 | iex
 ```
+
+> If the one-liner fails with `Unexpected token` / `&#34;` parse errors (caused by proxies HTML-encoding the response), use the download-then-run method:
+> ```powershell
+> iwr -useb "https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.ps1" -OutFile install.ps1; .\install.ps1
+> ```
 
 The installer:
 - Automatically detects your OS (Linux / macOS) and CPU architecture (amd64 / arm64)
