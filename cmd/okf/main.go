@@ -10,6 +10,7 @@ import (
 
 	"github.com/superops-team/okf/pkg/git"
 	"github.com/superops-team/okf/pkg/lint"
+	"github.com/superops-team/okf/pkg/mcp"
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/okf/meta"
 	"github.com/superops-team/okf/pkg/query"
@@ -34,6 +35,7 @@ Commands:
   metadata    Manage the metadata index (inspect|rebuild|clean)
   config      Manage configuration
   tool        Agent-facing JSON tool operations (status|init|refresh|query|context)
+  mcp         Start MCP (Model Context Protocol) server for AI agent integration
   hook        Install git hook for automatic updates
   version     Show version information
   help        Show this help message
@@ -81,6 +83,8 @@ func main() {
 		os.Exit(cmdConfig(os.Args[2:]))
 	case "tool":
 		os.Exit(cmdTool(os.Args[2:]))
+	case "mcp":
+		cmdMCP(os.Args[2:])
 	case "hook":
 		cmdHook(os.Args[2:])
 	case "version", "--version", "-v":
@@ -586,4 +590,20 @@ func lintBundleWithConfig(b *okf.KnowledgeBundle, cfg *lint.Config) *lint.Result
 	}
 
 	return lint.LintBundle(concepts, cfg)
+}
+
+func cmdMCP(args []string) {
+	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
+	bundlePath := fs.String("bundle", "", "Path to knowledge bundle (auto-load on startup)")
+	fs.Parse(args)
+
+	config := mcp.ServerConfig{
+		BundlePath: *bundlePath,
+	}
+
+	server := mcp.NewServer(config)
+	if err := server.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "MCP server error: %v\n", err)
+		os.Exit(1)
+	}
 }
