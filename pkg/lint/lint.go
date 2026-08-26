@@ -9,15 +9,24 @@ import (
 )
 
 // Concept represents the minimal concept interface needed for linting.
+// v0.2: extended with all v0.2 fields for spec-aligned linting.
 type Concept struct {
 	Type        string
 	Title       string
 	Description string
 	Resource    string
 	Tags        []string
-	Timestamp   string
+	Timestamp   string // legacy v0.1 field
 	Content     string
 	FilePath    string
+	// v0.2 fields
+	GeneratedBy string // generated.by
+	GeneratedAt string // generated.at
+	HasSources  bool
+	HasVerified bool
+	Status      string
+	StaleAfter  string
+	Runtime     string // for Attested Computation
 }
 
 // Severity represents lint warning severity levels.
@@ -119,11 +128,11 @@ var rules = []Rule{
 	},
 	{
 		Code:        "OKF002",
-		Description: "Required field 'title' must not be empty",
-		Severity:    Error,
+		Description: "'title' is recommended but optional (v0.2)",
+		Severity:    Warning,
 		Check: func(c *Concept, cfg *Config) []Issue {
 			if strings.TrimSpace(c.Title) == "" {
-				return []Issue{{Code: "OKF002", Severity: Error, Message: "'title' field is required and must not be empty", Suggestion: "Provide a concise title", FilePath: c.FilePath, Line: 1}}
+				return []Issue{{Code: "OKF002", Severity: Warning, Message: "'title' is recommended but missing (will be derived from filename)", Suggestion: "Provide a concise title for better discoverability", FilePath: c.FilePath, Line: 1}}
 			}
 			return nil
 		},
@@ -141,33 +150,40 @@ var rules = []Rule{
 	},
 	{
 		Code:        "OKF004",
-		Description: "Type should use lowercase alphanumeric",
-		Severity:    Warning,
+		Description: "Type naming convention (informational, v0.2 allows mixed-case types)",
+		Severity:    Info,
 		Check: func(c *Concept, cfg *Config) []Issue {
 			matched, _ := regexp.MatchString(`^[a-z][a-z0-9_]*$`, c.Type)
 			if c.Type != "" && !matched {
-				return []Issue{{Code: "OKF004", Severity: Warning, Message: fmt.Sprintf("'type' '%s' should use lowercase", c.Type), Suggestion: "Use lowercase letters, digits, and underscores", FilePath: c.FilePath, Line: 1}}
+				return []Issue{{Code: "OKF004", Severity: Info, Message: fmt.Sprintf("'type' '%s' uses mixed case (allowed in v0.2, e.g. 'Attested Computation')", c.Type), Suggestion: "Lowercase is recommended for simple types; mixed-case is valid for spec-defined types", FilePath: c.FilePath, Line: 1}}
 			}
 			return nil
 		},
 	},
 	{
 		Code:        "OKF005",
-		Description: "Timestamp should be in ISO 8601 format",
+		Description: "'generated.at' should be in ISO 8601 format (v0.2; legacy timestamp still accepted)",
 		Severity:    Warning,
 		Check: func(c *Concept, cfg *Config) []Issue {
-			if c.Timestamp == "" {
-				return []Issue{{Code: "OKF005", Severity: Warning, Message: "'timestamp' is recommended but missing", Suggestion: "Set timestamp in ISO 8601 format", FilePath: c.FilePath, Line: 6}}
+			// v0.2: prefer generated.at, fall back to legacy timestamp
+			ts := c.GeneratedAt
+			fieldName := "generated.at"
+			if ts == "" {
+				ts = c.Timestamp
+				fieldName = "timestamp"
+			}
+			if ts == "" {
+				return []Issue{{Code: "OKF005", Severity: Warning, Message: "'generated.at' is recommended but missing", Suggestion: "Set generated.at in ISO 8601 format, e.g. 2024-01-15T10:30:00Z", FilePath: c.FilePath, Line: 6}}
 			}
 			valid := false
 			for _, f := range []string{time.RFC3339, "2006-01-02T15:04:05Z", "2006-01-02"} {
-				if _, err := time.Parse(f, c.Timestamp); err == nil {
+				if _, err := time.Parse(f, ts); err == nil {
 					valid = true
 					break
 				}
 			}
-			if c.Timestamp != "" && !valid {
-				return []Issue{{Code: "OKF005", Severity: Warning, Message: fmt.Sprintf("'timestamp' '%s' is not valid ISO 8601", c.Timestamp), Suggestion: "Use format: 2024-01-15T10:30:00Z", FilePath: c.FilePath, Line: 6}}
+			if !valid {
+				return []Issue{{Code: "OKF005", Severity: Warning, Message: fmt.Sprintf("'%s' '%s' is not valid ISO 8601", fieldName, ts), Suggestion: "Use format: 2024-01-15T10:30:00Z", FilePath: c.FilePath, Line: 6}}
 			}
 			return nil
 		},
@@ -252,6 +268,65 @@ var rules = []Rule{
 				}
 			}
 			return issues
+		},
+	},
+	// === v0.2 rules ===
+	{
+		Code:        "OKF012",
+		Description: "'sources' is recommended for provenance (v0.2 §5.1)",
+		Severity:    Warning,
+		Check: func(c *Concept, cfg *Config) []Issue {
+			if !c.HasSources {
+				return []Issue{{Code: "OKF012", Severity: Warning, Message: "'sources' is recommended but missing", Suggestion: "Add sources to record provenance and credibility signals", FilePath: c.FilePath, Line: 7}}
+			}
+			return nil
+		},
+	},
+	{
+		Code:        "OKF014",
+		Description: "Attested Computation requires 'runtime' field (v0.2 §10.2)",
+		Severity:    Error,
+		Check: func(c *Concept, cfg *Config) []Issue {
+			if c.Type == "Attested Computation" && c.Runtime == "" {
+				return []Issue{{Code: "OKF014", Severity: Error, Message: "Attested Computation requires 'runtime' field", Suggestion: "Set runtime to the computation runtime identifier (e.g. bigquery, dbt, python)", FilePath: c.FilePath, Line: 1}}
+			}
+			return nil
+		},
+	},
+	{
+		Code:        "OKF015",
+		Description: "'stale_after' should be valid ISO date YYYY-MM-DD (v0.2 §6.2)",
+		Severity:    Warning,
+		Check: func(c *Concept, cfg *Config) []Issue {
+			if c.StaleAfter == "" {
+				return nil
+			}
+			if _, err := time.Parse("2006-01-02", c.StaleAfter); err != nil {
+				return []Issue{{Code: "OKF015", Severity: Warning, Message: fmt.Sprintf("'stale_after' '%s' is not valid YYYY-MM-DD", c.StaleAfter), Suggestion: "Use format: 2026-12-31", FilePath: c.FilePath, Line: 9}}
+			}
+			return nil
+		},
+	},
+	{
+		Code:        "OKF016",
+		Description: "Legacy 'timestamp' should migrate to 'generated.at' (v0.2 §13.1)",
+		Severity:    Info,
+		Check: func(c *Concept, cfg *Config) []Issue {
+			if c.Timestamp != "" && c.GeneratedAt == "" {
+				return []Issue{{Code: "OKF016", Severity: Info, Message: "Legacy 'timestamp' detected; consider migrating to 'generated.at'", Suggestion: "Replace timestamp with generated: {by: <actor>, at: <ISO8601>}", FilePath: c.FilePath, Line: 6}}
+			}
+			return nil
+		},
+	},
+	{
+		Code:        "OKF017",
+		Description: "'verified' is recommended for trust tier elevation (v0.2 §5.2)",
+		Severity:    Info,
+		Check: func(c *Concept, cfg *Config) []Issue {
+			if !c.HasVerified {
+				return []Issue{{Code: "OKF017", Severity: Info, Message: "'verified' is recommended to elevate trust tier beyond unverified", Suggestion: "Add verified events with human:<id> or process:<id> actors", FilePath: c.FilePath, Line: 8}}
+			}
+			return nil
 		},
 	},
 }

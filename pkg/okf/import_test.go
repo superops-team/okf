@@ -299,7 +299,9 @@ func TestSmartImportSourceArchiveIdentityCanonicalizesArchivePath(t *testing.T) 
 	createTestZip(t, zipPath, []testFile{{Name: "concepts/service.md", Content: validConceptContent("Archive Service")}})
 	knowledgeDir := filepath.Join(tmpDir, "knowledge")
 	idx := NewMetadataIndex()
-	t.Chdir(tmpDir)
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(tmpDir)
 
 	first, err := SmartImportSource("bundle.zip", knowledgeDir, idx, DefaultSmartImportOptions())
 	if err != nil {

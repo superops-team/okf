@@ -1019,7 +1019,7 @@ resource: code://repo/internal/shared.go
 source_path: internal/shared.go
 symbol_kind: function
 qualified_name: shared.SharedSymbol
-generated: true
+generated: {by: "okf.git", at: "2026-01-01T00:00:00Z"}
 generator: okf.git
 ---
 SharedSymbol generated concept.
@@ -1064,7 +1064,7 @@ resource: code://repo/internal/shared.go
 source_path: internal/shared.go
 symbol_kind: function
 qualified_name: shared.SharedSymbol
-generated: true
+generated: {by: "okf.git", at: "2026-01-01T00:00:00Z"}
 generator: okf.git
 ---
 SharedSymbol generated concept.
@@ -2083,7 +2083,7 @@ symbol_kind: function
 qualified_name: bench.BenchSymbolNN
 start_line: 3
 end_line: 5
-generated: true
+generated: {by: "okf.git", at: "2026-01-01T00:00:00Z"}
 generator: okf.git
 ---
 BenchQueryToken benchmark generated concept NN.

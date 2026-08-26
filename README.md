@@ -198,6 +198,68 @@ go test ./...
 go test -bench=. -benchmem ./...
 ```
 
+## OKF v0.2 Specification Support
+
+This project implements the [OKF v0.2 specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) with full backward compatibility for v0.1.
+
+### What's New in v0.2
+
+- **Provenance**: `sources` field with material references, usage counts, and credibility signals
+- **Trust**: `generated` (by/at) and `verified` (list of verification events) fields with trust tier derivation (unverified → machine-confirmed → human-reviewed)
+- **Lifecycle**: `status` (stable/draft/deprecated) and `stale_after` (YYYY-MM-DD) fields
+- **Attested Computation**: New concept type with `runtime`, `parameters`, `computation`, `executor`, and `attester` fields
+- **Reserved filenames**: `index.md` (directory listing) and `log.md` (update history)
+- **Only `type` is required**: `title` is now optional and derived from filename if missing
+
+### v0.2 Frontmatter Example
+
+```yaml
+---
+type: Attested Computation
+title: Revenue for fiscal year
+description: Total revenue computed from BigQuery
+runtime: bigquery
+computation: |
+  SELECT SUM(amount) AS revenue FROM transactions
+parameters:
+  - name: fiscal_year
+    type: string
+    required: true
+sources:
+  - id: transactions-table
+    resource: bigquery://project/dataset.transactions
+    title: Transactions Table
+    author: data-team
+    usage_count: 150
+generated:
+  by: process:etl-pipeline
+  at: 2026-01-15T10:30:00Z
+verified:
+  - by: human:finance-reviewer
+    at: 2026-02-01T00:00:00Z
+status: stable
+stale_after: 2026-12-31
+executor:
+  resource: references/skills/run-on-bq.md
+attester:
+  resource: references/attesters/sql-equality.py
+---
+# Revenue for fiscal year
+
+This concept represents the total revenue for the fiscal year...
+```
+
+### Backward Compatibility
+
+- v0.1 `timestamp` field is automatically mapped to `generated.at`
+- v0.1 body `# Citations` section is automatically extracted to `sources`
+- Legacy `generated: true` (boolean) is preserved for backward compatibility
+- All v0.1 concepts parse without errors in v0.2 mode
+
+### Official Example
+
+See [`examples/v0.2/income-statement/`](examples/v0.2/income-statement/) for the complete Appendix A income statement example from the spec.
+
 ## License
 
 Apache 2.0
