@@ -1,7 +1,5 @@
 <div align="right">
-
 [English](README.md) | [中文](README.zh-CN.md)
-
 </div>
 
 # okf — 开放知识格式 (Open Knowledge Format)
@@ -122,7 +120,7 @@ okf hook -type post-commit
 ## 模块说明
 
 | 模块 | 路径 | 功能 |
-|------|------|------|
+|--------|------|------|
 | **okf** | pkg/okf/ | 核心类型定义（Concept, KnowledgeBundle）和公共 API |
 | **parser** | pkg/parser/ | Markdown + YAML frontmatter 解析和序列化 |
 | **query** | pkg/query/ | 高级查询构建器和匹配引擎 |
@@ -144,7 +142,6 @@ timestamp: "2024-01-15T10:30:00Z"
 ---
 
 ## 用户表
-
 存储所有用户账户信息。
 ```
 
@@ -207,7 +204,5 @@ Apache 2.0
 ---
 
 <div align="center">
-
 [⬆ 返回顶部](#okf--开放知识格式-open-knowledge-format) &nbsp;•&nbsp; [🇬🇧 Switch to English](README.md)
-
 </div>

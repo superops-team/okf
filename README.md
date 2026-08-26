@@ -1,7 +1,5 @@
 <div align="right">
-
 [English](README.md) | [中文](README.zh-CN.md)
-
 </div>
 
 # okf — Open Knowledge Format
@@ -145,7 +143,6 @@ timestamp: "2024-01-15T10:30:00Z"
 ---
 
 ## Users Table
-
 Stores all user account information.
 ```
 
@@ -270,7 +267,5 @@ Apache 2.0
 ---
 
 <div align="center">
-
 [⬆ Back to Top](#okf--open-knowledge-format) &nbsp;•&nbsp; [🇨🇳 切换到中文](README.zh-CN.md)
-
 </div>
