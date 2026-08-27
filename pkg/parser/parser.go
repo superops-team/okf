@@ -438,10 +438,13 @@ func findFrontmatterEnd(data []byte) int {
 	if !bytes.HasPrefix(data, []byte("---\n")) && !bytes.HasPrefix(data, []byte("---\r\n")) {
 		return -1
 	}
-	for i := 3; i < len(data)-3; i++ {
+	for i := 3; i <= len(data)-3; i++ {
 		if data[i] == '-' && data[i+1] == '-' && data[i+2] == '-' {
 			next := i + 3
-			if next < len(data) && (data[next] == '\n' || data[next] == '\r') {
+			if next >= len(data) {
+				return i
+			}
+			if data[next] == '\n' || data[next] == '\r' {
 				return i
 			}
 		}

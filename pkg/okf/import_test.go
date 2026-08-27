@@ -153,7 +153,7 @@ func TestIsArchive(t *testing.T) {
 		{"regular file", "file.md", false},
 		{"text file", "readme.txt", false},
 		{"no extension", "noextension", false},
-		{"uppercase ZIP", "archive.ZIP", false}, // case sensitive
+		{"uppercase ZIP", "archive.ZIP", true}, // case-insensitive (user convenience)
 	}
 
 	for _, tt := range tests {
@@ -576,7 +576,7 @@ Content here
 	}
 }
 
-// TestValidateConcept_MissingTitle tests validation fails for missing title
+// TestValidateConcept_MissingTitle tests that missing title is derived from filename (v0.2 spec §4.1)
 func TestValidateConcept_MissingTitle(t *testing.T) {
 	content := `---
 type: api
@@ -586,9 +586,12 @@ description: This is missing the title field
 Content here
 `
 
-	_, err := ValidateConcept([]byte(content), "test.md")
-	if err == nil {
-		t.Error("ValidateConcept() expected error for missing title, got nil")
+	concept, err := ValidateConcept([]byte(content), "my-concept.md")
+	if err != nil {
+		t.Fatalf("ValidateConcept() unexpected error for missing title (v0.2: optional): %v", err)
+	}
+	if concept.Title != "my concept" {
+		t.Errorf("ValidateConcept() expected title derived from filename 'my concept', got %q", concept.Title)
 	}
 }
 
