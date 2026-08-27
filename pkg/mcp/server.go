@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/superops-team/okf/pkg/okf"
@@ -60,12 +61,14 @@ func loadBundleSilent(path string) (*okf.KnowledgeBundle, error) {
 }
 
 // Run starts the MCP server main loop.
+// Uses the MCP stdio transport framing: Content-Length headers (LSP-style).
+// Also accepts newline-delimited JSON for backward compatibility.
 func (s *Server) Run() error {
 	s.logger.Println("OKF MCP Server starting...")
 	s.logger.Printf("Registered tools: %d", len(s.tools.List()))
 
 	for {
-		line, err := s.reader.ReadString('\n')
+		data, err := s.readMessage()
 		if err != nil {
 			if err == io.EOF {
 				s.logger.Println("Client disconnected (EOF)")
@@ -74,15 +77,50 @@ func (s *Server) Run() error {
 			s.logger.Printf("Read error: %v", err)
 			return err
 		}
-
-		line = strings.TrimSpace(line)
-		if line == "" {
+		if len(data) == 0 {
 			continue
 		}
-
-		s.logger.Printf("Received: %s", truncate(line, 200))
-		s.handleMessage([]byte(line))
+		s.logger.Printf("Received: %s", truncate(string(data), 200))
+		s.handleMessage(data)
 	}
+}
+
+// readMessage reads one JSON-RPC message. Supports both Content-Length header
+// framing (per MCP spec) and newline-delimited JSON (for simple testing).
+func (s *Server) readMessage() ([]byte, error) {
+	line, err := s.reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	line = strings.TrimRight(line, "\r\n")
+
+	// Content-Length header framing (MCP standard)
+	if strings.HasPrefix(strings.ToLower(line), "content-length:") {
+		clStr := strings.TrimSpace(line[len("Content-Length:"):])
+		contentLen, perr := strconv.Atoi(clStr)
+		if perr != nil {
+			return nil, fmt.Errorf("invalid Content-Length: %s", clStr)
+		}
+		// Read remaining headers until empty line
+		for {
+			hdrLine, herr := s.reader.ReadString('\n')
+			if herr != nil {
+				return nil, herr
+			}
+			if strings.TrimSpace(hdrLine) == "" {
+				break
+			}
+		}
+		// Read exactly contentLen bytes
+		data := make([]byte, contentLen)
+		if _, ferr := io.ReadFull(s.reader, data); ferr != nil {
+			return nil, ferr
+		}
+		return data, nil
+	}
+
+	// Fallback: newline-delimited JSON (simple clients/testing)
+	return []byte(line), nil
 }
 
 func (s *Server) handleMessage(data []byte) {
@@ -334,9 +372,18 @@ func (s *Server) writeMessage(msg interface{}) {
 		s.logger.Printf("Failed to marshal message: %v", err)
 		return
 	}
-	data = append(data, '\n')
-	if _, err := s.writer.Write(data); err != nil {
+	// MCP stdio transport: Content-Length header framing (LSP-style)
+	var buf strings.Builder
+	buf.WriteString(fmt.Sprintf("Content-Length: %d\r\n", len(data)))
+	buf.WriteString("\r\n")
+	buf.Write(data)
+	if _, err := s.writer.Write([]byte(buf.String())); err != nil {
 		s.logger.Printf("Failed to write message: %v", err)
+		return
+	}
+	// Flush stdout to ensure message is sent promptly
+	if f, ok := s.writer.(interface{ Flush() error }); ok {
+		_ = f.Flush()
 	}
 	s.logger.Printf("Sent: %s", truncate(string(data), 200))
 }

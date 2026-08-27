@@ -227,26 +227,22 @@ func CollectFiles(path string) ([]string, error) {
 // =============================================================================
 
 // IsArchive returns true if the file is a supported archive format.
-// Detection is case-insensitive for compound extensions (.tar.gz, etc.)
-// but case-sensitive for simple extensions (.zip, .tar).
+// All extension checks are case-insensitive for user convenience.
 func IsArchive(path string) bool {
 	lower := strings.ToLower(path)
 
-	// Check for compound extensions (case-insensitive)
+	// Check for compound extensions
 	if strings.HasSuffix(lower, ".tar.gz") ||
 		strings.HasSuffix(lower, ".tar.bz2") ||
 		strings.HasSuffix(lower, ".tar.xz") {
 		return true
 	}
 
-	// Check for simple extensions (case-sensitive)
-	ext := filepath.Ext(path)
-	switch ext {
-	case ".zip", ".tar":
+	// Check for simple extensions (case-insensitive)
+	if strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".tar") {
 		return true
-	default:
-		return false
 	}
+	return false
 }
 
 // ExtractArchive extracts an archive to the destination directory and returns the list of extracted markdown files.
@@ -354,7 +350,7 @@ func extractTarGz(archivePath, destDir string) ([]string, error) {
 	reader := io.Reader(file)
 
 	// Try to detect gzip compression
-	if strings.HasSuffix(archivePath, ".gz") {
+	if strings.HasSuffix(strings.ToLower(archivePath), ".gz") {
 		gzReader, err := gzip.NewReader(file)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
@@ -522,13 +518,14 @@ func ValidateConcept(content []byte, filePath string) (*Concept, error) {
 		return nil, fmt.Errorf("invalid OKF concept: %w", err)
 	}
 
-	// Validate required fields
+	// Validate required fields (v0.2: type is the only required field; title is optional)
 	if concept.Type == "" {
 		return nil, fmt.Errorf("missing required field: type")
 	}
 
+	// v0.2: derive title from filename if missing (spec §4.1)
 	if concept.Title == "" {
-		return nil, fmt.Errorf("missing required field: title")
+		concept.Title = titleFromImportPath(filePath)
 	}
 
 	return concept, nil
@@ -549,6 +546,16 @@ func ValidateOKFMarkdownCandidateFile(filePath string) error {
 		return fmt.Errorf("read concept file: %w", err)
 	}
 	return ValidateMarkdownFrontmatter(content)
+}
+
+// titleFromImportPath derives a human-readable title from a file path (v0.2 spec §4.1).
+func titleFromImportPath(path string) string {
+	base := filepath.Base(path)
+	ext := filepath.Ext(base)
+	if ext == ".md" {
+		base = base[:len(base)-len(ext)]
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(base, "_", " "), "-", " ")
 }
 
 func ValidateMarkdownFrontmatter(content []byte) error {

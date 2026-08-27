@@ -763,7 +763,19 @@ func removeKnowledgeFile(knowledgeDir, resource string) {
 		path += ".md"
 	}
 	concept, err := parser.ParseConcept(path)
-	if err != nil || !hasTrustedGeneratedMetadata(concept.CustomFields, resource) {
+	if err != nil {
+		return
+	}
+	// Check both legacy boolean "generated" in CustomFields and v0.2 Generated struct.
+	trusted := hasTrustedGeneratedMetadata(concept.CustomFields, resource)
+	if !trusted && concept.Generated != nil {
+		if gen, ok := concept.CustomFields["generator"].(string); ok && gen == "okf.git" {
+			if sp, ok := concept.CustomFields["source_path"].(string); ok && (sp == resource || codeFileResource(sp) == resource) {
+				trusted = true
+			}
+		}
+	}
+	if !trusted {
 		return
 	}
 	_ = os.Remove(path)
@@ -787,8 +799,17 @@ func hasTrustedGeneratedMetadata(fields map[string]interface{}, sourcePath strin
 	if fields == nil {
 		return false
 	}
-	generated, ok := fields["generated"].(bool)
-	if !ok || !generated {
+	// Accept both legacy boolean form (generated: true) and v0.2 mapping form (generated: {by: ...}).
+	generatedOk := false
+	switch v := fields["generated"].(type) {
+	case bool:
+		generatedOk = v
+	case map[string]interface{}:
+		generatedOk = v != nil
+	default:
+		generatedOk = fields["generated"] != nil
+	}
+	if !generatedOk {
 		return false
 	}
 	generator, ok := fields["generator"].(string)
@@ -859,7 +880,7 @@ func SaveKnowledgeBase(bundle *okf.KnowledgeBundle, cfg *Config) (int, error) {
 			continue
 		}
 
-		content, err := parser.SerializeConcept(&parser.Concept{
+		pc := &parser.Concept{
 			Type:         concept.Type,
 			Title:        concept.Title,
 			Description:  concept.Description,
@@ -867,8 +888,51 @@ func SaveKnowledgeBase(bundle *okf.KnowledgeBundle, cfg *Config) (int, error) {
 			Tags:         concept.Tags,
 			Timestamp:    concept.Timestamp,
 			Content:      concept.Content,
+			FilePath:     concept.FilePath,
 			CustomFields: concept.CustomFields,
-		}, true)
+			Status:       string(concept.Status),
+			StaleAfter:   concept.StaleAfter,
+			Runtime:      concept.Runtime,
+			Computation:  concept.Computation,
+		}
+		if len(concept.Sources) > 0 {
+			pc.Sources = make([]parser.Source, len(concept.Sources))
+			for i, s := range concept.Sources {
+				pc.Sources[i] = parser.Source{
+					ID:           s.ID,
+					Resource:     s.Resource,
+					Title:        s.Title,
+					Author:       s.Author,
+					UsageCount:   s.UsageCount,
+					LastModified: s.LastModified,
+				}
+			}
+		}
+		if concept.UsageWindow != nil {
+			pc.UsageWindow = &parser.UsageWindow{From: concept.UsageWindow.From, To: concept.UsageWindow.To}
+		}
+		if concept.Generated != nil {
+			pc.Generated = &parser.GeneratedInfo{By: concept.Generated.By, At: concept.Generated.At}
+		}
+		if len(concept.Verified) > 0 {
+			pc.Verified = make([]parser.VerificationEvent, len(concept.Verified))
+			for i, v := range concept.Verified {
+				pc.Verified[i] = parser.VerificationEvent{By: v.By, At: v.At}
+			}
+		}
+		if len(concept.Parameters) > 0 {
+			pc.Parameters = make([]parser.Parameter, len(concept.Parameters))
+			for i, p := range concept.Parameters {
+				pc.Parameters[i] = parser.Parameter{Name: p.Name, Type: p.Type, Required: p.Required}
+			}
+		}
+		if concept.Executor != nil {
+			pc.Executor = &parser.ExecutorRef{Resource: concept.Executor.Resource, Receipt: concept.Executor.Receipt}
+		}
+		if concept.Attester != nil {
+			pc.Attester = &parser.AttesterRef{Resource: concept.Attester.Resource}
+		}
+		content, err := parser.SerializeConcept(pc, true)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("serialize %s: %v", relPath, err))
 			continue

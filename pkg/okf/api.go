@@ -46,6 +46,11 @@ func LoadBundle(path string, opts *LoadOptions) (*KnowledgeBundle, error) {
 			return nil
 		}
 
+		// Skip reserved filenames (index.md, log.md) - they are not concept documents.
+		if parser.IsReservedFilename(filePath) {
+			return nil
+		}
+
 		if opts.FilterFunc != nil && !opts.FilterFunc(filePath, info) {
 			return nil
 		}
@@ -59,6 +64,7 @@ func LoadBundle(path string, opts *LoadOptions) (*KnowledgeBundle, error) {
 
 		pc, err := parser.ParseConcept(filePath)
 		if err != nil {
+			// Skip files that fail to parse but continue walking the bundle.
 			return nil
 		}
 
