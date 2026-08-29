@@ -9,18 +9,41 @@ import os
 OKF_BIN = os.path.join(os.path.dirname(__file__), "okf-bin")
 BUNDLE_PATH = os.path.join(os.path.dirname(__file__), "docs", "knowledge")
 
+def _read_headers(proc):
+    """Read MCP headers until empty line, return Content-Length."""
+    content_length = 0
+    while True:
+        line = proc.stdout.readline()
+        if not line:
+            return None
+        line = line.strip()
+        if not line:
+            break
+        if line.lower().startswith("content-length:"):
+            try:
+                content_length = int(line.split(":", 1)[1].strip())
+            except ValueError:
+                return None
+    return content_length
+
 def send_msg(proc, msg):
-    """Send a JSON-RPC message to the MCP server."""
-    data = json.dumps(msg) + "\n"
-    proc.stdin.write(data)
+    """Send a JSON-RPC message using MCP Content-Length framing."""
+    body = json.dumps(msg)
+    header = f"Content-Length: {len(body)}\r\n\r\n"
+    proc.stdin.write(header + body)
     proc.stdin.flush()
 
 def recv_msg(proc):
-    """Receive a JSON-RPC message from the MCP server."""
-    line = proc.stdout.readline()
-    if not line:
+    """Receive a JSON-RPC message using MCP Content-Length framing."""
+    content_length = _read_headers(proc)
+    if content_length is None:
         return None
-    return json.loads(line.strip())
+    if content_length == 0:
+        return None
+    body = proc.stdout.read(content_length)
+    if not body:
+        return None
+    return json.loads(body)
 
 def rpc_call(proc, method, params=None, msg_id=1):
     """Make a JSON-RPC call and return the result."""
