@@ -64,6 +64,7 @@ Download pre-built binaries for your platform from the
 ## Features
 
 - **📁 Open Knowledge Format** — Open knowledge format based on Markdown + YAML Frontmatter
+- **📄 Document Import** — Import PDF, DOCX, XLSX, PPTX, HTML, CSV, TXT directly (pure-Go conversion, no Python/CGO); `okf add report.pdf` just works
 - **🔍 Auto-Generation** — Automatically generates knowledge base by scanning Git repository source code
 - **⚡ Incremental Updates** — Incremental updates based on Git commits
 - **🛠 Git Hook** — One-click installation, automatic knowledge base updates on every commit

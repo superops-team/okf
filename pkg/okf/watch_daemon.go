@@ -47,7 +47,7 @@ type WatchDaemon struct {
 	logger    *log.Logger
 	debounce  map[string]*time.Timer // sourcePath → timer
 	eventChan chan WatchEvent
-	stopCh  chan struct{}
+	stopCh    chan struct{}
 	wg        sync.WaitGroup
 	running   bool
 }
@@ -83,7 +83,7 @@ func NewWatchDaemon(cfg *WatchConfig) (*WatchDaemon, error) {
 		logger:    log.New(os.Stderr, "[okf-watch] ", log.LstdFlags),
 		debounce:  make(map[string]*time.Timer),
 		eventChan: make(chan WatchEvent, 64),
-		stopCh:   make(chan struct{}),
+		stopCh:    make(chan struct{}),
 	}, nil
 }
 

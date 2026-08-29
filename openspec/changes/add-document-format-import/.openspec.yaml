@@ -1,0 +1,24 @@
+id: add-document-format-import
+name: Document Format Import
+description: Add rich document format support (PDF, DOCX, XLSX, PPTX, HTML, CSV, TXT) to the OKF knowledge base import pipeline via a pure-Go conversion layer (downmark)
+author: okf-team
+version: 1.1.0
+status: proposed
+created_at: "2026-08-29"
+updated_at: "2026-08-28"
+related_changes:
+  - add-file-import-support
+  - smart-import-daemon
+  - okf-mcp-server
+specs:
+  - specs/document-format-import/spec.md
+requires:
+  - okf >= 1.2.0
+  - go >= 1.26.0
+impacts:
+  - go.mod: upgrade Go version to 1.26 and add downmark dependency (pinned)
+  - pkg/convert: new package for unified document-to-markdown conversion
+  - cmd/okf/cmd_add.go: add convertAndStageDocuments pre-stage; feed staging dir to existing SmartImportSource (core pipeline unchanged)
+  - pkg/mcp/tools.go: add okf_import_document tool
+  - tests: add pkg/convert tests (fixtures + golden), cmd_add integration tests, MCP integration tests
+  - docs: README/CLI help/knowledge docs for new formats and behavior change

@@ -165,8 +165,8 @@ func TestMatchGlobStar_DirectMatch(t *testing.T) {
 		{"*.md", "article.md", true},
 		{"*.md", "article.txt", false},
 		{"a?.md", "a1.md", true},
-		{"a?.md", "ab.md", true},  // ? 匹配 'b'
-		{"a?.md", "a.md", false},  // ? 必须匹配一个字符
+		{"a?.md", "ab.md", true}, // ? 匹配 'b'
+		{"a?.md", "a.md", false}, // ? 必须匹配一个字符
 		{"[abc].md", "a.md", true},
 		{"[abc].md", "d.md", false},
 	}

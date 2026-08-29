@@ -114,8 +114,8 @@ func TestMetadataIndex_AddAndGet(t *testing.T) {
 	index := NewMetadataIndex()
 
 	meta := &FileMetadata{
-		SourcePath: "/source/docs/api.md",
-		TargetPath: "api/docs.md",
+		SourcePath:  "/source/docs/api.md",
+		TargetPath:  "api/docs.md",
 		ContentHash: "abc123",
 	}
 
@@ -145,14 +145,14 @@ func TestMetadataIndex_AddDuplicateTarget(t *testing.T) {
 	index := NewMetadataIndex()
 
 	meta1 := &FileMetadata{
-		SourcePath: "/source/docs/api.md",
-		TargetPath: "api/docs.md",
+		SourcePath:  "/source/docs/api.md",
+		TargetPath:  "api/docs.md",
 		ContentHash: "abc123",
 	}
 
 	meta2 := &FileMetadata{
-		SourcePath: "/other/docs/api.md",
-		TargetPath: "api/docs.md",
+		SourcePath:  "/other/docs/api.md",
+		TargetPath:  "api/docs.md",
 		ContentHash: "def456",
 	}
 
@@ -171,20 +171,20 @@ func TestMetadataIndex_Update(t *testing.T) {
 	index := NewMetadataIndex()
 
 	meta := &FileMetadata{
-		SourcePath: "/source/docs/api.md",
-		TargetPath: "api/docs.md",
+		SourcePath:  "/source/docs/api.md",
+		TargetPath:  "api/docs.md",
 		ContentHash: "abc123",
-		FileSize: 100,
+		FileSize:    100,
 	}
 
 	index.Add(meta)
 
 	// Update with new hash
 	updatedMeta := &FileMetadata{
-		SourcePath: "/source/docs/api.md",
-		TargetPath: "api/docs.md",
+		SourcePath:  "/source/docs/api.md",
+		TargetPath:  "api/docs.md",
 		ContentHash: "def456",
-		FileSize: 200,
+		FileSize:    200,
 	}
 
 	err := index.Update(updatedMeta)
@@ -205,8 +205,8 @@ func TestMetadataIndex_Delete(t *testing.T) {
 	index := NewMetadataIndex()
 
 	meta := &FileMetadata{
-		SourcePath: "/source/docs/api.md",
-		TargetPath: "api/docs.md",
+		SourcePath:  "/source/docs/api.md",
+		TargetPath:  "api/docs.md",
 		ContentHash: "abc123",
 	}
 
@@ -238,23 +238,23 @@ func TestMetadataIndex_SaveAndLoad(t *testing.T) {
 	index := NewMetadataIndex()
 
 	meta1 := &FileMetadata{
-		SourcePath: "/source/docs/api.md",
-		TargetPath: "api/docs.md",
-		ContentHash: "abc123",
+		SourcePath:   "/source/docs/api.md",
+		TargetPath:   "api/docs.md",
+		ContentHash:  "abc123",
 		LastModified: time.Now(),
 		LastImported: time.Now(),
-		FileSize: 100,
-		Strategy: "overwrite",
+		FileSize:     100,
+		Strategy:     "overwrite",
 	}
 
 	meta2 := &FileMetadata{
-		SourcePath: "/source/docs/concept.md",
-		TargetPath: "concepts/design.md",
-		ContentHash: "def456",
+		SourcePath:   "/source/docs/concept.md",
+		TargetPath:   "concepts/design.md",
+		ContentHash:  "def456",
 		LastModified: time.Now(),
 		LastImported: time.Now(),
-		FileSize: 200,
-		Strategy: "merge",
+		FileSize:     200,
+		Strategy:     "merge",
 	}
 
 	index.Add(meta1)
@@ -337,8 +337,8 @@ func TestMetadataIndex_SaveCreatesDir(t *testing.T) {
 
 	index := NewMetadataIndex()
 	meta := &FileMetadata{
-		SourcePath: "/source/api.md",
-		TargetPath: "api.md",
+		SourcePath:  "/source/api.md",
+		TargetPath:  "api.md",
 		ContentHash: "hash",
 	}
 	index.Add(meta)
@@ -374,11 +374,11 @@ func TestDetectChanges_FastPath_NoChange(t *testing.T) {
 	// Create index with matching metadata
 	index := NewMetadataIndex()
 	meta := &FileMetadata{
-		SourcePath: source,
-		TargetPath: "api.md",
-		ContentHash: hash,
+		SourcePath:   source,
+		TargetPath:   "api.md",
+		ContentHash:  hash,
 		LastModified: info.ModTime(),
-		FileSize: info.Size(),
+		FileSize:     info.Size(),
 	}
 	index.Add(meta)
 
@@ -402,11 +402,11 @@ func TestDetectChanges_SlowPath_ContentChanged(t *testing.T) {
 	// Add to index
 	index := NewMetadataIndex()
 	meta := &FileMetadata{
-		SourcePath: source,
-		TargetPath: "api.md",
-		ContentHash: hash,
+		SourcePath:   source,
+		TargetPath:   "api.md",
+		ContentHash:  hash,
 		LastModified: info.ModTime(),
-		FileSize: info.Size(),
+		FileSize:     info.Size(),
 	}
 	index.Add(meta)
 
@@ -434,11 +434,11 @@ func TestDetectChanges_SlowPath_MetaChangedOnly(t *testing.T) {
 
 	index := NewMetadataIndex()
 	meta := &FileMetadata{
-		SourcePath: source,
-		TargetPath: "api.md",
-		ContentHash: hash,
+		SourcePath:   source,
+		TargetPath:   "api.md",
+		ContentHash:  hash,
 		LastModified: info.ModTime(),
-		FileSize: info.Size(),
+		FileSize:     info.Size(),
 	}
 	index.Add(meta)
 
@@ -482,8 +482,8 @@ func TestDetectChanges_SourceMissing(t *testing.T) {
 
 	// Add record for non-existent file
 	meta := &FileMetadata{
-		SourcePath: "/non/existent/file.md",
-		TargetPath: "file.md",
+		SourcePath:  "/non/existent/file.md",
+		TargetPath:  "file.md",
 		ContentHash: "abc123",
 	}
 	index.Add(meta)

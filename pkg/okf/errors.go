@@ -32,8 +32,8 @@ func (e *ParseError) Unwrap() error {
 func NewParseError(filePath string, line int, msg string) *ParseError {
 	return &ParseError{
 		FilePath: filePath,
-		Line:    line,
-		Message: msg,
+		Line:     line,
+		Message:  msg,
 	}
 }
 

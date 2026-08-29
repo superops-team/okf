@@ -527,15 +527,6 @@ func writeCountSection(content *strings.Builder, title string, counts map[string
 	fmt.Fprintf(content, "\n")
 }
 
-func isCodeGeneratedConcept(concept *okf.Concept) bool {
-	if concept == nil {
-		return false
-	}
-	return strings.HasPrefix(concept.Type, "code_") ||
-		concept.Resource == codeRepositoryResource ||
-		concept.Resource == codeRelationsResource
-}
-
 func isCodeDerivedConcept(concept *okf.Concept) bool {
 	if concept == nil {
 		return false

@@ -1,11 +1,15 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/superops-team/okf/pkg/convert"
 	"github.com/superops-team/okf/pkg/lint"
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/parser"
@@ -190,6 +194,28 @@ func (r *ToolRegistry) registerCoreTools() {
 			"required": []string{"path"},
 		},
 	}, r.handleLintConcept)
+	r.Register(Tool{
+		Name:        "okf_import_document",
+		Description: "Import a document (PDF/DOCX/XLSX/PPTX/HTML/CSV/TXT) into the loaded bundle by converting it to Markdown",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "Absolute path to the document to import",
+				},
+				"title": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional title override (defaults to the document extracted title or filename)",
+				},
+				"type": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional concept type (default: source)",
+				},
+			},
+			"required": []string{"path"},
+		},
+	}, r.handleImportDocument)
 }
 
 // --- Handlers ---
@@ -461,6 +487,59 @@ func (r *ToolRegistry) handleLintConcept(args map[string]interface{}) (*ToolCall
 	}
 
 	return errorResult(fmt.Sprintf("Concept not found: %s", path)), nil
+}
+
+// handleImportDocument converts a document and writes it into the loaded
+// bundle root as <original>.md, then refreshes the bundle.
+func (r *ToolRegistry) handleImportDocument(args map[string]interface{}) (*ToolCallResult, error) {
+	_, bundlePath := r.GetBundle()
+	if bundlePath == "" {
+		return errorResult("No bundle loaded. Call okf_load_bundle first."), nil
+	}
+	path, _ := args["path"].(string)
+	if path == "" {
+		return errorResult("path is required"), nil
+	}
+	titleOverride, _ := args["title"].(string)
+	typeOverride, _ := args["type"].(string)
+
+	res, err := convert.ConvertToMarkdown(context.Background(), path, nil)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to convert document: %v", err)), nil
+	}
+	title := res.Title
+	if titleOverride != "" {
+		title = titleOverride
+	}
+	if title == "" {
+		title = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	}
+	ctype := "source"
+	if typeOverride != "" {
+		ctype = typeOverride
+	}
+	body := convert.WrapConcept(title, filepath.Base(path), convert.DocumentType(path), ctype, res.Markdown)
+	out := filepath.Join(bundlePath, filepath.Base(path)+".md")
+	if err := os.WriteFile(out, []byte(body), 0o644); err != nil {
+		return errorResult(fmt.Sprintf("Failed to write concept: %v", err)), nil
+	}
+	// Refresh the bundle so subsequent tools see the new concept.
+	if bundle, lerr := okf.LoadBundle(bundlePath, &okf.LoadOptions{Recursive: true}); lerr == nil {
+		r.SetBundle(bundle, bundlePath)
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Imported document -> %s\n", out))
+	sb.WriteString(fmt.Sprintf("Title: %s\n", title))
+	sb.WriteString(fmt.Sprintf("Type: %s\n", ctype))
+	if len(res.Warnings) > 0 {
+		sb.WriteString(fmt.Sprintf("Warnings: %d\n", len(res.Warnings)))
+		for _, w := range res.Warnings {
+			sb.WriteString(fmt.Sprintf("  - %s\n", w))
+		}
+	} else {
+		sb.WriteString("Warnings: 0\n")
+	}
+	return &ToolCallResult{Content: []ContentItem{TextContent(sb.String())}}, nil
 }
 
 // --- Helpers ---

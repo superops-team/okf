@@ -192,6 +192,26 @@ def main():
         result = rpc_call(proc, "ping", msg_id=11)
         assert "result" in result, f"ping failed: {result}"
         print("  ✓ Ping successful")
+        # Test 12: okf_import_document (document conversion import)
+        print("\n[Test 12] tools/call okf_import_document")
+        doc_fixture = os.path.join(os.path.dirname(__file__), "pkg", "convert", "testdata", "sample.docx")
+        imported_prod = os.path.join(BUNDLE_PATH, "sample.docx.md")
+        if os.path.exists(imported_prod):
+            os.remove(imported_prod)  # ensure clean start
+        result = rpc_call(proc, "tools/call", {
+            "name": "okf_import_document",
+            "arguments": {"path": doc_fixture}
+        }, msg_id=12)
+        assert "result" in result, f"okf_import_document failed: {result}"
+        content = result["result"]["content"][0]["text"]
+        print(f"  ✓ Response:\n{content}")
+        assert "Imported document" in content, "Unexpected import response"
+        assert os.path.exists(imported_prod), "Imported product file missing"
+        with open(imported_prod, "r", encoding="utf-8") as f:
+            body = f.read()
+        assert "OKF DOCX Fixture" in body, "Imported content missing converted text"
+        os.remove(imported_prod)  # clean up so the repo stays untouched
+        print("  ✓ Import verified and cleaned up")
 
         print("\n" + "=" * 60)
         print("ALL TESTS PASSED!")

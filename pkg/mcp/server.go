@@ -16,10 +16,10 @@ import (
 
 // Server is an MCP server that communicates over stdio.
 type Server struct {
-	tools    *ToolRegistry
-	reader   *bufio.Reader
-	writer   io.Writer
-	logger   *log.Logger
+	tools  *ToolRegistry
+	reader *bufio.Reader
+	writer io.Writer
+	logger *log.Logger
 }
 
 // ServerConfig holds configuration for the MCP server.

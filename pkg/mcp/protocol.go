@@ -66,10 +66,10 @@ type ImplementationInfo struct {
 
 // InitializeResult is the result of the initialize request.
 type InitializeResult struct {
-	ProtocolVersion string                 `json:"protocolVersion"`
-	Capabilities    ServerCapabilities     `json:"capabilities"`
-	ServerInfo      ImplementationInfo     `json:"serverInfo"`
-	Instructions    string                 `json:"instructions,omitempty"`
+	ProtocolVersion string             `json:"protocolVersion"`
+	Capabilities    ServerCapabilities `json:"capabilities"`
+	ServerInfo      ImplementationInfo `json:"serverInfo"`
+	Instructions    string             `json:"instructions,omitempty"`
 }
 
 // ServerCapabilities describes the server's capabilities.

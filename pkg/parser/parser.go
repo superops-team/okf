@@ -15,25 +15,25 @@ import (
 // v0.2: extended with provenance, trust, lifecycle, and attested computation fields.
 type Concept struct {
 	// v0.1 fields
-	Type         string
-	Title        string
-	Description  string
-	Resource     string
-	Tags         []string
-	Timestamp    string // legacy v0.1
+	Type        string
+	Title       string
+	Description string
+	Resource    string
+	Tags        []string
+	Timestamp   string // legacy v0.1
 
 	// v0.2 fields
-	Sources      []Source
-	UsageWindow  *UsageWindow
-	Generated    *GeneratedInfo
-	Verified     []VerificationEvent
-	Status       string
-	StaleAfter   string
-	Runtime      string
-	Parameters   []Parameter
-	Computation  string
-	Executor     *ExecutorRef
-	Attester     *AttesterRef
+	Sources     []Source
+	UsageWindow *UsageWindow
+	Generated   *GeneratedInfo
+	Verified    []VerificationEvent
+	Status      string
+	StaleAfter  string
+	Runtime     string
+	Parameters  []Parameter
+	Computation string
+	Executor    *ExecutorRef
+	Attester    *AttesterRef
 
 	// internal
 	Content      string
@@ -406,27 +406,27 @@ func (e *ParseError) Error() string {
 // v0.2: extended with all v0.2 fields. Verified uses yaml.Node for flexible list/mapping parsing.
 type frontmatter struct {
 	// v0.1
-	Type         string                 `yaml:"type"`
-	Title        string                 `yaml:"title,omitempty"`
-	Description  string                 `yaml:"description,omitempty"`
-	Resource     string                 `yaml:"resource,omitempty"`
-	Tags         []string               `yaml:"tags,omitempty"`
-	Timestamp    string                 `yaml:"timestamp,omitempty"`
+	Type        string   `yaml:"type"`
+	Title       string   `yaml:"title,omitempty"`
+	Description string   `yaml:"description,omitempty"`
+	Resource    string   `yaml:"resource,omitempty"`
+	Tags        []string `yaml:"tags,omitempty"`
+	Timestamp   string   `yaml:"timestamp,omitempty"`
 
 	// v0.2 provenance / trust / lifecycle
-	Sources      []Source               `yaml:"sources,omitempty"`
-	UsageWindow  *UsageWindow           `yaml:"usage_window,omitempty"`
-	Generated    interface{}            `yaml:"generated,omitempty"`
-	Verified     interface{}            `yaml:"verified,omitempty"`
-	Status       string                 `yaml:"status,omitempty"`
-	StaleAfter   string                 `yaml:"stale_after,omitempty"`
+	Sources     []Source     `yaml:"sources,omitempty"`
+	UsageWindow *UsageWindow `yaml:"usage_window,omitempty"`
+	Generated   interface{}  `yaml:"generated,omitempty"`
+	Verified    interface{}  `yaml:"verified,omitempty"`
+	Status      string       `yaml:"status,omitempty"`
+	StaleAfter  string       `yaml:"stale_after,omitempty"`
 
 	// v0.2 Attested Computation
-	Runtime      string                 `yaml:"runtime,omitempty"`
-	Parameters   []Parameter            `yaml:"parameters,omitempty"`
-	Computation  string                 `yaml:"computation,omitempty"`
-	Executor     *ExecutorRef           `yaml:"executor,omitempty"`
-	Attester     *AttesterRef           `yaml:"attester,omitempty"`
+	Runtime     string       `yaml:"runtime,omitempty"`
+	Parameters  []Parameter  `yaml:"parameters,omitempty"`
+	Computation string       `yaml:"computation,omitempty"`
+	Executor    *ExecutorRef `yaml:"executor,omitempty"`
+	Attester    *AttesterRef `yaml:"attester,omitempty"`
 
 	CustomFields map[string]interface{} `yaml:",inline"`
 }
