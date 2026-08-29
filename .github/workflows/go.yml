@@ -12,9 +12,9 @@ jobs:
   gauntlet:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: '1.26.x'  # project go.mod requires go 1.26 (downmark v0.10.0)
     - name: Install staticcheck

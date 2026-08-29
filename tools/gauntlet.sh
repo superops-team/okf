@@ -56,7 +56,7 @@ step "L5 suite health: go test -shuffle=on ./..."
 "$GO" test -shuffle=on ./...
 
 step "L9 mutation: tools/mutants.sh"
-tools/mutants.sh
+bash tools/mutants.sh
 
 step "L10 real execution: CLI import + search smoke"
 BIN="$WORK/okf"
