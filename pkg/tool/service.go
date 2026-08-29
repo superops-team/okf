@@ -1661,15 +1661,6 @@ func indexConceptsByPath(concepts []*okf.Concept) map[string]*okf.Concept {
 	return indexed
 }
 
-func omissionForHit(hit QueryHit, reason string, count int) ContextOmission {
-	return ContextOmission{
-		Reason:     reason,
-		Title:      hit.Title,
-		SourcePath: hit.SourcePath,
-		Count:      count,
-	}
-}
-
 func formatLocation(sourcePath string, startLine, endLine int) string {
 	if sourcePath == "" {
 		return ""

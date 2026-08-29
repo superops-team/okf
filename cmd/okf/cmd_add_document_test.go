@@ -1,7 +1,9 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"io"
 	"os"
 	"path/filepath"
@@ -377,5 +379,102 @@ func TestCmdAddAllConversionFailed(t *testing.T) {
 	entries, _ := os.ReadDir(kb)
 	if len(entries) != 0 {
 		t.Errorf("knowledge base should stay empty, got %v", entries)
+	}
+}
+
+// --- extractTarFull: success (gzip/bzip2) + rejection branches ---
+
+func buildTestTar(t *testing.T, path string, gz bool, files map[string]string) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var w io.Writer = f
+	if gz {
+		gw := gzip.NewWriter(f)
+		defer gw.Close()
+		w = gw
+	}
+	tw := tar.NewWriter(w)
+	defer tw.Close()
+	for name, content := range files {
+		hdr := &tar.Header{Name: name, Mode: 0o644, Size: int64(len(content))}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestExtractTarFull_GzipSuccess(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "bundle.tar.gz")
+	buildTestTar(t, archive, true, map[string]string{"a.txt": "hello"})
+	dest := filepath.Join(dir, "out")
+	if err := extractTarFull(archive, dest, false); err != nil {
+		t.Fatalf("extractTarFull(gzip) = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dest, "a.txt"))
+	if err != nil {
+		t.Fatalf("extracted file missing: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Errorf("content = %q, want hello", data)
+	}
+}
+
+func TestExtractTarFull_SymlinkRejected(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "bundle.tar")
+	// build a tar holding a regular file plus a symlink entry in one stream
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(f)
+	if err := tw.WriteHeader(&tar.Header{Name: "a.txt", Mode: 0o644, Size: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "a.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := extractTarFull(archive, filepath.Join(dir, "out"), false); err == nil {
+		t.Error("expected symlink rejection, got nil")
+	} else if !strings.Contains(err.Error(), "link entry rejected") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestExtractTarFull_SizeLimit(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "bundle.tar")
+	big := strings.Repeat("x", okf.MaxFileSize+1)
+	buildTestTar(t, archive, false, map[string]string{"big.txt": big})
+	if err := extractTarFull(archive, filepath.Join(dir, "out"), false); err == nil {
+		t.Error("expected size-limit rejection, got nil")
+	} else if !strings.Contains(err.Error(), "size limit") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestExtractTarFull_PathTraversalRejected(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "bundle.tar")
+	buildTestTar(t, archive, false, map[string]string{"../evil.txt": "x"})
+	if err := extractTarFull(archive, filepath.Join(dir, "out"), false); err == nil {
+		t.Error("expected path-traversal rejection, got nil")
+	} else if !strings.Contains(err.Error(), "escapes destination") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

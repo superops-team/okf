@@ -201,11 +201,12 @@ func (r *WatchRule) MatchFilename(filename string) bool {
 // 语义：** 匹配任意层级目录（包括零层级）
 // 其他通配符（* ? [abc]）只在单个目录段内匹配
 // 示例：
-//   **/*.md    → a.md, docs/a.md, x/y/a.md
-//   *.md       → a.md, docs.md（但不匹配 docs/a.md）
-//   docs/**    → docs/a.md, docs/sub/a.md（docs 必须是第一个 segment）
-//   docs/**/*.md → docs/a.md, docs/sub/a.md
-//   a?.md      → a1.md, ab.md, ax.md（a 后跟单个字符 + .md）
+//
+//	**/*.md    → a.md, docs/a.md, x/y/a.md
+//	*.md       → a.md, docs.md（但不匹配 docs/a.md）
+//	docs/**    → docs/a.md, docs/sub/a.md（docs 必须是第一个 segment）
+//	docs/**/*.md → docs/a.md, docs/sub/a.md
+//	a?.md      → a1.md, ab.md, ax.md（a 后跟单个字符 + .md）
 func matchGlobStar(pattern, path string) bool {
 	pattern = filepath.ToSlash(pattern)
 	path = filepath.ToSlash(path)

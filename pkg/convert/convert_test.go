@@ -272,3 +272,23 @@ func TestConvertedOutputParsableByOKF(t *testing.T) {
 func strconvQuote(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }
+
+// --- WrapConcept frontmatter is single-sourced and honors ctype ---
+func TestWrapConcept(t *testing.T) {
+	body := WrapConcept("My Title", "a.pdf", "pdf", "reference", "## body")
+	for _, want := range []string{"type: reference", `title: "My Title"`, "Converted from a.pdf (via pdf)", "## body"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("WrapConcept missing %q; got:\n%s", want, body)
+		}
+	}
+	// the type parameter must be honored (not hard-coded to source)
+	alt := WrapConcept("T", "b.docx", "docx", "note", "x")
+	if !strings.Contains(alt, "type: note") {
+		t.Errorf("WrapConcept should honor ctype=note; got:\n%s", alt)
+	}
+	// a converted WrapConcept output must be parseable by the OKF parser
+	doc := WrapConcept("Spec Title", "c.csv", "csv", "source", "row1")
+	if _, err := parser.ParseConceptBytes("c.csv.md", []byte(doc)); err != nil {
+		t.Errorf("WrapConcept output not parseable: %v", err)
+	}
+}

@@ -79,7 +79,6 @@ func SmartImportSource(srcPath, knowledgeDir string, idx *MetadataIndex, opts *S
 
 	root := srcPath
 	archiveSourcePrefix := ""
-	cleanup := func() {}
 	if IsArchive(srcPath) {
 		canonicalArchivePath, err := canonicalArchiveSourcePath(srcPath)
 		if err != nil {
@@ -89,8 +88,7 @@ func SmartImportSource(srcPath, knowledgeDir string, idx *MetadataIndex, opts *S
 		if err != nil {
 			return nil, fmt.Errorf("create temp extraction dir: %w", err)
 		}
-		cleanup = func() { _ = os.RemoveAll(tmpDir) }
-		defer cleanup()
+		defer func() { _ = os.RemoveAll(tmpDir) }()
 		if _, err := ExtractArchive(srcPath, tmpDir); err != nil {
 			return nil, err
 		}
@@ -498,7 +496,7 @@ func validateTarEntry(header *tar.Header) error {
 	if header.Typeflag == tar.TypeLink {
 		return fmt.Errorf("hardlink entry rejected: %s", header.Name)
 	}
-	if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA && header.Typeflag != tar.TypeDir {
+	if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeDir {
 		return fmt.Errorf("special file entry rejected: %s", header.Name)
 	}
 	if header.Size > MaxFileSize {

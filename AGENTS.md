@@ -7,12 +7,13 @@ okf 是 Go 实现的 OKF（Open Knowledge Format）v0.2 知识库工具链，包
 ## 常用命令
 
 - 构建：`go build ./...`
-- 静态检查：`go vet ./...`
-- 全量测试：`go test ./...`
+- 静态检查：`go vet ./...`、`staticcheck ./...`
+- 全量测试：`go test ./...`、并发检测 `go test ./... -race`、随机序 `go test -shuffle=on ./...`
 - 单测：`go test ./pkg/convert -run TestConvertPDF -v`
 - 知识库校验：`okf lint`（`docs/knowledge` 应 0 errors）
 - MCP 端到端：`python3 test_mcp.py`
 - 环境硬约束：Go `1.26.0`（`toolchain go1.26.7`）；文档转换依赖 downmark **v0.10.0 精确锁定**（go.mod 非浮动）
+- **约束栈总入口（合入前置门槛）**：`tools/gauntlet.sh`（build/vet/gofmt/staticcheck/test -race/覆盖率≥60%/shuffle/变异 4-4/真实执行，fail-on-first）
 
 ## 开发工作流（SDD → TDD → 覆盖 → 一致性）
 
@@ -45,6 +46,22 @@ okf 是 Go 实现的 OKF（Open Knowledge Format）v0.2 知识库工具链，包
 17. **全需求接线与覆盖测试**：每个需求必须有实现函数/入口 + 对应测试；**没有接线和测试的开发不算完成**
 18. **排期仅表依赖**：不得只开发 P0 就宣称完成；全量落地、全测试绿、一致性对照通过才算完成
 19. **spec-实现一致性对照**：落地后逐条核对 spec Scenario 与实现/测试，输出 `conformance.md`；`partial`/`gap` 必须给出原因与后续任务
+
+## GAUNTLET 约束栈（合入前置门槛，见 `tools/gauntlet.sh`）
+所有变更合入前必须通过完整约束栈（一条命令 `tools/gauntlet.sh`，fail-on-first）：
+- **L1 类型**：`go build ./...`
+- **L2 静态检查**：`go vet ./...` + `gofmt -l`（仅跟踪文件，须空）+ `staticcheck ./...`（零告警）
+- **L3 并发**：`go test ./... -race`（零数据竞争）
+- **L4 覆盖**：`go test -coverpkg=./... ./...`，全仓语句覆盖 **≥60%**（`COVER_THRESHOLD` 可调），低于阈值即失败
+- **L5 套件健康**：`go test -shuffle=on ./...`（无顺序依赖/flaky）
+- **L9 变异**：`tools/mutants.sh` 对 `pkg/convert` 核心逻辑注入 4 个缺陷，**4/4 必须被测试杀死**（手动变异；Go 无成熟默认工具）
+- **L10 真实执行**：CLI 导入测试文档 + 检索（banana→xlsx、Section One→docx）+ lint 冒烟
+## 并发与锁规范
+- `KnowledgeBundle` 方法（AddConcept/RemoveConcept/GetConcept/FilterConcepts/Stats 等）**线程安全**（内部 `RWMutex`）；`FilterXxx`/`Search` 等委托 `FilterConcepts` 获得读锁，**不得**在已加锁方法内再叠加锁
+- 并发改动必须经 `go test -race` 验证；测试并发场景不得共享可变配置（每 goroutine 独立副本）
+## 属性测试（无新依赖）
+- 纯函数/序列化不变量用标准库 `testing/quick`（不引入 rapid 等第三方依赖）：`equalFold` 与 `strings.EqualFold` 一致、`sanitizeFilename` 安全且幂等、`WrapConcept` frontmatter 任意标题 round-trip
+- 新增文档格式/解析/序列化逻辑时，应配套等价属性测试
 
 ## 关键架构约束
 

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -298,6 +299,9 @@ type KnowledgeBundle struct {
 	Concepts []*Concept `yaml:"concepts,omitempty" json:"concepts,omitempty"`
 	// RootPath is the filesystem path to the bundle root.
 	RootPath string `yaml:"-" json:"rootPath,omitempty"`
+	// mu guards concurrent access to Concepts (bundle methods are safe for
+	// concurrent use; direct field mutation by callers is not).
+	mu sync.RWMutex
 }
 
 // LoadOptions contains configuration for loading bundles.
@@ -355,6 +359,8 @@ func NewBundle(name string) *KnowledgeBundle {
 
 // AddConcept adds a concept to the bundle and returns the concept.
 func (b *KnowledgeBundle) AddConcept(c *Concept) *Concept {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if c.FilePath == "" {
 		filename := sanitizeFilename(c.Title) + ".md"
 		if c.Type != "" {
@@ -370,6 +376,8 @@ func (b *KnowledgeBundle) AddConcept(c *Concept) *Concept {
 // RemoveConcept removes a concept from the bundle by title.
 // Returns true if the concept was found and removed.
 func (b *KnowledgeBundle) RemoveConcept(title string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	for i, c := range b.Concepts {
 		if c == nil {
 			continue
@@ -384,6 +392,8 @@ func (b *KnowledgeBundle) RemoveConcept(title string) bool {
 
 // GetConcept returns a concept by title, or nil if not found.
 func (b *KnowledgeBundle) GetConcept(title string) *Concept {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	for _, c := range b.Concepts {
 		if c == nil {
 			continue
@@ -397,6 +407,8 @@ func (b *KnowledgeBundle) GetConcept(title string) *Concept {
 
 // FilterConcepts returns all concepts matching the given predicate.
 func (b *KnowledgeBundle) FilterConcepts(pred func(*Concept) bool) []*Concept {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	var result []*Concept
 	for _, c := range b.Concepts {
 		if c == nil {
@@ -524,10 +536,12 @@ func (b *KnowledgeBundle) Search(query string) []*Concept {
 
 // Stats returns statistics about the bundle, including v0.2 trust tier and status counts.
 func (b *KnowledgeBundle) Stats() BundleStats {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	stats := BundleStats{
-		TotalConcepts:  len(b.Concepts),
-		TypeCounts:     make(map[string]int),
-		TagCounts:      make(map[string]int),
+		TotalConcepts:   len(b.Concepts),
+		TypeCounts:      make(map[string]int),
+		TagCounts:       make(map[string]int),
 		TrustTierCounts: make(map[TrustTier]int),
 		StatusCounts:    make(map[ConceptStatus]int),
 	}
@@ -565,16 +579,16 @@ func (b *KnowledgeBundle) Stats() BundleStats {
 
 // BundleStats contains aggregate information about a bundle, including v0.2 dimensions.
 type BundleStats struct {
-	TotalConcepts           int               `json:"totalConcepts"`
-	UniqueTypes             int               `json:"uniqueTypes"`
-	UniqueTags              int               `json:"uniqueTags"`
-	TypeCounts              map[string]int    `json:"typeCounts"`
-	TagCounts               map[string]int    `json:"tagCounts"`
+	TotalConcepts int            `json:"totalConcepts"`
+	UniqueTypes   int            `json:"uniqueTypes"`
+	UniqueTags    int            `json:"uniqueTags"`
+	TypeCounts    map[string]int `json:"typeCounts"`
+	TagCounts     map[string]int `json:"tagCounts"`
 	// v0.2 additions
-	TrustTierCounts         map[TrustTier]int    `json:"trustTierCounts"`
-	StatusCounts            map[ConceptStatus]int `json:"statusCounts"`
-	StaleCount              int                   `json:"staleCount"`
-	AttestedComputationCount int                  `json:"attestedComputationCount"`
+	TrustTierCounts          map[TrustTier]int     `json:"trustTierCounts"`
+	StatusCounts             map[ConceptStatus]int `json:"statusCounts"`
+	StaleCount               int                   `json:"staleCount"`
+	AttestedComputationCount int                   `json:"attestedComputationCount"`
 }
 
 // RelatedConcepts finds concepts that share tags or resources with the given concept.

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	okf "github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/git"
 	"github.com/superops-team/okf/pkg/lint"
+	okf "github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/parser"
 	"github.com/superops-team/okf/pkg/query"
 )
@@ -564,10 +564,11 @@ func TestStressGitConcurrentGeneration(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
+		cfgCopy := *cfg // GenerateBundle mutates RepoPath/Author/Email on the config; give each goroutine its own copy
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			bundle, err := git.GenerateBundle(cfg, true)
+			bundle, err := git.GenerateBundle(&cfgCopy, true)
 			results <- struct {
 				concepts int
 				duration time.Duration

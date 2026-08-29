@@ -41,7 +41,7 @@ func TestReleaseNotesDeclaresReimport(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if !strings.Contains(text, "re-import") && !strings.Contains(text, "re-import") {
+	if !strings.Contains(text, "re-import") && !strings.Contains(text, "Re-import") {
 		t.Errorf("Release Notes must declare re-import semantics on downmark upgrade")
 	}
 	if !strings.Contains(text, "downmark v0.10.0") && !strings.Contains(text, "pinned") {

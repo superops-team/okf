@@ -106,8 +106,8 @@ func TestMetadataIndex_SourceExists_PersistedAsJSON(t *testing.T) {
 
 func TestMigrateIndex_AlreadyCurrentVersion(t *testing.T) {
 	idx := &MetadataIndex{
-		Version: MetadataVersion,
-		Files:   make(map[string]*FileMetadata),
+		Version:  MetadataVersion,
+		Files:    make(map[string]*FileMetadata),
 		BySource: make(map[string]string),
 	}
 
