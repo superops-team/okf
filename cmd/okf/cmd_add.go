@@ -1,12 +1,21 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/bzip2"
+	"compress/gzip"
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/superops-team/okf/pkg/convert"
 	okf "github.com/superops-team/okf/pkg/okf"
 )
 
@@ -20,7 +29,8 @@ import (
 // To allow flexibility, we pre-scan args and reorder them so all recognized
 // flags come first, preserving the original flag values (so both of these
 // work):
-//   okf add -dir=./kb file.md     OR   okf add file.md -dir=./kb
+//
+//	okf add -dir=./kb file.md     OR   okf add file.md -dir=./kb
 func cmdAdd(args []string) int {
 	flags := flag.NewFlagSet("add", flag.ContinueOnError)
 	flags.Usage = func() {
@@ -28,6 +38,7 @@ func cmdAdd(args []string) int {
 		fmt.Println("")
 		fmt.Println("Import files, directories, or archives into the knowledge base.")
 		fmt.Println("Supports smart change detection and multiple merge strategies.")
+		fmt.Println("Documents (PDF/DOCX/XLSX/PPTX/HTML/CSV/TXT/DOC) are auto-converted to Markdown.")
 		fmt.Println("")
 		fmt.Println("Options:")
 		flags.PrintDefaults()
@@ -111,7 +122,32 @@ func cmdAdd(args []string) int {
 		}
 	}
 
-	result, err := okf.SmartImportSource(srcPath, kbDir, idx, smartOpts)
+	// Pre-stage document conversion (PDF/DOCX/XLSX/PPTX/HTML/CSV/TXT/DOC).
+	// Only when the source actually contains documents do we aggregate into a
+	// deterministic staging dir; pure-markdown imports keep the existing path
+	// untouched (zero behavior change).
+	importSource := srcPath
+	convertedCount := 0
+	failedCount := 0
+	stagingDir, convertedCount, failedCount, cleanup, err := convertAndStageDocuments(srcPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if stagingDir != "" {
+		importSource = stagingDir
+	}
+	// If the source contained documents but none could be converted, that is
+	// a hard failure (all-or-nothing for a single document / all-failed batch),
+	// not a silent "no markdown found". Dry-run keeps the preview exit code 0.
+	if failedCount > 0 && convertedCount == 0 && !smartOpts.DetectOnly {
+		fmt.Fprintf(os.Stderr, "Error: %d document(s) could not be converted\n", failedCount)
+		return 1
+	}
+	result, err := okf.SmartImportSource(importSource, kbDir, idx, smartOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
@@ -140,6 +176,12 @@ func cmdAdd(args []string) int {
 		fmt.Printf("  Imported: %d\n", result.ImportedFiles)
 		fmt.Printf("  Skipped: %d\n", result.SkippedFiles)
 		fmt.Printf("  Failed: %d\n", result.FailedFiles)
+		if convertedCount > 0 {
+			fmt.Printf("  Converted (documents): %d\n", convertedCount)
+		}
+		if failedCount > 0 {
+			fmt.Printf("  Failed (documents): %d\n", failedCount)
+		}
 	}
 
 	if result.FailedFiles > 0 {
@@ -203,39 +245,6 @@ func buildSmartImportOptions(strategy, patchFields string, force, detectOnly, dr
 	return opts, nil
 }
 
-// collectMarkdownFiles recursively collects all markdown files under root.
-func collectMarkdownFiles(root string) ([]string, error) {
-	var files []string
-	err := filepath.Walk(root, func(path string, info os.FileInfo, werr error) error {
-		if werr != nil {
-			return werr
-		}
-		if info.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(strings.ToLower(path), ".md") {
-			files = append(files, path)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return files, nil
-}
-
-// computeTargetPath computes target path in knowledge base relative to srcRoot.
-func computeTargetPath(src, srcRoot string, rootIsDir bool) string {
-	if !rootIsDir {
-		return filepath.Base(src)
-	}
-	rel, err := filepath.Rel(srcRoot, src)
-	if err != nil {
-		return filepath.Base(src)
-	}
-	return rel
-}
-
 // =============================================================================
 // flag reordering helper - allows positional args and flags to be mixed
 // =============================================================================
@@ -244,7 +253,8 @@ func computeTargetPath(src, srcRoot string, rootIsDir bool) string {
 // and positional args come last. boolFlags specifies which flag names are
 // booleans (they don't consume the following token as a value).
 // This enables users to type either:
-//   okf add -dir=./kb file.md    OR   okf add file.md -dir=./kb
+//
+//	okf add -dir=./kb file.md    OR   okf add file.md -dir=./kb
 func reorderFlags(args []string, fs *flag.FlagSet, boolFlags map[string]bool) []string {
 	var flagsList, positional []string
 	registered := map[string]bool{}
@@ -284,4 +294,311 @@ func reorderFlags(args []string, fs *flag.FlagSet, boolFlags map[string]bool) []
 		i++
 	}
 	return append(flagsList, positional...)
+}
+
+// =============================================================================
+// Document pre-stage conversion (P2)
+// =============================================================================
+
+// convertAndStageDocuments aggregates every file to import — existing .md files
+// plus document-to-markdown conversion outputs — into a single deterministic
+// staging directory that the existing SmartImportSource can consume.
+//
+//   - stagingDir == "" means the source contains no documents: callers keep the
+//     original path (pure-markdown behavior is untouched).
+//   - The staging path is derived from srcPath (sha1), so the SourcePath used
+//     by smart-import change detection stays stable across runs (OKF S20).
+//   - cleanup() removes the staging dir; always defer it (OKF S19).
+func convertAndStageDocuments(srcPath string) (stagingDir string, convertedCount, failedCount int, cleanup func(), err error) {
+	cleanup = func() {}
+	root := srcPath
+	rootIsDir := false
+
+	// Fast path: no archive and no document at all -> leave the existing
+	// pipeline untouched.
+	if !okf.IsArchive(srcPath) {
+		info, serr := os.Stat(srcPath)
+		if serr != nil {
+			return "", 0, 0, cleanup, serr
+		}
+		rootIsDir = info.IsDir()
+		if !rootIsDir && !convert.IsSupportedDocument(srcPath) {
+			return "", 0, 0, cleanup, nil // single markdown file
+		}
+		if rootIsDir {
+			docs, werr := walkDocuments(srcPath)
+			if werr != nil {
+				return "", 0, 0, cleanup, werr
+			}
+			if len(docs) == 0 {
+				return "", 0, 0, cleanup, nil // pure-markdown directory
+			}
+		}
+	}
+
+	// Deterministic staging dir keyed by the source path (stable identity).
+	sum := sha1.Sum([]byte(srcPath))
+	stagingDir = filepath.Join(os.TempDir(), "okf-convert", hex.EncodeToString(sum[:]))
+	cleanup = func() { _ = os.RemoveAll(stagingDir) }
+	if rerr := os.RemoveAll(stagingDir); rerr != nil {
+		return "", 0, 0, cleanup, rerr
+	}
+	if merr := os.MkdirAll(stagingDir, 0o755); merr != nil {
+		return "", 0, 0, cleanup, merr
+	}
+
+	// Archives are extracted into the staging root; their .md members already
+	// live under staging, so no copying is needed below.
+	if okf.IsArchive(srcPath) {
+		// Full extraction (unlike okf.ExtractArchive, which keeps only .md
+		// members) so document members can be converted below.
+		if aerr := extractArchiveFull(srcPath, stagingDir); aerr != nil {
+			return "", 0, 0, cleanup, aerr
+		}
+		root = stagingDir
+		rootIsDir = true
+	}
+
+	// Copy existing markdown files into staging (preserving relative layout)
+	// so SmartImportSource sees one aggregated tree.
+	mdFiles, cerr := okf.CollectFiles(root)
+	if cerr != nil {
+		return "", 0, 0, cleanup, cerr
+	}
+	for _, md := range mdFiles {
+		if root == stagingDir {
+			continue // already inside staging (archive case)
+		}
+		rel := relativePath(root, md, rootIsDir)
+		if cerr := copyFile(md, filepath.Join(stagingDir, rel)); cerr != nil {
+			return "", 0, 0, cleanup, cerr
+		}
+	}
+
+	// Convert supported documents to Markdown and stage the <original>.md.
+	docs, derr := walkDocuments(root)
+	if derr != nil {
+		return "", 0, 0, cleanup, derr
+	}
+	for _, doc := range docs {
+		res, xerr := convert.ConvertToMarkdown(context.Background(), doc, nil)
+		if xerr != nil {
+			fmt.Fprintf(os.Stderr, "  skip document %s: %v\n", doc, xerr)
+			failedCount++ // a single failure must not abort the batch (OKF S15)
+			continue
+		}
+		rel := relativePath(root, doc, rootIsDir)
+		title := res.Title
+		if title == "" {
+			title = strings.TrimSuffix(filepath.Base(doc), filepath.Ext(doc))
+		}
+		out := filepath.Join(stagingDir, rel+".md")
+		if merr := os.MkdirAll(filepath.Dir(out), 0o755); merr != nil {
+			return "", 0, 0, cleanup, merr
+		}
+		body := wrapFrontmatter(title, filepath.Base(doc), convert.DocumentType(doc), res.Markdown)
+		if werr := os.WriteFile(out, []byte(body), 0o644); werr != nil {
+			return "", 0, 0, cleanup, werr
+		}
+		convertedCount++
+	}
+	return stagingDir, convertedCount, failedCount, cleanup, nil
+}
+
+// walkDocuments recursively collects every convertible document under root.
+func walkDocuments(root string) ([]string, error) {
+	var docs []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if convert.IsSupportedDocument(path) {
+			docs = append(docs, path)
+		}
+		return nil
+	})
+	return docs, err
+}
+
+// copyFile copies src to dst, creating parent directories.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+// extractArchiveFull extracts every member of an archive into destDir,
+// preserving relative layout, with zip-slip / symlink / size guards.
+// Unlike okf.ExtractArchive (markdown-only), it keeps all members so that
+// document conversion can pick them up (OKF S26).
+func extractArchiveFull(archivePath, destDir string) error {
+	info, err := os.Stat(archivePath)
+	if err != nil {
+		return err
+	}
+	if info.Size() > okf.MaxArchiveSize {
+		return fmt.Errorf("archive exceeds maximum size limit of %d bytes", okf.MaxArchiveSize)
+	}
+	lower := strings.ToLower(archivePath)
+	switch {
+	case strings.HasSuffix(lower, ".zip"):
+		return extractZipFull(archivePath, destDir)
+	case strings.HasSuffix(lower, ".tar.bz2"):
+		return extractTarFull(archivePath, destDir, true)
+	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tar"):
+		return extractTarFull(archivePath, destDir, false)
+	case strings.HasSuffix(lower, ".tar.xz"):
+		return fmt.Errorf("unsupported archive format: %s (.tar.xz is not supported; use .tar.gz or .zip)", archivePath)
+	default:
+		return fmt.Errorf("unsupported archive format: %s", archivePath)
+	}
+}
+
+func extractZipFull(archivePath, destDir string) error {
+	r, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return fmt.Errorf("open zip: %w", err)
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		if f.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink entry rejected: %s", f.Name)
+		}
+		if f.UncompressedSize64 > okf.MaxFileSize {
+			return fmt.Errorf("member exceeds size limit: %s", f.Name)
+		}
+		if err := safeArchiveTarget(destDir, f.Name); err != nil {
+			return err
+		}
+		src, err := f.Open()
+		if err != nil {
+			return err
+		}
+		err = writeExtracted(src, filepath.Join(destDir, filepath.Clean(f.Name)))
+		src.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func extractTarFull(archivePath, destDir string, bz2 bool) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var r io.Reader = f
+	if strings.HasSuffix(strings.ToLower(archivePath), ".gz") {
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return err
+		}
+		defer gz.Close()
+		r = gz
+	} else if bz2 {
+		r = bzip2.NewReader(f)
+	}
+	tr := tar.NewReader(r)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if hdr.Typeflag == tar.TypeDir {
+			continue
+		}
+		if hdr.Typeflag == tar.TypeSymlink || hdr.Typeflag == tar.TypeLink {
+			return fmt.Errorf("link entry rejected: %s", hdr.Name)
+		}
+		if hdr.Size > okf.MaxFileSize {
+			return fmt.Errorf("member exceeds size limit: %s", hdr.Name)
+		}
+		if err := safeArchiveTarget(destDir, hdr.Name); err != nil {
+			return err
+		}
+		if err := writeExtracted(tr, filepath.Join(destDir, filepath.Clean(hdr.Name))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeExtracted writes an archive member to dst, creating parents.
+// It uses an io.LimitedReader as a second guard: even if an archive header
+// lies about (or omits) the member size, decompression can never exceed
+// okf.MaxFileSize bytes.
+func writeExtracted(r io.Reader, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	n, err := io.Copy(out, &io.LimitedReader{R: r, N: okf.MaxFileSize + 1})
+	if err != nil {
+		return err
+	}
+	if n > okf.MaxFileSize {
+		return fmt.Errorf("member exceeds size limit after decompression: %s", filepath.Base(dst))
+	}
+	return nil
+}
+
+// safeArchiveTarget rejects entries that escape destDir (zip-slip) or use
+// absolute paths.
+func safeArchiveTarget(destDir, name string) error {
+	clean := filepath.Clean(name)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("archive entry escapes destination: %s", name)
+	}
+	if filepath.IsAbs(clean) {
+		return fmt.Errorf("archive entry has absolute path: %s", name)
+	}
+	return nil
+}
+
+// relativePath computes the destination-relative path of a collected file.
+// A single-file root has no directory structure: its relative path is just
+// the base name (filepath.Rel(file, file) would wrongly return ".").
+func relativePath(root, path string, rootIsDir bool) string {
+	if !rootIsDir {
+		return filepath.Base(path)
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return filepath.Base(path)
+	}
+	return rel
+}
+
+// wrapFrontmatter builds a full OKF concept body from converted Markdown.
+// Delegates to convert.WrapConcept so cmd_add and the MCP tool share one
+// frontmatter format.
+func wrapFrontmatter(title, filename, format, body string) string {
+	return convert.WrapConcept(title, filename, format, "source", body)
 }

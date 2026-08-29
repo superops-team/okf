@@ -51,6 +51,11 @@ Search the knowledge base.
 
 ### add
 Import files, directories, or archives into the knowledge base with smart detection.
+Documents (PDF, DOCX, XLSX, PPTX, HTML, CSV, TXT, DOC) are automatically
+converted to Markdown (`<original>.md`) before import via the built-in pure-Go
+converter (downmark). Conversion is deterministic and pinned to downmark
+v0.10.0; a downmark upgrade may trigger a one-time re-import of previously
+imported documents (documented re-import semantics — see Release Notes).
 - `-strategy STRATEGY` - Merge strategy: skip|overwrite|merge|patch
 - `-patch-fields LIST` - Comma-separated frontmatter fields for patch strategy
 - `-detect-only` - Only detect changes without importing
