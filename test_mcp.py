@@ -164,7 +164,8 @@ def main():
         for t in tools:
             print(f"    - {t['name']}: {t['description'][:60]}")
         expected_tools = ["okf_load_bundle", "okf_bundle_stats", "okf_list_concepts",
-                          "okf_get_concept", "okf_search", "okf_lint_bundle", "okf_lint_concept"]
+                          "okf_get_concept", "okf_search", "okf_lint_bundle", "okf_lint_concept",
+                          "okf_semantic_search"]
         for name in expected_tools:
             assert name in tool_names, f"Missing tool: {name}"
         print("  ✓ All expected tools present")
@@ -224,6 +225,19 @@ def main():
         content = result["result"]["content"][0]["text"]
         print(f"  ✓ Response:\n{content}")
         assert "Found" in content or "No results" in content, "Unexpected search response"
+
+        # Test 7.5: okf_semantic_search (requires vector index)
+        print("\n[Test 7.5] tools/call okf_semantic_search")
+        subprocess.run([OKF_BIN, "vector", "index", "-path", BUNDLE_PATH],
+                       capture_output=True, check=True)
+        result = rpc_call(proc, "tools/call", {
+            "name": "okf_semantic_search",
+            "arguments": {"query": "check my notes for errors"}
+        }, msg_id=75)
+        assert "result" in result, f"okf_semantic_search failed: {result}"
+        content = result["result"]["content"][0]["text"]
+        print(f"  ✓ Response:\n{content}")
+        assert "source=" in content, "Semantic search missing source annotation"
 
         # Test 8: okf_lint_bundle
         print("\n[Test 8] tools/call okf_lint_bundle")

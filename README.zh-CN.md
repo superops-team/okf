@@ -42,6 +42,7 @@
 - **🛠 Git Hook** — 一键安装，每次提交自动更新知识库
 - **📋 Lint 检查** — 内置规范检查（16 条规则）
 - **🔎 高级查询** — 支持按类型、标签、全文搜索
+- **🧠 语义搜索** — 对概念进行本地自然语言搜索（内嵌 MiniLM 模型，完全离线、无 CGO）
 - **🤖 Agent MCP 接入** — 通过标准 MCP 提供仓库知识状态、初始化、刷新、查询、上下文以及持久 note/event/feedback
 - **🏗 模块化架构** — 遵循 Go 最佳实践，清晰分层设计
 
@@ -127,6 +128,10 @@ okf add report.pdf
 # Lint 检查
 okf lint
 
+# 语义（自然语言）搜索 —— 先构建一次索引，再搜索
+okf vector index
+okf search -q "检查我的笔记有没有错误" -semantic
+
 # 安装 Git Hook（每次提交自动更新）
 okf hook -type post-commit
 
@@ -139,6 +144,30 @@ okf mcp --repo /your/repo --dir .okf/knowledge
 MCP server 通过 `okf_status`、`okf_init`、`okf_refresh`、`okf_query`、`okf_context` 暴露仓库知识服务；通过 `okf_note`、`okf_log`、`okf_feedback` 持久化显式提交的知识，并由 `okf_ask` 仅查询 note/event/feedback。原有 bundle/list/get/search/lint/document-import 工具保持可用。
 
 写工具要求稳定的 `idempotency_key`，使用确定性 identity，拒绝未知字段和错误字段类型，并对路径逃逸、symlink root、大小超限和 credential-like metadata 采取 fail-closed。Server 只持久化调用方显式提交的 feedback，不读取宿主应用的私有事件总线。详见 [`docs/knowledge/mcp-server.md`](docs/knowledge/mcp-server.md) 和 [`docs/knowledge/durable-capture.md`](docs/knowledge/durable-capture.md)。
+
+## 语义搜索
+
+`okf search -semantic` 对概念进行自然语言搜索：使用本地内嵌的 MiniLM 模型（384 维向量）与 HNSW 索引，全程无网络、无需外部运行时。
+
+```bash
+# 构建（或增量更新）向量索引 —— 每个知识库一次
+okf vector index
+# 查看索引状态
+okf vector status
+# 内容变更后全量重建
+okf vector rebuild
+# 语义搜索（经 RRF 融合语义 + 词法结果）
+okf search -q "检查我的笔记有没有错误" -semantic
+```
+
+结果会标注来源：`semantic` / `lexical` / `both`。索引未构建时 `-semantic` 会给出警告并回退到词法搜索。MCP server 通过 `okf_semantic_search` 暴露相同能力。
+
+### 实现方式与限制
+
+- **内嵌资源**：ONNX Runtime CPU 库（按 OS，约 10–15 MB）与量化 MiniLM 模型（约 23 MB）通过 `go:embed` 内嵌进二进制，首次使用时解包到用户缓存目录（带 SHA256 校验）。每个平台构建只内嵌该平台资源（`scripts/fetch-ort.sh` / `scripts/fetch-model.sh` 在构建期获取，运行时零联网）。
+- **动态加载（如实声明）**：ONNX Runtime 动态库在运行时通过 `dlopen` 从缓存目录加载——二进制自包含但并非静态链接。缓存位置：`os.UserCacheDir()/okf/`（可用 `OKF_ORT_DIR` 覆盖）。
+- **限制**：MiniLM 对每个概念截断到 256 token；模型以英文语义为主，中文语义质量有限（词法搜索仍可用）。`Embedder` 是接口，为后续更强模型（如 BGE-M3）或远程 API 预留替换点。
+- **许可**：pure-onnx（MIT）、coder/hnsw（CC0-1.0）、ONNX Runtime（MIT）、MiniLM-L6-v2 模型（Apache-2.0）。
 
 ## 文档
 

@@ -1,5 +1,35 @@
 # OKF Release Notes
 
+## v0.4.0 — Vector Semantic Search
+
+> Minor version bump: this release adds a new capability (local semantic search),
+> not just fixes. Version becomes **0.4.0**.
+
+### New: local semantic search
+
+- `okf search -q "..." -semantic` performs natural-language search over concepts
+  using a locally embedded MiniLM embedding model (384-dim) and an HNSW index.
+- Fully offline and **no CGO**: the ONNX Runtime CPU library and a quantized
+  MiniLM model are embedded into the binary (per-platform, via `go:embed`) and
+  extracted to the user cache on first use (checksum-verified).
+- Results blend semantic and lexical retrieval via RRF and are annotated with
+  their source (`semantic` / `lexical` / `both`).
+- New CLI group: `okf vector index | status | rebuild`.
+- The MCP server exposes the same capability through `okf_semantic_search`.
+
+### Behavior notes
+
+- The ONNX Runtime shared library is loaded at runtime from the extracted cache
+  (`os.UserCacheDir()/okf/`, override with `OKF_ORT_DIR`); the binary is
+  self-contained but not statically linked.
+- MiniLM truncates each concept to 256 tokens; embeddings are English-centric,
+  so Chinese semantic quality is limited (lexical search still applies).
+- Model/library sources and licenses are declared in the README; resources are
+  fetched at build time by `scripts/fetch-ort.sh` / `scripts/fetch-model.sh`.
+- New pinned dependencies: pure-onnx v0.0.1 (MIT), coder/hnsw v0.6.1 (CC0-1.0);
+  `renameio` is replaced by a local cross-platform fork (upstream v1.0.1 does not
+  compile on Windows).
+
 ## v0.3.0 — Document Format Import & Durable MCP Knowledge
 
 > Versioning was unified starting at **v0.3.0**; subsequent releases bump the

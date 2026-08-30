@@ -42,6 +42,7 @@
 - **🛠 Git Hook** — One-click installation, automatic knowledge base updates on every commit
 - **📋 Lint Checking** — Built-in specification compliance checker (16 rules)
 - **🔎 Advanced Query** — Filter by type, tags, or full-text search
+- **🧠 Semantic Search** — Local natural-language search over concepts (MiniLM embeddings, fully offline, no CGO)
 - **🤖 Agent-facing MCP** — Standard MCP tools for repository status/init/refresh/query/context plus durable note/event/feedback capture
 - **🏗 Modular Architecture** — Clean, layered design following Go best practices
 
@@ -128,6 +129,10 @@ okf add report.pdf
 # Lint check
 okf lint
 
+# Semantic (natural-language) search — build the index once, then search
+okf vector index
+okf search -q "check my notes for errors" -semantic
+
 # Install Git Hook (automatic updates on every commit)
 okf hook -type post-commit
 
@@ -141,6 +146,30 @@ okf mcp --repo /your/repo --dir .okf/knowledge
 The MCP server exposes the repository knowledge service through `okf_status`, `okf_init`, `okf_refresh`, `okf_query`, and `okf_context`. Durable knowledge capture is available through `okf_note`, `okf_log`, and `okf_feedback`; `okf_ask` queries only those durable note/event/feedback concepts. Existing bundle/list/get/search/lint/document-import tools remain available.
 
 Writes require a stable `idempotency_key`, use deterministic identities, reject unknown or incorrectly typed fields, and fail closed for path escape, symlink-root, size-limit, and credential-like metadata violations. The server persists only feedback explicitly submitted by the caller; it does not inspect a host application's private event bus. See [`docs/knowledge/mcp-server.md`](docs/knowledge/mcp-server.md) and [`docs/knowledge/durable-capture.md`](docs/knowledge/durable-capture.md).
+
+## Semantic Search
+
+`okf search -semantic` performs natural-language search over concepts, using a locally embedded MiniLM model (384-dim vectors) and an HNSW index — no network, no external runtime required.
+
+```bash
+# Build (or incrementally update) the vector index — one-time, per knowledge base
+okf vector index
+# Inspect index state
+okf vector status
+# Full rebuild (after content changes)
+okf vector rebuild
+# Search semantically (blends semantic + lexical results via RRF)
+okf search -q "check my notes for errors" -semantic
+```
+
+Results are annotated with their source: `semantic`, `lexical`, or `both`. If no index exists, `-semantic` warns and falls back to lexical search. The MCP server exposes the same capability via `okf_semantic_search`.
+
+### How it works & constraints
+
+- **Embedded resources**: the ONNX Runtime CPU library (per-OS, ~10–15 MB) plus a quantized MiniLM model (~23 MB) are embedded into the binary via `go:embed` and extracted to the user cache directory on first use (checksum-verified). Building for each platform only embeds that platform's resources (`scripts/fetch-ort.sh` / `scripts/fetch-model.sh` fetch them at build time; the runtime never goes online).
+- **Dynamic loading (transparency)**: the ONNX Runtime shared library is loaded at runtime via `dlopen` from the extracted cache — the binary is self-contained but not statically linked. Cache location: `os.UserCacheDir()/okf/` (override with `OKF_ORT_DIR`).
+- **Limits**: MiniLM truncates text to 256 tokens per concept; embeddings are English-centric, so Chinese semantic quality is limited (lexical search still applies). `Embedder` is an interface, leaving room for stronger models (e.g. BGE-M3) or remote APIs later.
+- **Licenses**: pure-onnx (MIT), coder/hnsw (CC0-1.0), ONNX Runtime (MIT), MiniLM-L6-v2 model (Apache-2.0).
 
 ## Documentation
 

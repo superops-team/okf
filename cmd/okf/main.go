@@ -16,7 +16,7 @@ import (
 	"github.com/superops-team/okf/pkg/query"
 )
 
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 const usage = `okf - Open Knowledge Format CLI
 
@@ -28,11 +28,12 @@ Commands:
   update      Update knowledge base from latest commit
   lint        Check knowledge base for specification compliance
   show        Show knowledge base information
-  search      Search the knowledge base
+  search      Search the knowledge base (add -semantic for natural-language semantic search)
   add         Import files, directories, or archives into knowledge base (with smart detection)
   sync        Synchronize all indexed files (detect changes and apply strategies)
   watch       Watch source directories and auto-sync on file changes (requires .watch.yaml)
   metadata    Manage the metadata index (inspect|rebuild|clean)
+  vector      Manage the semantic vector index (index|status|rebuild)
   config      Manage configuration
   tool        Agent-facing JSON tool operations (status|init|refresh|query|context)
   mcp         Start MCP (Model Context Protocol) server for AI agent integration
@@ -79,6 +80,8 @@ func main() {
 		os.Exit(cmdWatch(os.Args[2:]))
 	case "metadata":
 		os.Exit(cmdMetadata(os.Args[2:]))
+	case "vector":
+		os.Exit(cmdVector(os.Args[2:]))
 	case "config":
 		os.Exit(cmdConfig(os.Args[2:]))
 	case "tool":
@@ -347,6 +350,8 @@ func cmdSearch(args []string) {
 	codeSymbolKind := fs.String("code-symbol-kind", "", "Filter by code symbol kind")
 	codeQualifiedName := fs.String("code-qualified-name", "", "Filter by code qualified name")
 	codeRelationKind := fs.String("code-relation-kind", "", "Filter by code relation kind")
+	semantic := fs.Bool("semantic", false, "Enable semantic (natural-language) search; requires `okf vector index` first")
+	k := fs.Int("k", 10, "Number of results for semantic search")
 	fs.Parse(args)
 
 	if *path == "" {
@@ -375,7 +380,21 @@ func cmdSearch(args []string) {
 	}
 
 	queryBundle := toQueryBundle(bundle)
-	searchResults := executeSearch(queryBundle, *queryStr, *cType, *tag, *codeLanguage, *codePath, *codeSymbolKind, *codeQualifiedName, *codeRelationKind)
+
+	var searchResults []query.SearchResult
+	semanticUsed := false
+	if *semantic && *queryStr != "" {
+		semRes, err := runSemanticSearch(queryBundle, *queryStr, *path, *k)
+		if err != nil {
+			fmt.Printf("Warning: %v（回退到词法检索）\n", err)
+		} else {
+			searchResults = semRes
+			semanticUsed = true
+		}
+	}
+	if !semanticUsed {
+		searchResults = executeSearch(queryBundle, *queryStr, *cType, *tag, *codeLanguage, *codePath, *codeSymbolKind, *codeQualifiedName, *codeRelationKind)
+	}
 	results := filterSearchResults(searchResults, *cType, *tag)
 
 	if len(results) == 0 {
@@ -386,7 +405,11 @@ func cmdSearch(args []string) {
 	fmt.Printf("Found %d results:\n\n", len(results))
 	for i, result := range results {
 		c := result.Concept
-		fmt.Printf("%d. [%s] %s\n", i+1, c.Type, c.Title)
+		prefix := fmt.Sprintf("%d. [%s] %s", i+1, c.Type, c.Title)
+		if semanticUsed {
+			prefix = fmt.Sprintf("%d. [%s] %s (source=%s, score=%.4f)", i+1, c.Type, c.Title, result.Source, result.SemanticScore)
+		}
+		fmt.Println(prefix)
 		fmt.Printf("   %s\n", c.Description)
 		if c.FilePath != "" {
 			fmt.Printf("   → %s\n", c.FilePath)
