@@ -42,7 +42,7 @@ AUTH=(-H "Authorization: token ${TOKEN}" -H "Accept: application/vnd.github+json
 
 log() { echo "  [+] $*"; }
 
-# Build release body
+# Build release body (override with RELEASE_BODY_FILE to supply a custom body)
 BODY="## okf v${VERSION}
 
 Project-level knowledge base system for AI Agents.
@@ -64,6 +64,9 @@ iwr -useb https://raw.githubusercontent.com/superops-team/okf/${TAG}/scripts/ins
 go install github.com/superops-team/okf/cmd/okf@${TAG}
 \`\`\`
 "
+if [ -n "${RELEASE_BODY_FILE:-}" ] && [ -f "$RELEASE_BODY_FILE" ]; then
+  BODY="$(cat "$RELEASE_BODY_FILE")"
+fi
 
 # Create release (draft first to ensure it exists)
 log "Creating release ${TAG}..."
@@ -107,7 +110,6 @@ ARTIFACTS=(
   "okf_${VERSION}_darwin_amd64.tar.gz"
   "okf_${VERSION}_darwin_arm64.tar.gz"
   "okf_${VERSION}_windows_amd64.zip"
-  "okf_${VERSION}_windows_arm64.zip"
   "SHA256SUMS"
 )
 

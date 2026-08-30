@@ -42,13 +42,15 @@ echo ""
 mkdir -p "$OUTPUT_DIR"
 rm -rf "${OUTPUT_DIR:?}"/*
 
+# Platforms with embedded ONNX Runtime resources (see scripts/fetch-ort.sh).
+# windows/arm64 is intentionally excluded: upstream ONNX Runtime stopped
+# shipping Windows ARM64 CPU packages since v1.24, so no resource is bundled.
 PLATFORMS=(
   "linux/amd64"
   "linux/arm64"
   "darwin/amd64"
   "darwin/arm64"
   "windows/amd64"
-  "windows/arm64"
 )
 
 build_platform() {
