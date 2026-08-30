@@ -72,6 +72,7 @@ build_platform() {
 
   # LICENSE + README
   cp "$REPO_ROOT/README.md" "$arch_dir/" 2>/dev/null || true
+  cp "$REPO_ROOT/LICENSE" "$arch_dir/" 2>/dev/null || true
 
   # Create archive
   local archive_name="${BINARY_NAME}_${VERSION}_${os}_${arch}"
