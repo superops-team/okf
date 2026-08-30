@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/superops-team/okf/pkg/lint"
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/parser"
+	toolsvc "github.com/superops-team/okf/pkg/tool"
 )
 
 // ToolHandler is a function that handles a tool call.
@@ -25,15 +27,30 @@ type ToolRegistry struct {
 	handlers   map[string]ToolHandler
 	bundle     *okf.KnowledgeBundle
 	bundlePath string
+	service    *toolsvc.Service
 }
 
-// NewToolRegistry creates a new tool registry.
+// NewToolRegistry creates a registry with the legacy bundle-facing tools.
 func NewToolRegistry() *ToolRegistry {
+	return newToolRegistry(nil)
+}
+
+// NewToolRegistryWithService creates a registry that also exposes the
+// repository-scoped, service-backed agent tools.
+func NewToolRegistryWithService(service *toolsvc.Service) *ToolRegistry {
+	return newToolRegistry(service)
+}
+
+func newToolRegistry(service *toolsvc.Service) *ToolRegistry {
 	r := &ToolRegistry{
 		tools:    make(map[string]Tool),
 		handlers: make(map[string]ToolHandler),
+		service:  service,
 	}
 	r.registerCoreTools()
+	if service != nil {
+		r.registerAgentTools()
+	}
 	return r
 }
 
@@ -216,6 +233,390 @@ func (r *ToolRegistry) registerCoreTools() {
 			"required": []string{"path"},
 		},
 	}, r.handleImportDocument)
+}
+
+func readOnlyAgentTool(name, description string, inputSchema map[string]interface{}) Tool {
+	return Tool{
+		Name: name, Description: description, InputSchema: inputSchema,
+		Annotations: &ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true},
+	}
+}
+
+func mutatingAgentTool(name, description string, inputSchema map[string]interface{}) Tool {
+	return Tool{
+		Name: name, Description: description, InputSchema: inputSchema,
+		Annotations: &ToolAnnotations{IdempotentHint: true},
+	}
+}
+
+func (r *ToolRegistry) registerAgentTools() {
+	objectSchema := func(properties map[string]interface{}, required ...string) map[string]interface{} {
+		schema := map[string]interface{}{
+			"type":       "object",
+			"properties": properties,
+		}
+		if len(required) > 0 {
+			schema["required"] = required
+		}
+		return schema
+	}
+	stringProperty := func(description string) map[string]interface{} {
+		return map[string]interface{}{"type": "string", "description": description}
+	}
+	integerProperty := func(description string) map[string]interface{} {
+		return map[string]interface{}{"type": "integer", "description": description}
+	}
+	booleanProperty := func(description string) map[string]interface{} {
+		return map[string]interface{}{"type": "boolean", "description": description}
+	}
+	arrayProperty := func(description string) map[string]interface{} {
+		return map[string]interface{}{
+			"type":        "array",
+			"description": description,
+			"items":       map[string]interface{}{"type": "string"},
+		}
+	}
+	objectProperty := func(description string) map[string]interface{} {
+		return map[string]interface{}{"type": "object", "description": description}
+	}
+
+	r.Register(readOnlyAgentTool(
+		"okf_status",
+		"Report repository knowledge readiness without modifying files",
+		objectSchema(map[string]interface{}{}),
+	), func(_ map[string]interface{}) (*ToolCallResult, error) {
+		return serviceEnvelopeResult(r.service.Status(context.Background(), toolsvc.StatusRequest{}))
+	})
+	r.Register(mutatingAgentTool(
+		"okf_init",
+		"Initialize repository knowledge for the configured repository",
+		objectSchema(map[string]interface{}{}),
+	), func(_ map[string]interface{}) (*ToolCallResult, error) {
+		return serviceEnvelopeResult(r.service.Init(context.Background(), toolsvc.InitRequest{}))
+	})
+	r.Register(mutatingAgentTool(
+		"okf_refresh",
+		"Refresh repository knowledge using incremental, full, or cache-only mode",
+		objectSchema(map[string]interface{}{
+			"mode": stringProperty("Refresh mode: incremental, full, or cache-only"),
+		}),
+	), func(args map[string]interface{}) (*ToolCallResult, error) {
+		mode, _ := args["mode"].(string)
+		return serviceEnvelopeResult(r.service.Refresh(context.Background(), toolsvc.RefreshRequest{Mode: mode}))
+	})
+	queryProperties := map[string]interface{}{
+		"query":           stringProperty("Non-empty repository knowledge query"),
+		"limit":           integerProperty("Maximum results"),
+		"type":            stringProperty("Concept type filter"),
+		"tag":             stringProperty("Tag filter"),
+		"file_path":       stringProperty("Source file path filter"),
+		"language":        stringProperty("Language filter"),
+		"symbol_kind":     stringProperty("Symbol kind filter"),
+		"qualified_name":  stringProperty("Qualified symbol name filter"),
+		"relation_kind":   stringProperty("Relation kind filter"),
+		"relation_source": stringProperty("Relation source filter"),
+		"relation_target": stringProperty("Relation target filter"),
+		"include_trace":   booleanProperty("Include deterministic query trace"),
+	}
+	r.Register(readOnlyAgentTool(
+		"okf_query",
+		"Query repository knowledge through the shared service",
+		objectSchema(queryProperties, "query"),
+	), func(args map[string]interface{}) (*ToolCallResult, error) {
+		return serviceEnvelopeResult(r.service.Query(context.Background(), queryRequestFromArgs(args)))
+	})
+	r.Register(readOnlyAgentTool(
+		"okf_context",
+		"Build a token-bounded repository context through the shared service",
+		objectSchema(map[string]interface{}{
+			"query":             stringProperty("Non-empty repository knowledge query"),
+			"budget_tokens":     integerProperty("Maximum context token budget"),
+			"include_relations": booleanProperty("Include related concepts"),
+			"include_trace":     booleanProperty("Include deterministic context trace"),
+		}, "query"),
+	), func(args map[string]interface{}) (*ToolCallResult, error) {
+		query, _ := args["query"].(string)
+		return serviceEnvelopeResult(r.service.Context(context.Background(), toolsvc.ContextRequest{
+			Query:            query,
+			BudgetTokens:     intArg(args, "budget_tokens"),
+			IncludeRelations: boolArg(args, "include_relations"),
+			IncludeTrace:     boolArg(args, "include_trace"),
+		}))
+	})
+	writeProperties := map[string]interface{}{
+		"content":         stringProperty("Knowledge content to persist"),
+		"project":         stringProperty("Optional project isolation key"),
+		"tags":            arrayProperty("Optional normalized tags"),
+		"metadata":        objectProperty("Optional small JSON metadata"),
+		"idempotency_key": stringProperty("Required stable idempotency key"),
+	}
+	for _, definition := range []struct {
+		name        string
+		description string
+		kind        string
+	}{
+		{name: "okf_note", description: "Persist an explicit durable note", kind: "note"},
+		{name: "okf_log", description: "Persist an explicit durable event", kind: "event"},
+	} {
+		kind := definition.kind
+		r.Register(mutatingAgentTool(
+			definition.name,
+			definition.description,
+			objectSchema(writeProperties, "content", "idempotency_key"),
+		), func(args map[string]interface{}) (*ToolCallResult, error) {
+			if invalid := validateWriteArgs(
+				args,
+				[]string{"content", "idempotency_key"},
+				[]string{"project"},
+				[]string{"tags"},
+				[]string{"metadata"},
+				"content", "project", "tags", "metadata", "idempotency_key",
+			); invalid != nil {
+				return serviceEnvelopeResult(*invalid)
+			}
+			return serviceEnvelopeResult(r.service.WriteKnowledge(context.Background(), writeRequestFromArgs(kind, args)))
+		})
+	}
+	r.Register(mutatingAgentTool(
+		"okf_feedback",
+		"Persist an explicit reusable feedback principle and evidence",
+		objectSchema(map[string]interface{}{
+			"principle":       stringProperty("Reusable principle to persist"),
+			"category":        stringProperty("Feedback category"),
+			"project":         stringProperty("Optional project isolation key"),
+			"tags":            arrayProperty("Optional normalized tags"),
+			"metadata":        objectProperty("Optional small JSON metadata"),
+			"evidence_refs":   arrayProperty("Evidence references supporting the principle"),
+			"idempotency_key": stringProperty("Required stable idempotency key"),
+		}, "principle", "category", "idempotency_key"),
+	), func(args map[string]interface{}) (*ToolCallResult, error) {
+		if invalid := validateWriteArgs(
+			args,
+			[]string{"principle", "category", "idempotency_key"},
+			[]string{"project"},
+			[]string{"tags", "evidence_refs"},
+			[]string{"metadata"},
+			"principle", "category", "project", "tags", "metadata", "evidence_refs", "idempotency_key",
+		); invalid != nil {
+			return serviceEnvelopeResult(*invalid)
+		}
+		principle := args["principle"].(string)
+		metadata := mapArg(args, "metadata")
+		metadata["principle"] = principle
+		category := args["category"].(string)
+		metadata["category"] = category
+		request := writeRequestFromArgs("feedback", args)
+		request.Content = principle
+		request.Metadata = metadata
+		request.EvidenceRefs = stringSliceArg(args, "evidence_refs")
+		return serviceEnvelopeResult(r.service.WriteKnowledge(context.Background(), request))
+	})
+	r.Register(readOnlyAgentTool(
+		"okf_ask",
+		"Query note, event, and feedback concepts through the shared service",
+		objectSchema(map[string]interface{}{
+			"query":         stringProperty("Non-empty note, event, or feedback query"),
+			"project":       stringProperty("Optional project isolation key"),
+			"limit":         integerProperty("Maximum results"),
+			"include_trace": booleanProperty("Include deterministic query trace"),
+		}, "query"),
+	), func(args map[string]interface{}) (*ToolCallResult, error) {
+		request := queryRequestFromArgs(args)
+		request.Types = []string{"note", "event", "feedback"}
+		return serviceEnvelopeResult(r.service.Query(context.Background(), request))
+	})
+}
+
+func queryRequestFromArgs(args map[string]interface{}) toolsvc.QueryRequest {
+	query, _ := args["query"].(string)
+	typeFilter, _ := args["type"].(string)
+	project, _ := args["project"].(string)
+	tag, _ := args["tag"].(string)
+	filePath, _ := args["file_path"].(string)
+	language, _ := args["language"].(string)
+	symbolKind, _ := args["symbol_kind"].(string)
+	qualifiedName, _ := args["qualified_name"].(string)
+	relationKind, _ := args["relation_kind"].(string)
+	relationSource, _ := args["relation_source"].(string)
+	relationTarget, _ := args["relation_target"].(string)
+	return toolsvc.QueryRequest{
+		Query:          query,
+		Limit:          intArg(args, "limit"),
+		Type:           typeFilter,
+		Project:        project,
+		Tag:            tag,
+		FilePath:       filePath,
+		Language:       language,
+		SymbolKind:     symbolKind,
+		QualifiedName:  qualifiedName,
+		RelationKind:   relationKind,
+		RelationSource: relationSource,
+		RelationTarget: relationTarget,
+		IncludeTrace:   boolArg(args, "include_trace"),
+	}
+}
+
+func validateWriteArgs(
+	args map[string]interface{},
+	requiredStrings []string,
+	optionalStrings []string,
+	stringSlices []string,
+	objects []string,
+	allowed ...string,
+) *toolsvc.ToolEnvelope {
+	if invalid := rejectUnknownArgs(args, allowed...); invalid != nil {
+		return invalid
+	}
+	for _, key := range requiredStrings {
+		value, ok := args[key]
+		if !ok {
+			return invalidWriteArgs("request is missing required field " + key)
+		}
+		text, ok := value.(string)
+		if !ok || strings.TrimSpace(text) == "" {
+			return invalidWriteArgs(key + " must be a non-empty string")
+		}
+	}
+	for _, key := range optionalStrings {
+		if value, ok := args[key]; ok {
+			if _, ok := value.(string); !ok {
+				return invalidWriteArgs(key + " must be a string")
+			}
+		}
+	}
+	for _, key := range stringSlices {
+		value, ok := args[key]
+		if !ok {
+			continue
+		}
+		switch values := value.(type) {
+		case []string:
+		case []interface{}:
+			for _, item := range values {
+				if _, ok := item.(string); !ok {
+					return invalidWriteArgs(key + " must contain only strings")
+				}
+			}
+		default:
+			return invalidWriteArgs(key + " must be an array of strings")
+		}
+	}
+	for _, key := range objects {
+		if value, ok := args[key]; ok {
+			if _, ok := value.(map[string]interface{}); !ok {
+				return invalidWriteArgs(key + " must be an object")
+			}
+		}
+	}
+	return nil
+}
+
+func invalidWriteArgs(message string) *toolsvc.ToolEnvelope {
+	return &toolsvc.ToolEnvelope{
+		SchemaVersion: toolsvc.SchemaVersion,
+		Operation:     toolsvc.OperationWrite,
+		OK:            false,
+		Mutating:      true,
+		Warnings:      []string{},
+		Error: &toolsvc.ToolError{
+			Code:        toolsvc.ErrInvalidRequest,
+			Message:     message,
+			Remediation: "Correct the request to match the declared tool schema.",
+		},
+	}
+}
+
+func writeRequestFromArgs(kind string, args map[string]interface{}) toolsvc.WriteKnowledgeRequest {
+	content, _ := args["content"].(string)
+	project, _ := args["project"].(string)
+	idempotencyKey, _ := args["idempotency_key"].(string)
+	return toolsvc.WriteKnowledgeRequest{
+		Kind:           kind,
+		Content:        content,
+		Project:        project,
+		Tags:           stringSliceArg(args, "tags"),
+		Metadata:       mapArg(args, "metadata"),
+		IdempotencyKey: idempotencyKey,
+	}
+}
+
+func stringSliceArg(args map[string]interface{}, key string) []string {
+	switch values := args[key].(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []interface{}:
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil
+			}
+			result = append(result, text)
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func mapArg(args map[string]interface{}, key string) map[string]interface{} {
+	value, ok := args[key].(map[string]interface{})
+	if !ok || value == nil {
+		return map[string]interface{}{}
+	}
+	copy := make(map[string]interface{}, len(value))
+	for field, nested := range value {
+		copy[field] = nested
+	}
+	return copy
+}
+
+func rejectUnknownArgs(args map[string]interface{}, allowed ...string) *toolsvc.ToolEnvelope {
+	allow := make(map[string]struct{}, len(allowed))
+	for _, key := range allowed {
+		allow[key] = struct{}{}
+	}
+	for key := range args {
+		if _, ok := allow[key]; !ok {
+			return &toolsvc.ToolEnvelope{
+				SchemaVersion: toolsvc.SchemaVersion,
+				Operation:     toolsvc.OperationWrite,
+				OK:            false,
+				Mutating:      true,
+				Warnings:      []string{},
+				Error: &toolsvc.ToolError{
+					Code:        toolsvc.ErrInvalidRequest,
+					Message:     "request contains an unknown field",
+					Remediation: "Remove fields that are not declared by the tool schema.",
+				},
+			}
+		}
+	}
+	return nil
+}
+
+func intArg(args map[string]interface{}, key string) int {
+	switch value := args[key].(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
+func boolArg(args map[string]interface{}, key string) bool {
+	value, _ := args[key].(bool)
+	return value
+}
+
+func serviceEnvelopeResult(envelope toolsvc.ToolEnvelope) (*ToolCallResult, error) {
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, fmt.Errorf("marshal tool service envelope: %w", err)
+	}
+	return &ToolCallResult{Content: []ContentItem{TextContent(string(data))}}, nil
 }
 
 // --- Handlers ---

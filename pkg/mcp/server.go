@@ -12,20 +12,33 @@ import (
 
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/parser"
+	toolsvc "github.com/superops-team/okf/pkg/tool"
+)
+
+type stdioFraming uint8
+
+const (
+	framingContentLength stdioFraming = iota
+	framingNewline
+
+	maxStdioMessageBytes = 16 << 20
 )
 
 // Server is an MCP server that communicates over stdio.
 type Server struct {
-	tools  *ToolRegistry
-	reader *bufio.Reader
-	writer io.Writer
-	logger *log.Logger
+	tools   *ToolRegistry
+	reader  *bufio.Reader
+	writer  io.Writer
+	logger  *log.Logger
+	framing stdioFraming
 }
 
 // ServerConfig holds configuration for the MCP server.
 type ServerConfig struct {
-	BundlePath string
-	Logger     *log.Logger
+	BundlePath   string
+	RepoPath     string
+	KnowledgeDir string
+	Logger       *log.Logger
 }
 
 // NewServer creates a new MCP server.
@@ -35,8 +48,12 @@ func NewServer(config ServerConfig) *Server {
 		logger = log.New(os.Stderr, "[okf-mcp] ", log.LstdFlags)
 	}
 
+	service := toolsvc.NewService(toolsvc.Config{
+		RepoPath:     config.RepoPath,
+		KnowledgeDir: config.KnowledgeDir,
+	})
 	s := &Server{
-		tools:  NewToolRegistry(),
+		tools:  NewToolRegistryWithService(service),
 		reader: bufio.NewReader(os.Stdin),
 		writer: os.Stdout,
 		logger: logger,
@@ -98,8 +115,8 @@ func (s *Server) readMessage() ([]byte, error) {
 	if strings.HasPrefix(strings.ToLower(line), "content-length:") {
 		clStr := strings.TrimSpace(line[len("Content-Length:"):])
 		contentLen, perr := strconv.Atoi(clStr)
-		if perr != nil {
-			return nil, fmt.Errorf("invalid Content-Length: %s", clStr)
+		if perr != nil || contentLen < 0 || contentLen > maxStdioMessageBytes {
+			return nil, fmt.Errorf("invalid Content-Length: %s (must be between 0 and %d)", clStr, maxStdioMessageBytes)
 		}
 		// Read remaining headers until empty line
 		for {
@@ -116,10 +133,12 @@ func (s *Server) readMessage() ([]byte, error) {
 		if _, ferr := io.ReadFull(s.reader, data); ferr != nil {
 			return nil, ferr
 		}
+		s.framing = framingContentLength
 		return data, nil
 	}
 
-	// Fallback: newline-delimited JSON (simple clients/testing)
+	// Newline-delimited JSON is the stdio framing used by modern MCP clients.
+	s.framing = framingNewline
 	return []byte(line), nil
 }
 
@@ -372,12 +391,17 @@ func (s *Server) writeMessage(msg interface{}) {
 		s.logger.Printf("Failed to marshal message: %v", err)
 		return
 	}
-	// MCP stdio transport: Content-Length header framing (LSP-style)
-	var buf strings.Builder
-	buf.WriteString(fmt.Sprintf("Content-Length: %d\r\n", len(data)))
-	buf.WriteString("\r\n")
-	buf.Write(data)
-	if _, err := s.writer.Write([]byte(buf.String())); err != nil {
+	var payload []byte
+	if s.framing == framingNewline {
+		payload = append(data, '\n')
+	} else {
+		var buf strings.Builder
+		buf.WriteString(fmt.Sprintf("Content-Length: %d\r\n", len(data)))
+		buf.WriteString("\r\n")
+		buf.Write(data)
+		payload = []byte(buf.String())
+	}
+	if _, err := s.writer.Write(payload); err != nil {
 		s.logger.Printf("Failed to write message: %v", err)
 		return
 	}

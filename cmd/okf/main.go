@@ -595,10 +595,14 @@ func lintBundleWithConfig(b *okf.KnowledgeBundle, cfg *lint.Config) *lint.Result
 func cmdMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
 	bundlePath := fs.String("bundle", "", "Path to knowledge bundle (auto-load on startup)")
+	repoPath := fs.String("repo", "", "Repository path for agent-facing tools")
+	knowledgeDir := fs.String("dir", ".okf/knowledge", "Knowledge directory for agent-facing tools")
 	fs.Parse(args)
 
 	config := mcp.ServerConfig{
-		BundlePath: *bundlePath,
+		BundlePath:   *bundlePath,
+		RepoPath:     *repoPath,
+		KnowledgeDir: *knowledgeDir,
 	}
 
 	server := mcp.NewServer(config)
