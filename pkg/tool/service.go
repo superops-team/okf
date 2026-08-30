@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -57,12 +58,13 @@ type Config struct {
 
 // Service serves OKF tool operations for one repository.
 type Service struct {
-	cfg Config
+	cfg                Config
+	writeKnowledgeFile func(string, []byte) error
 }
 
 // NewService constructs a Service with OKF defaults.
 func NewService(cfg Config) *Service {
-	return &Service{cfg: cfg}
+	return &Service{cfg: cfg, writeKnowledgeFile: atomicWriteKnowledgeFile}
 }
 
 // ToolEnvelope is the stable top-level response contract for agent tools.
@@ -103,18 +105,20 @@ type RefreshRequest struct {
 }
 
 type QueryRequest struct {
-	Query          string `json:"query"`
-	Limit          int    `json:"limit,omitempty"`
-	Type           string `json:"type,omitempty"`
-	Tag            string `json:"tag,omitempty"`
-	FilePath       string `json:"file_path,omitempty"`
-	Language       string `json:"language,omitempty"`
-	SymbolKind     string `json:"symbol_kind,omitempty"`
-	QualifiedName  string `json:"qualified_name,omitempty"`
-	RelationKind   string `json:"relation_kind,omitempty"`
-	RelationSource string `json:"relation_source,omitempty"`
-	RelationTarget string `json:"relation_target,omitempty"`
-	IncludeTrace   bool   `json:"include_trace,omitempty"`
+	Query          string   `json:"query"`
+	Limit          int      `json:"limit,omitempty"`
+	Type           string   `json:"type,omitempty"`
+	Types          []string `json:"types,omitempty"`
+	Project        string   `json:"project,omitempty"`
+	Tag            string   `json:"tag,omitempty"`
+	FilePath       string   `json:"file_path,omitempty"`
+	Language       string   `json:"language,omitempty"`
+	SymbolKind     string   `json:"symbol_kind,omitempty"`
+	QualifiedName  string   `json:"qualified_name,omitempty"`
+	RelationKind   string   `json:"relation_kind,omitempty"`
+	RelationSource string   `json:"relation_source,omitempty"`
+	RelationTarget string   `json:"relation_target,omitempty"`
+	IncludeTrace   bool     `json:"include_trace,omitempty"`
 }
 
 type ContextRequest struct {
@@ -1244,6 +1248,8 @@ func lenConcepts(bundle *okf.KnowledgeBundle) int {
 
 type queryFilters struct {
 	Type           string
+	Types          []string
+	Project        string
 	Tag            string
 	FilePath       string
 	Language       string
@@ -1261,6 +1267,8 @@ func filtersFromQueryRequest(req QueryRequest) queryFilters {
 	}
 	return queryFilters{
 		Type:           strings.TrimSpace(req.Type),
+		Types:          cleanStrings(req.Types),
+		Project:        strings.TrimSpace(req.Project),
 		Tag:            strings.TrimSpace(req.Tag),
 		FilePath:       filePath,
 		Language:       strings.TrimSpace(req.Language),
@@ -1280,9 +1288,25 @@ func cleanOptionalPath(path string) string {
 	return filepath.Clean(path)
 }
 
+func cleanStrings(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" && !slices.Contains(cleaned, value) {
+			cleaned = append(cleaned, value)
+		}
+	}
+	return cleaned
+}
+
 func activeQueryFilterCount(filters queryFilters) int {
 	count := 0
 	if filters.Type != "" {
+		count++
+	}
+	if len(filters.Types) > 0 {
+		count++
+	}
+	if filters.Project != "" {
 		count++
 	}
 	if filters.Tag != "" {
@@ -1538,6 +1562,12 @@ func scoreConcept(concept *okf.Concept, rawQuery string) (int, string, int) {
 
 func matchesQueryFilters(concept *okf.Concept, filters queryFilters) bool {
 	if filters.Type != "" && concept.Type != filters.Type {
+		return false
+	}
+	if len(filters.Types) > 0 && !slices.Contains(filters.Types, concept.Type) {
+		return false
+	}
+	if filters.Project != "" && stringCustomFieldOrEmpty(concept.CustomFields, "project") != filters.Project {
 		return false
 	}
 	if filters.Tag != "" && !hasTag(concept.Tags, filters.Tag) {
@@ -2005,7 +2035,7 @@ func failure(operation, repoRoot, knowledgeDir string, freshness *Freshness, err
 
 func isMutatingOperation(operation string) bool {
 	switch operation {
-	case OperationInit, OperationRefresh:
+	case OperationInit, OperationRefresh, OperationWrite:
 		return true
 	default:
 		return false

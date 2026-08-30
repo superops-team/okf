@@ -81,8 +81,11 @@ Agent-facing JSON tool operations.
 
 ### mcp
 Start the MCP (Model Context Protocol) server for AI agent integration.
-- `-bundle PATH` - Path to knowledge bundle (auto-load on startup)
+- `-repo PATH` - Repository root used by the agent-facing repository knowledge service
+- `-dir PATH` - Knowledge directory; relative paths resolve under `repo`, absolute paths remain absolute
+- `-bundle PATH` - Optional legacy bundle path to auto-load on startup
 - Communicates over stdio using JSON-RPC 2.0
+- Exposes service-backed repository tools plus durable note/event/feedback tools; see `mcp-server.md`
 
 ### hook
 Install git hooks for automatic updates.

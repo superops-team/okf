@@ -68,6 +68,7 @@ go install github.com/superops-team/okf/cmd/okf@latest
 - **🛠 Git Hook** — 一键安装，每次提交自动更新知识库
 - **📋 Lint 检查** — 内置规范检查（13 条规则）
 - **🔎 高级查询** — 支持按类型、标签、全文搜索
+- **🤖 Agent MCP 接入** — 通过标准 MCP 提供仓库知识状态、初始化、刷新、查询、上下文以及持久 note/event/feedback
 - **🏗 模块化架构** — 遵循 Go 最佳实践，清晰分层设计
 
 ## 项目结构
@@ -115,7 +116,17 @@ okf lint
 
 # 安装 Git Hook（每次提交自动更新）
 okf hook -type post-commit
+
+# 为指定仓库启动 MCP server。相对 --dir 解析到 --repo 下，绝对 --dir 保持绝对。
+okf mcp --repo /your/repo --dir .okf/knowledge
 ```
+
+### Agent-facing MCP 工具
+
+MCP server 通过 `okf_status`、`okf_init`、`okf_refresh`、`okf_query`、`okf_context` 暴露仓库知识服务；通过 `okf_note`、`okf_log`、`okf_feedback` 持久化显式提交的知识，并由 `okf_ask` 仅查询 note/event/feedback。原有 bundle/list/get/search/lint/document-import 工具保持可用。
+
+写工具要求稳定的 `idempotency_key`，使用确定性 identity，拒绝未知字段和错误字段类型，并对路径逃逸、symlink root、大小超限和 credential-like metadata 采取 fail-closed。Server 只持久化调用方显式提交的 feedback，不读取宿主应用的私有事件总线。详见 [`docs/knowledge/mcp-server.md`](docs/knowledge/mcp-server.md) 和 [`docs/knowledge/durable-capture.md`](docs/knowledge/durable-capture.md)。
+
 
 ## 模块说明
 

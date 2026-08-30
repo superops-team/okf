@@ -70,6 +70,7 @@ Download pre-built binaries for your platform from the
 - **🛠 Git Hook** — One-click installation, automatic knowledge base updates on every commit
 - **📋 Lint Checking** — Built-in specification compliance checker (13 rules)
 - **🔎 Advanced Query** — Filter by type, tags, or full-text search
+- **🤖 Agent-facing MCP** — Standard MCP tools for repository status/init/refresh/query/context plus durable note/event/feedback capture
 - **🏗 Modular Architecture** — Clean, layered design following Go best practices
 
 ## Project Structure
@@ -117,7 +118,18 @@ okf lint
 
 # Install Git Hook (automatic updates on every commit)
 okf hook -type post-commit
+
+# Start the MCP server for a repository. Relative --dir values resolve under --repo;
+# absolute --dir values remain absolute.
+okf mcp --repo /your/repo --dir .okf/knowledge
 ```
+
+### Agent-facing MCP tools
+
+The MCP server exposes the repository knowledge service through `okf_status`, `okf_init`, `okf_refresh`, `okf_query`, and `okf_context`. Durable knowledge capture is available through `okf_note`, `okf_log`, and `okf_feedback`; `okf_ask` queries only those durable note/event/feedback concepts. Existing bundle/list/get/search/lint/document-import tools remain available.
+
+Writes require a stable `idempotency_key`, use deterministic identities, reject unknown or incorrectly typed fields, and fail closed for path escape, symlink-root, size-limit, and credential-like metadata violations. The server persists only feedback explicitly submitted by the caller; it does not inspect a host application's private event bus. See [`docs/knowledge/mcp-server.md`](docs/knowledge/mcp-server.md) and [`docs/knowledge/durable-capture.md`](docs/knowledge/durable-capture.md).
+
 
 ## Module Reference
 
