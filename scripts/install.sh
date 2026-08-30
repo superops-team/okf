@@ -5,7 +5,7 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash -s -- v1.2.0
+#   curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash -s -- v0.3.0
 #
 # Environment variables:
 #   OKF_VERSION   - specific version to install (default: latest)
@@ -101,7 +101,7 @@ resolve_latest_version() {
   if ! resp="$(curl -fsSL "$url" 2>/dev/null)"; then
     log_error "Failed to query GitHub API for latest release"
     log_warn "Check your network or specify a version explicitly:"
-    log_warn "  curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash -s -- v1.2.0"
+    log_warn "  curl -fsSL https://raw.githubusercontent.com/superops-team/okf/main/scripts/install.sh | bash -s -- v0.3.0"
     exit 1
   fi
   local tag

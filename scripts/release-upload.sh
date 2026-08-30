@@ -3,7 +3,7 @@
 # okf — Release upload script
 # Creates or updates a GitHub release and uploads build artifacts
 #
-# Usage: GITHUB_TOKEN=<pat> ./scripts/release-upload.sh 1.2.0
+# Usage: GITHUB_TOKEN=<pat> ./scripts/release-upload.sh 0.3.0
 
 set -euo pipefail
 

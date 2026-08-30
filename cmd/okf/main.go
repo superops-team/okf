@@ -16,7 +16,7 @@ import (
 	"github.com/superops-team/okf/pkg/query"
 )
 
-const Version = "1.2.0"
+const Version = "0.3.0"
 
 const usage = `okf - Open Knowledge Format CLI
 
