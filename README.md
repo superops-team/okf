@@ -1,6 +1,6 @@
-<div align="right">
-[English](README.md) | [中文](README.zh-CN.md)
-</div>
+<p align="right">
+<a href="README.md">English</a> | <a href="README.zh-CN.md">中文</a>
+</p>
 
 # okf — Open Knowledge Format
 
@@ -312,6 +312,6 @@ Apache License 2.0. See the [LICENSE](LICENSE) file for the full license text.
 
 ---
 
-<div align="center">
-[⬆ Back to Top](#okf--open-knowledge-format) &nbsp;•&nbsp; [🇨🇳 切换到中文](README.zh-CN.md)
-</div>
+<p align="center">
+<a href="#okf--open-knowledge-format">⬆ Back to Top</a> &nbsp;•&nbsp; <a href="README.zh-CN.md">🇨🇳 切换到中文</a>
+</p>
