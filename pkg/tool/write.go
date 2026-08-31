@@ -106,6 +106,13 @@ func (s *Service) WriteKnowledge(ctx stdctx.Context, req WriteKnowledgeRequest) 
 		return failure(OperationWrite, resolved.repoRoot, resolved.knowledgeDir, readFreshness(resolved), err)
 	}
 	if err := s.writeKnowledgeFile(fullPath, data); err != nil {
+		// The persistence hook may fail after rename (for example when the
+		// containing directory cannot be synced). Treat that as an
+		// uncommitted write from the caller's perspective and remove any
+		// file that may have become visible before returning the error.
+		if rollbackErr := rollbackKnowledgeFile(fullPath); rollbackErr != nil {
+			err = fmt.Errorf("%w; rollback failed: %v", err, rollbackErr)
+		}
 		return failure(OperationWrite, resolved.repoRoot, resolved.knowledgeDir, readFreshness(resolved), err)
 	}
 	persisted, err := parser.ParseConcept(fullPath)

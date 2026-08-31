@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,6 +148,30 @@ func TestWriteKnowledgeCommitFailureLeavesNoHalfWrite(t *testing.T) {
 	query := NewService(Config{RepoPath: repo}).Query(t.Context(), QueryRequest{Query: "must remain invisible", Types: []string{"note"}})
 	if query.OK || query.Error == nil || query.Error.Code != ErrKnowledgeNotInitialized {
 		t.Fatalf("query = %#v, want knowledge_not_initialized after failed commit", query)
+	}
+}
+
+func TestWriteKnowledgePostRenameFailureRollsBackCommittedFile(t *testing.T) {
+	repo := initToolTestRepo(t)
+	svc := NewService(Config{RepoPath: repo})
+	svc.writeKnowledgeFile = func(path string, data []byte) error {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			return err
+		}
+		return errors.New("simulated post-rename sync failure")
+	}
+
+	resp := svc.WriteKnowledge(t.Context(), WriteKnowledgeRequest{
+		Kind: "note", Content: "must roll back after commit-stage failure", IdempotencyKey: "post-rename-failure-v1",
+	})
+	if resp.OK || resp.Error == nil {
+		t.Fatalf("response = %#v, want structured failure", resp)
+	}
+	if entries := regularFilesUnder(t, filepath.Join(repo, ".okf", "knowledge")); len(entries) != 0 {
+		t.Fatalf("persisted files after post-rename failure = %v, want none", entries)
 	}
 }
 
