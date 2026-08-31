@@ -1,5 +1,13 @@
 # OKF Release Notes
 
+## v0.4.1 — Durable MCP write rollback
+
+This patch release fixes durable MCP writes that fail after the target file has
+become visible. Such failures now roll back the target file before returning an
+error, preserving the atomic-write contract.
+
+The CLI and MCP handshake report version 0.4.1.
+
 ## v0.4.0 — Vector Semantic Search
 
 > Minor version bump: this release adds a new capability (local semantic search),
