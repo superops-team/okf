@@ -11,10 +11,13 @@ import (
 	"time"
 
 	"github.com/superops-team/okf/pkg/convert"
+	"github.com/superops-team/okf/pkg/embeddings"
 	"github.com/superops-team/okf/pkg/lint"
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/parser"
+	"github.com/superops-team/okf/pkg/query"
 	toolsvc "github.com/superops-team/okf/pkg/tool"
+	"github.com/superops-team/okf/pkg/vectorindex"
 )
 
 // ToolHandler is a function that handles a tool call.
@@ -182,6 +185,25 @@ func (r *ToolRegistry) registerCoreTools() {
 			},
 		},
 	}, r.handleSearch)
+
+	r.Register(Tool{
+		Name:        "okf_semantic_search",
+		Description: "Semantic (natural-language) search over concepts; requires okf vector index built for the bundle",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{
+					"type":        "string",
+					"description": "Natural-language query (semantic, not literal)",
+				},
+				"limit": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum results (default: 10)",
+				},
+			},
+			"required": []string{"query"},
+		},
+	}, r.handleSemanticSearch)
 
 	r.Register(Tool{
 		Name:        "okf_lint_bundle",
@@ -795,6 +817,93 @@ func (r *ToolRegistry) handleSearch(args map[string]interface{}) (*ToolCallResul
 	}
 
 	return &ToolCallResult{Content: []ContentItem{TextContent(sb.String())}}, nil
+}
+
+func (r *ToolRegistry) handleSemanticSearch(args map[string]interface{}) (*ToolCallResult, error) {
+	bundle, bundlePath := r.GetBundle()
+	if bundle == nil {
+		return errorResult("No bundle loaded. Call okf_load_bundle first."), nil
+	}
+	q, _ := args["query"].(string)
+	if strings.TrimSpace(q) == "" {
+		return errorResult("query is required"), nil
+	}
+	limit := 10
+	if l, ok := args["limit"].(float64); ok && l > 0 {
+		limit = int(l)
+	}
+
+	emb, err := embeddings.NewMiniLM()
+	if err != nil {
+		return errorResult(fmt.Sprintf("向量模型初始化失败: %v", err)), nil
+	}
+	defer emb.Close()
+
+	idx := vectorindex.NewHNSW(emb.Dimension())
+	idxDir := filepath.Join(bundlePath, ".okf", "vector")
+	if _, err := idx.Load(idxDir); err != nil {
+		return errorResult(fmt.Sprintf("向量索引不可用，请先执行 okf vector index: %v", err)), nil
+	}
+
+	backend := &mcpSemanticBackend{emb: emb, idx: idx}
+	results, err := query.SemanticSearch(mcpToQueryBundle(bundle), q, backend, query.SearchOptions{TopK: limit})
+	if err != nil {
+		return errorResult(fmt.Sprintf("语义检索失败: %v", err)), nil
+	}
+
+	var sb strings.Builder
+	if len(results) == 0 {
+		sb.WriteString("No results found.")
+		return &ToolCallResult{Content: []ContentItem{TextContent(sb.String())}}, nil
+	}
+	for i, res := range results {
+		c := res.Concept
+		sb.WriteString(fmt.Sprintf("%d. [%s] %s (source=%s, score=%.4f)\n", i+1, c.Type, c.FilePath, res.Source, res.SemanticScore))
+		if c.Title != "" {
+			sb.WriteString(fmt.Sprintf("   Title: %s\n", c.Title))
+		}
+		if c.Description != "" {
+			sb.WriteString(fmt.Sprintf("   %s\n", c.Description))
+		}
+	}
+	sb.WriteString(fmt.Sprintf("\nFound %d results", len(results)))
+	return &ToolCallResult{Content: []ContentItem{TextContent(sb.String())}}, nil
+}
+
+// mcpSemanticBackend 适配 query.SemanticBackend：MiniLM 编码 + HNSW 近邻检索。
+type mcpSemanticBackend struct {
+	emb *embeddings.MiniLM
+	idx *vectorindex.HNSW
+}
+
+func (b *mcpSemanticBackend) EmbedQuery(text string) ([]float32, error) {
+	return b.emb.EmbedQuery(text)
+}
+
+func (b *mcpSemanticBackend) Search(vec []float32, k int) []query.SemanticHit {
+	matches := b.idx.Search(vec, k)
+	out := make([]query.SemanticHit, len(matches))
+	for i, m := range matches {
+		out[i] = query.SemanticHit{Key: m.Key, Score: m.Score}
+	}
+	return out
+}
+
+// mcpToQueryBundle 将 okf bundle 转换为 query bundle（与 CLI toQueryBundle 逻辑一致）。
+func mcpToQueryBundle(bundle *okf.KnowledgeBundle) *query.KnowledgeBundle {
+	concepts := make([]*query.Concept, 0, len(bundle.Concepts))
+	for _, c := range bundle.Concepts {
+		concepts = append(concepts, &query.Concept{
+			Type:        c.Type,
+			Title:       c.Title,
+			Description: c.Description,
+			Resource:    c.Resource,
+			Tags:        c.Tags,
+			Content:     c.Content,
+			FilePath:    c.FilePath,
+		})
+	}
+	return &query.KnowledgeBundle{Concepts: concepts}
 }
 
 func (r *ToolRegistry) handleLintBundle(args map[string]interface{}) (*ToolCallResult, error) {

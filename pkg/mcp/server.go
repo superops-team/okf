@@ -212,7 +212,7 @@ func (s *Server) handleInitialize(id json.RawMessage, params json.RawMessage) {
 		},
 		ServerInfo: ImplementationInfo{
 			Name:    "okf-mcp-server",
-			Version: "0.1.0",
+			Version: "0.4.0",
 		},
 		Instructions: "OKF (Open Knowledge Format) MCP Server. Load and query knowledge bundles, inspect concepts, run lint checks.",
 	}

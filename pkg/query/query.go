@@ -81,6 +81,11 @@ type conceptSnapshot struct {
 type SearchResult struct {
 	Concept       *Concept
 	SymbolMatches []SymbolMatch
+	// 以下字段仅由语义检索（SemanticSearch）填充，可选、向后兼容：
+	// Source 标注命中来源：semantic / lexical / both。
+	Source string
+	// SemanticScore 为 RRF 融合分（k=60），非余弦相似度。
+	SemanticScore float32
 }
 
 // SymbolMatch describes a symbol hit parsed from generated OKF concept content.

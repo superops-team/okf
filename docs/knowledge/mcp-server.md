@@ -16,7 +16,7 @@ Agent-facing repository operations delegate to one shared `pkg/tool.Service`; ha
 - **Transport**: stdio, JSON-RPC 2.0 with byte-accurate `Content-Length` framing
 - **Protocol version**: `2024-11-05`
 - **Server name**: `okf-mcp-server`
-- **Server version**: `0.1.0`
+- **Server version**: `0.3.0`
 
 ```bash
 okf mcp --repo /path/to/repository --dir .okf/knowledge

@@ -42,13 +42,15 @@ echo ""
 mkdir -p "$OUTPUT_DIR"
 rm -rf "${OUTPUT_DIR:?}"/*
 
+# Platforms with embedded ONNX Runtime resources (see scripts/fetch-ort.sh).
+# windows/arm64 is intentionally excluded: upstream ONNX Runtime stopped
+# shipping Windows ARM64 CPU packages since v1.24, so no resource is bundled.
 PLATFORMS=(
   "linux/amd64"
   "linux/arm64"
   "darwin/amd64"
   "darwin/arm64"
   "windows/amd64"
-  "windows/arm64"
 )
 
 build_platform() {
@@ -72,6 +74,7 @@ build_platform() {
 
   # LICENSE + README
   cp "$REPO_ROOT/README.md" "$arch_dir/" 2>/dev/null || true
+  cp "$REPO_ROOT/LICENSE" "$arch_dir/" 2>/dev/null || true
 
   # Create archive
   local archive_name="${BINARY_NAME}_${VERSION}_${os}_${arch}"
