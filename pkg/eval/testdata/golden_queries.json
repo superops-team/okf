@@ -1,0 +1,26 @@
+{
+  "description": "Golden query set for okf IR evaluation benchmark. 20 cases over 7 document formats (pdf/docx/xlsx/pptx/html/csv/txt). expected_docs are in document-name order; for binary-relevance metrics the internal order does not affect scores.",
+  "k": 5,
+  "cases": [
+    {"query": "body text", "expected_docs": ["sample.pdf.md"]},
+    {"query": "Section One", "expected_docs": ["sample.docx.md"]},
+    {"query": "banana", "expected_docs": ["sample.xlsx.md"]},
+    {"query": "First slide", "expected_docs": ["sample.pptx.md"]},
+    {"query": "Main Heading", "expected_docs": ["sample.html.md"]},
+    {"query": "foo", "expected_docs": ["sample.csv.md"]},
+    {"query": "Plain text", "expected_docs": ["sample.txt.md"]},
+    {"query": "OKF", "expected_docs": ["sample.docx.md", "sample.pdf.md", "sample.pptx.md", "sample.txt.md"]},
+    {"query": "content", "expected_docs": ["sample.docx.md", "sample.pdf.md", "sample.pptx.md", "sample.txt.md"]},
+    {"query": "paragraph", "expected_docs": ["sample.docx.md", "sample.html.md"]},
+    {"query": "value", "expected_docs": ["sample.csv.md", "sample.docx.md"]},
+    {"query": "item", "expected_docs": ["sample.html.md", "sample.xlsx.md"]},
+    {"query": "apple", "expected_docs": ["sample.xlsx.md"]},
+    {"query": "bar", "expected_docs": ["sample.csv.md"]},
+    {"query": "alpha", "expected_docs": ["sample.docx.md"]},
+    {"query": "item one", "expected_docs": ["sample.html.md"]},
+    {"query": "item two", "expected_docs": ["sample.html.md"]},
+    {"query": "Second Slide", "expected_docs": ["sample.pptx.md"]},
+    {"query": "nonexistent_xyz_123", "expected_docs": []},
+    {"query": "zzz_no_such_word", "expected_docs": []}
+  ]
+}

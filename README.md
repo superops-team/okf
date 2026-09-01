@@ -199,6 +199,43 @@ go test ./...
 go test -bench=. -benchmem ./...
 ```
 
+## Evaluation
+
+okf ships a reproducible IR (information-retrieval) quality benchmark that
+quantifies search quality using canonical metrics.
+
+### Metrics
+
+| Metric | Definition |
+|--------|-----------|
+| **Recall@K** | Fraction of expected relevant docs found in top-K results |
+| **Precision@K** | Fraction of top-K results that are relevant |
+| **MRR** | Mean Reciprocal Rank — 1/rank of the first relevant result |
+| **NDCG@K** | Normalized Discounted Cumulative Gain (binary relevance) |
+
+### Running the benchmark
+
+```bash
+tools/eval.sh
+```
+
+This runs 20 golden queries (18 positive, 2 negative) across all 7 document
+formats and prints per-case and aggregate scores.
+
+### Baseline (K=5, 20 cases)
+
+| Metric | All cases | Positive only |
+|--------|-----------|---------------|
+| Recall@5 | 1.0000 | 1.0000 |
+| Precision@5 | 0.9000 | 1.0000 |
+| MRR | 0.9000 | 1.0000 |
+| NDCG@5 | 1.0000 | 1.0000 |
+
+All 18 positive queries return the correct top-1; both negative queries
+return zero results. The golden set lives in
+`pkg/eval/testdata/golden_queries.json` and metric implementations in
+`pkg/eval/`.
+
 ## OKF v0.2 Specification Support
 
 This project implements the [OKF v0.2 specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) with full backward compatibility for v0.1.
