@@ -43,12 +43,12 @@ type Aggregate struct {
 
 // EvalReport is the full benchmark output: per-case results + aggregates.
 type EvalReport struct {
-	K                     int
-	Cases                 []CaseResult
-	Aggregate             Aggregate // mean over all cases
-	AggregateNonNegative  Aggregate // mean over cases with non-empty expected (positive queries)
-	PositiveCount         int
-	NegativeCount         int
+	K                    int
+	Cases                []CaseResult
+	Aggregate            Aggregate // mean over all cases
+	AggregateNonNegative Aggregate // mean over cases with non-empty expected (positive queries)
+	PositiveCount        int
+	NegativeCount        int
 }
 
 // LoadGoldenCases reads a golden set JSON file and returns its cases.
