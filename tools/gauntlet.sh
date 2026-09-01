@@ -76,6 +76,15 @@ if ! "$BIN" lint -path "$KB" >/dev/null 2>&1; then
   echo "GATE-FAILED: real-execution lint reported errors"
   exit 1
 fi
+# 向量语义搜索冒烟：需构建期资源已就绪（scripts/fetch-ort.sh + fetch-model.sh，见 README）
+if ! "$BIN" vector index -path "$KB" >/dev/null 2>&1; then
+  echo "GATE-FAILED: real-execution vector index failed (run scripts/fetch-ort.sh darwin arm64 etc first)"
+  exit 1
+fi
+if ! "$BIN" search -path "$KB" -q "check my notes for errors" -semantic 2>/dev/null | grep -q "source="; then
+  echo "GATE-FAILED: real-execution semantic search produced no sourced results"
+  exit 1
+fi
 
 echo
 echo "GAUNTLET PASS: build/vet/staticcheck/tests(-race)/coverage(${COV}%)/shuffle/mutation/real-exec"

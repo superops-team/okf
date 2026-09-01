@@ -100,6 +100,15 @@ type Tool struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"inputSchema"`
+	Annotations *ToolAnnotations       `json:"annotations,omitempty"`
+}
+
+// ToolAnnotations declares behavioral properties without relying on tool names.
+type ToolAnnotations struct {
+	ReadOnlyHint    bool `json:"readOnlyHint"`
+	DestructiveHint bool `json:"destructiveHint"`
+	IdempotentHint  bool `json:"idempotentHint"`
+	OpenWorldHint   bool `json:"openWorldHint"`
 }
 
 // ToolsListResult is the result of tools/list.

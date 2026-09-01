@@ -57,3 +57,7 @@ temp/
 !.env.example
 okf-bin
 .gocache/
+
+# 向量化构建期资源（大文件，CI/脚本下载，不入 git）
+internal/embeddings/assets/libs/
+internal/embeddings/assets/models/

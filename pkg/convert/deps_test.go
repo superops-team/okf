@@ -33,6 +33,52 @@ func TestDependencyPinned(t *testing.T) {
 	t.Fatal("downmark not found in go.mod")
 }
 
+// Semantic-search dependencies must be pinned to exact versions so builds are
+// reproducible across platforms (pure-onnx, coder/hnsw). The renameio fork is
+// a local replace and must stay pinned too.
+func TestVectorDepsPinned(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{
+		"github.com/amikos-tech/pure-onnx": false,
+		"github.com/coder/hnsw":            false,
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		for mod := range want {
+			if strings.HasPrefix(line, mod+" ") {
+				fields := strings.Fields(line)
+				if len(fields) != 2 {
+					t.Fatalf("%s line not pinned: %q", mod, line)
+				}
+				ver := fields[1]
+				if !strings.HasPrefix(ver, "v") || strings.Contains(ver, "x") {
+					t.Fatalf("%s version must be exact, got %q", mod, ver)
+				}
+				t.Logf("%s pinned to %s", mod, ver)
+				want[mod] = true
+			}
+		}
+	}
+	// the local renameio fork must be wired via replace for cross-platform builds
+	replaced := false
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, "github.com/google/renameio") && strings.Contains(line, "./internal/third_party/renameio") {
+			replaced = true
+		}
+	}
+	if !replaced {
+		t.Error("renameio must be replaced by the local cross-platform fork")
+	}
+	for mod, seen := range want {
+		if !seen {
+			t.Errorf("%s not found in go.mod", mod)
+		}
+	}
+}
+
 // S21: the re-import semantics of a downmark upgrade must be declared in the
 // Release Notes.
 func TestReleaseNotesDeclaresReimport(t *testing.T) {
