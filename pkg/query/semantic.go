@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -28,10 +29,55 @@ func Fingerprint(c *Concept) string {
 	return strings.ToLower(c.Type) + ":" + strings.ToLower(c.Title) + ":" + filepath.ToSlash(filepath.Clean(c.FilePath))
 }
 
-// rrfK 是 Reciprocal Rank Fusion 的常数 k。
-const rrfK = 60
+// chunkKeySep 分隔概念指纹与块序号。
+// 选择 '#'：概念指纹由 type/title/path 组成，其中 path 已被 filepath.Clean 规范化，
+// 不会包含 '#'；title 若含 '#' 也不影响解析，因为 ChunkKeyConcept 从右侧截取。
+const chunkKeySep = "#"
 
-func rrfScore(rank int) float32 { return 1.0 / (rrfK + float32(rank)) }
+// ChunkKey 生成分块级索引 key：<概念指纹>#<块序号>。
+func ChunkKey(c *Concept, ordinal int) string {
+	return Fingerprint(c) + chunkKeySep + strconv.Itoa(ordinal)
+}
+
+// ChunkKeyConcept 从分块 key 反解出概念指纹；无分隔符时原样返回（兼容概念级 key）。
+func ChunkKeyConcept(key string) string {
+	if i := strings.LastIndex(key, chunkKeySep); i >= 0 {
+		return key[:i]
+	}
+	return key
+}
+
+// RRF 与权重默认值。
+//
+// DefaultRRFK=60 取业界共识值，与 Elasticsearch rank_constant、
+// Milvus RRFRanker、WeKnora GetEffectiveRRFK() 一致。
+//
+// 权重默认等权（1:1）。定案依据（实测，非推测）：
+//   - 在 28 条语义化 golden set（pkg/eval/testdata/golden_semantic.json）上
+//     扫描向量:词法比例 0.8~4.0，MRR 在 1:1 附近区间（0.8~1.2）达 0.804~0.824，
+//     而 2.33:1（即 0.7/0.3）为 0.779；
+//   - 区间内相邻比例的差异仅 ±1 个 case 量级（26 正样本下 1 个 case ≈ 0.019 MRR），
+//     属噪声，故不选区间内的"最优单点"（会过拟合当前语料）；
+//   - 另一组 16 条查询独立复测同样指向 1:1（MRR +12.5% vs 0.7/0.3 的 +1.3%），
+//     两个集合结论一致，故采用等权而非业界常见的 0.7/0.3。
+//
+// 权重按相对比例生效（同比例缩放不改变排序），不要求权重和为 1.0。
+const (
+	DefaultRRFK          = 60
+	DefaultVectorWeight  = 0.5
+	DefaultLexicalWeight = 0.5
+)
+
+// rrfScore 计算加权 RRF 分量：weight / (k + rank)。
+func rrfScore(weight float64, k, rank int) float32 {
+	return float32(weight / float64(k+rank))
+}
+
+// LexicalBackend 抽象词法检索通道（生产实现：pkg/lexical.BM25 以 chunk 为索引单位）。
+// 返回的 key 可为 chunk key 或概念指纹，由 ChunkKeyConcept 统一回溯。
+type LexicalBackend interface {
+	Search(query string, k int) []SemanticHit
+}
 
 // SearchOptions 控制语义检索行为。
 type SearchOptions struct {
@@ -41,10 +87,35 @@ type SearchOptions struct {
 	SemanticTopK int
 	// LexicalTopK 词法召回候选数（默认 20）。
 	LexicalTopK int
+	// CandidateFactor 块级召回放大系数（默认 4）。
+	// 索引以 chunk 为单位，同一概念可能占用多个候选位；
+	// 需按此系数放大底层召回量，回溯去重后才够填满 TopK 个概念。
+	CandidateFactor int
+	// RRFK 是 RRF 平滑常数（默认 DefaultRRFK）。
+	RRFK int
+	// VectorWeight 语义通道权重（默认 DefaultVectorWeight）。
+	VectorWeight float64
+	// LexicalWeight 词法通道权重（默认 DefaultLexicalWeight）。
+	// 显式设为 0 时跳过词法检索，退化为纯语义通道。
+	LexicalWeight float64
+	// Lexical 是可选的 BM25 词法后端。为 nil 时回退到内置子串匹配通道。
+	Lexical LexicalBackend
+
+	// lexicalWeightSet 记录调用方是否显式设置过 LexicalWeight，
+	// 用于区分"未设置（用默认值）"与"显式设为 0（关闭词法）"。
+	lexicalWeightSet bool
 }
 
-// SemanticSearch 将语义召回（backend）与既有词法召回（子串/正则）经 RRF 融合后返回结果。
-// 词法通道始终参与；backend 为 nil 时退化为纯词法（等价 SearchWithMatches 行为）。
+// WithLexicalWeight 返回显式设置词法权重后的选项副本（0 表示关闭词法通道）。
+// 需要它是因为 Go 无法区分"字段为零值"和"调用方显式赋零"。
+func (o SearchOptions) WithLexicalWeight(w float64) SearchOptions {
+	o.LexicalWeight = w
+	o.lexicalWeightSet = true
+	return o
+}
+
+// SemanticSearch 将语义召回与词法召回经加权 RRF 融合后返回结果。
+// backend 为 nil 时退化为纯词法；LexicalWeight 为 0 时退化为纯语义。
 func SemanticSearch(bundle *KnowledgeBundle, text string, backend SemanticBackend, opts SearchOptions) ([]SearchResult, error) {
 	if bundle == nil {
 		return nil, nil
@@ -58,6 +129,18 @@ func SemanticSearch(bundle *KnowledgeBundle, text string, backend SemanticBacken
 	if opts.LexicalTopK <= 0 {
 		opts.LexicalTopK = 20
 	}
+	if opts.CandidateFactor <= 0 {
+		opts.CandidateFactor = 4
+	}
+	if opts.RRFK <= 0 {
+		opts.RRFK = DefaultRRFK
+	}
+	if opts.VectorWeight <= 0 {
+		opts.VectorWeight = DefaultVectorWeight
+	}
+	if !opts.lexicalWeightSet && opts.LexicalWeight == 0 {
+		opts.LexicalWeight = DefaultLexicalWeight
+	}
 
 	// 指纹 → 概念 映射
 	byFingerprint := make(map[string]*Concept, len(bundle.Concepts))
@@ -65,43 +148,90 @@ func SemanticSearch(bundle *KnowledgeBundle, text string, backend SemanticBacken
 		byFingerprint[Fingerprint(c)] = c
 	}
 
-	// 语义通道
+	// 语义通道：索引以 chunk 为单位，需放大召回后回溯父概念。
+	// 同一概念被多个 chunk 命中时分数累加（多块命中 = 更强证据），
+	// rank 取最靠前的那个 chunk（用于同分 tie-break）。
 	semRank := make(map[*Concept]int) // 1-based rank
+	semHits := make(map[*Concept]int) // 命中块数（>1 表示多块命中）
 	if backend != nil {
 		vec, err := backend.EmbedQuery(text)
 		if err != nil {
 			return nil, fmt.Errorf("semantic embed query: %w", err)
 		}
-		for i, hit := range backend.Search(vec, opts.SemanticTopK) {
-			if c, ok := byFingerprint[hit.Key]; ok {
-				if _, seen := semRank[c]; !seen {
-					semRank[c] = i + 1
+		// 候选窗口 = TopK * CandidateFactor。
+		// 刻意以 TopK（而非 SemanticTopK）为基准并保持窄窗口：
+		// 分数按命中块数累加，若窗口接近索引总块数，几乎所有块都会被召回，
+		// 累加就退化成"按块数排名"——块最多的文档夺冠而与相关性无关
+		// （实测：窗口 80 / 总块 86 时，21 块的 lint.md 压过真正相关的 cli.md）。
+		want := opts.TopK * opts.CandidateFactor
+		rank := 0
+		for _, hit := range backend.Search(vec, want) {
+			c, ok := byFingerprint[ChunkKeyConcept(hit.Key)]
+			if !ok {
+				continue
+			}
+			rank++
+			semHits[c]++
+			if _, seen := semRank[c]; !seen {
+				semRank[c] = rank
+			}
+		}
+	}
+
+	// 词法通道：权重为 0 时完全跳过（避免无谓开销）。
+	lexRank := make(map[*Concept]int) // 1-based rank
+	lexHits := make(map[*Concept]int)
+	if opts.LexicalWeight > 0 {
+		if opts.Lexical != nil {
+			// BM25 后端：以 chunk 为单位，同样需回溯父概念并累加。
+			want := opts.TopK * opts.CandidateFactor
+			rank := 0
+			for _, hit := range opts.Lexical.Search(text, want) {
+				c, ok := byFingerprint[ChunkKeyConcept(hit.Key)]
+				if !ok {
+					continue
+				}
+				rank++
+				lexHits[c]++
+				if _, seen := lexRank[c]; !seen {
+					lexRank[c] = rank
+				}
+			}
+		} else {
+			// 回退：内置子串匹配（无相关性打分，仅作为无 BM25 索引时的兜底）
+			lex := SearchWithMatches(bundle, text)
+			if opts.LexicalTopK < len(lex) {
+				lex = lex[:opts.LexicalTopK]
+			}
+			for i, r := range lex {
+				if _, seen := lexRank[r.Concept]; !seen {
+					lexRank[r.Concept] = i + 1
+					lexHits[r.Concept] = 1
 				}
 			}
 		}
 	}
 
-	// 词法通道
-	lexRank := make(map[*Concept]int) // 1-based rank
-	lex := SearchWithMatches(bundle, text)
-	if opts.LexicalTopK < len(lex) {
-		lex = lex[:opts.LexicalTopK]
-	}
-	for i, r := range lex {
-		if _, seen := lexRank[r.Concept]; !seen {
-			lexRank[r.Concept] = i + 1
-		}
-	}
-
-	// RRF 融合 + 来源标注
+	// 加权 RRF 融合 + 来源标注。
+	// 两侧均按命中块数累加：一个概念的多个 chunk 都命中时，证据更强。
+	// 实测（docs/knowledge，13 条语义化查询）：累加 Recall@5 +8.3%，
+	// 而只取最佳块（max-pooling）退化到 +0.0%，故采用累加。
 	score := make(map[*Concept]float32)
 	source := make(map[*Concept]string)
 	for c, r := range semRank {
-		score[c] += rrfScore(r)
+		hits := semHits[c]
+		if hits < 1 {
+			hits = 1
+		}
+		score[c] += rrfScore(opts.VectorWeight, opts.RRFK, r) * float32(hits)
 		source[c] = "semantic"
 	}
 	for c, r := range lexRank {
-		score[c] += rrfScore(r)
+		hits := lexHits[c]
+		if hits < 1 {
+			hits = 1
+		}
+		score[c] += rrfScore(opts.LexicalWeight, opts.RRFK, r) * float32(hits)
 		switch source[c] {
 		case "semantic":
 			source[c] = "both"
@@ -110,21 +240,30 @@ func SemanticSearch(bundle *KnowledgeBundle, text string, backend SemanticBacken
 		}
 	}
 
-	// 排序（降序；同分按词法 rank 升序，保持稳定）
+	// 排序（降序）。同分时必须有确定的 tie-break，否则顺序取决于 map 遍历顺序，
+	// 同一查询多次执行返回不同排列（不可复现）。
+	// 依据：分数 > 语义 rank > 有无语义命中 > 来源(both>semantic>lexical) > 指纹兜底。
 	keys := make([]*Concept, 0, len(score))
 	for c := range score {
 		keys = append(keys, c)
 	}
 	sort.SliceStable(keys, func(i, j int) bool {
-		if score[keys[i]] != score[keys[j]] {
-			return score[keys[i]] > score[keys[j]]
+		a, b := keys[i], keys[j]
+		if score[a] != score[b] {
+			return score[a] > score[b]
 		}
-		ri, iok := semRank[keys[i]]
-		rj, jok := semRank[keys[j]]
-		if iok && jok {
-			return ri < rj
+		ra, aok := semRank[a]
+		rb, bok := semRank[b]
+		if aok && bok && ra != rb {
+			return ra < rb
 		}
-		return source[keys[i]] > source[keys[j]] // both > semantic > lexical
+		if aok != bok {
+			return aok // 有语义命中的排前
+		}
+		if source[a] != source[b] {
+			return source[a] > source[b] // both > semantic > lexical（字典序恰好满足）
+		}
+		return Fingerprint(a) < Fingerprint(b) // 确定性兜底
 	})
 
 	out := make([]SearchResult, 0, len(keys))

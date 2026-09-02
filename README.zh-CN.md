@@ -42,7 +42,7 @@
 - **🛠 Git Hook** — 一键安装，每次提交自动更新知识库
 - **📋 Lint 检查** — 内置规范检查（16 条规则）
 - **🔎 高级查询** — 支持按类型、标签、全文搜索
-- **🧠 语义搜索** — 对概念进行本地自然语言搜索（内嵌 MiniLM 模型，完全离线、无 CGO）
+- **🧠 混合语义搜索** — 本地自然语言搜索：分块级 MiniLM 向量 + BM25，加权 RRF 融合（完全离线、无 CGO）
 - **🤖 Agent MCP 接入** — 通过标准 MCP 提供仓库知识状态、初始化、刷新、查询、上下文以及持久 note/event/feedback
 - **🏗 模块化架构** — 遵循 Go 最佳实践，清晰分层设计
 
@@ -147,26 +147,50 @@ MCP server 通过 `okf_status`、`okf_init`、`okf_refresh`、`okf_query`、`okf
 
 ## 语义搜索
 
-`okf search -semantic` 对概念进行自然语言搜索：使用本地内嵌的 MiniLM 模型（384 维向量）与 HNSW 索引，全程无网络、无需外部运行时。
+`okf search -semantic` 对概念进行自然语言搜索：使用本地内嵌的 MiniLM 模型（384 维向量）与 HNSW 索引，全程无网络、无需外部运行时。长文档会按标题切分为分块索引，检索结果由**语义通道**与 **BM25 词法通道**经加权 RRF 融合得出。
 
 ```bash
 # 构建（或增量更新）向量索引 —— 每个知识库一次
 okf vector index
-# 查看索引状态
+# 查看索引状态（分块数、概念数、索引格式版本）
 okf vector status
-# 内容变更后全量重建
+# 内容变更后全量重建（升级索引格式时同样需要）
 okf vector rebuild
-# 语义搜索（经 RRF 融合语义 + 词法结果）
+# 语义搜索（混合：语义 + BM25，加权 RRF 融合）
 okf search -q "检查我的笔记有没有错误" -semantic
+# 纯语义，关闭词法通道
+okf search -q "如何重建索引" -semantic -lexical-weight 0
 ```
 
 结果会标注来源：`semantic` / `lexical` / `both`。索引未构建时 `-semantic` 会给出警告并回退到词法搜索。MCP server 通过 `okf_semantic_search` 暴露相同能力。
 
+### 检索质量度量
+
+`okf eval` 基于 golden query set 打分，并可横向对比多种策略：
+
+```bash
+okf eval -golden pkg/eval/testdata/golden_semantic.json -path docs/knowledge -compare
+```
+
+在本仓库自身知识库上的实测结果（28 条查询，26 条正样本，K=5）：
+
+| 策略 | Recall@5 | MRR |
+|---|---|---|
+| `lexical-substring`（0.5.0 之前的行为） | 0.0769 | 0.0769 |
+| `bm25-only` | 0.8077 | 0.7019 |
+| `semantic-only` | 0.9615 | 0.7276 |
+| **`hybrid-default`** | **0.9615** | **0.8109** |
+
 ### 实现方式与限制
 
+- **分块索引**：概念按 `##`–`####` 标题切分为不超过 1024 字符的块（代码围栏与表格不会被切开），每块携带 `标题 > 章节` 的 breadcrumb。这一步是必要的：MiniLM 在 256 token 处截断，按整个概念建索引会使本仓库知识库 **70.6%** 的内容进不了索引，截断点之后的文本完全搜不到。
+- **混合检索**：语义通道（分块向量的 HNSW 检索）与 BM25 通道经加权 RRF 融合（`k=60`，默认等权）。可用 `-lexical-weight` 调节，设为 `0` 即关闭词法通道。BM25 会把标识符拆成子词（`okf_semantic_search` → `okf`/`semantic`/`search`），中文切为重叠 bigram，不依赖词典。
+- **可复现性**：HNSW 图使用固定随机种子，排序带确定性 tie-break，同一查询在同一索引上始终返回相同顺序。
+- **索引成本（实测，7 概念 → 86 块）**：分块使索引体积增大约 14 倍（17.7 KB → 250 KB），构建耗时增加约 4 倍（161 ms → 706 ms）。两者随内容量增长，而非随概念数增长。
+- **索引格式 v2 不向下兼容**：分块级 key 与旧的概念级 key 不同。`okf vector status` 会显示格式版本；加载旧索引时会明确报错并提示执行 `okf vector rebuild`（此期间检索回退到词法），而不是静默返回错误结果。
 - **内嵌资源**：ONNX Runtime CPU 库（按 OS，约 10–15 MB）与量化 MiniLM 模型（约 23 MB）通过 `go:embed` 内嵌进二进制，首次使用时解包到用户缓存目录（带 SHA256 校验）。每个平台构建只内嵌该平台资源（`scripts/fetch-ort.sh` / `scripts/fetch-model.sh` 在构建期获取，运行时零联网）。
 - **动态加载（如实声明）**：ONNX Runtime 动态库在运行时通过 `dlopen` 从缓存目录加载——二进制自包含但并非静态链接。缓存位置：`os.UserCacheDir()/okf/`（可用 `OKF_ORT_DIR` 覆盖）。
-- **限制**：MiniLM 对每个概念截断到 256 token；模型以英文语义为主，中文语义质量有限（词法搜索仍可用）。`Embedder` 是接口，为后续更强模型（如 BGE-M3）或远程 API 预留替换点。
+- **限制**：MiniLM 以英文语义为主。分块与 BM25 的中文 bigram 提升了中文检索效果，但纯中文 query 检索英文内容时仍只能依赖语义通道。`Embedder` 是接口，为后续更强模型（如 BGE-M3）或远程 API 预留替换点。
 - **许可**：pure-onnx（MIT）、coder/hnsw（CC0-1.0）、ONNX Runtime（MIT）、MiniLM-L6-v2 模型（Apache-2.0）。
 
 ## 文档

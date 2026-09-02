@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/superops-team/okf/pkg/query"
@@ -51,8 +52,9 @@ type EvalReport struct {
 	NegativeCount        int
 }
 
-// LoadGoldenCases reads a golden set JSON file and returns its cases.
-func LoadGoldenCases(path string) ([]EvalCase, error) {
+// LoadGoldenSet reads a golden set JSON file and returns the whole set
+// (including its declared K), so callers can honour the file's own cut-off.
+func LoadGoldenSet(path string) (*GoldenSet, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read golden set: %w", err)
@@ -64,18 +66,58 @@ func LoadGoldenCases(path string) ([]EvalCase, error) {
 	if len(set.Cases) == 0 {
 		return nil, fmt.Errorf("golden set at %s contains no cases", path)
 	}
+	return &set, nil
+}
+
+// LoadGoldenCases reads a golden set JSON file and returns its cases.
+func LoadGoldenCases(path string) ([]EvalCase, error) {
+	set, err := LoadGoldenSet(path)
+	if err != nil {
+		return nil, err
+	}
 	return set.Cases, nil
 }
 
-// RunBenchmark runs every case against the bundle's search and scores results.
+// docIDOf 返回概念在评测中的文档标识。
+//
+// 使用 FilePath 而非 Resource：Resource 是 OKF frontmatter 的可选字段，
+// 转换类概念（pkg/convert 产物）不写该字段，实测恒为空串，
+// 会使所有指标恒为 0（假绿基线）。FilePath 始终存在且与 golden set
+// 的 expected_docs（文件名）口径一致。
+func docIDOf(c *query.Concept) string {
+	if c == nil {
+		return ""
+	}
+	return c.FilePath
+}
+
+// SearchStrategy 是被评测的检索策略：给定 bundle 与查询，返回排序后的概念。
+// 抽成函数类型是为了让同一 golden set 能对比多种策略
+// （纯语义 / 纯词法 / 不同权重的混合），否则评测只能测死一条链路。
+type SearchStrategy func(bundle *query.KnowledgeBundle, q string) []*query.Concept
+
+// DefaultStrategy 是既有的词法子串检索（query.Search），作为对比基线。
+func DefaultStrategy(bundle *query.KnowledgeBundle, q string) []*query.Concept {
+	return query.Search(bundle, q)
+}
+
+// RunBenchmark runs every case against the bundle's default search and scores results.
 func RunBenchmark(bundle *query.KnowledgeBundle, cases []EvalCase, k int) *EvalReport {
+	return RunBenchmarkWith(bundle, cases, k, DefaultStrategy)
+}
+
+// RunBenchmarkWith 用指定策略执行评测；strategy 为 nil 时回退 DefaultStrategy。
+func RunBenchmarkWith(bundle *query.KnowledgeBundle, cases []EvalCase, k int, strategy SearchStrategy) *EvalReport {
+	if strategy == nil {
+		strategy = DefaultStrategy
+	}
 	report := &EvalReport{K: k, Cases: make([]CaseResult, 0, len(cases))}
 	positive := make([]CaseResult, 0, len(cases))
 	for _, c := range cases {
-		results := query.Search(bundle, c.Query)
+		results := strategy(bundle, c.Query)
 		docs := make([]string, 0, len(results))
 		for _, concept := range results {
-			docs = append(docs, concept.Resource)
+			docs = append(docs, docIDOf(concept))
 		}
 		cr := CaseResult{
 			Query:     c.Query,
@@ -99,6 +141,33 @@ func RunBenchmark(bundle *query.KnowledgeBundle, cases []EvalCase, k int) *EvalR
 	report.Aggregate = meanScores(report.Cases)
 	report.AggregateNonNegative = meanScores(positive)
 	return report
+}
+
+// CompareStrategies 对同一 golden set 跑多种策略，返回 策略名 → 报告。
+func CompareStrategies(bundle *query.KnowledgeBundle, cases []EvalCase, k int, strategies map[string]SearchStrategy) map[string]*EvalReport {
+	out := make(map[string]*EvalReport, len(strategies))
+	for name, s := range strategies {
+		out[name] = RunBenchmarkWith(bundle, cases, k, s)
+	}
+	return out
+}
+
+// FormatComparison 渲染多策略对比表。策略名按字典序排列，保证输出可复现。
+func FormatComparison(reports map[string]*EvalReport) string {
+	names := make([]string, 0, len(reports))
+	for n := range reports {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%-24s %10s %10s %10s %10s\n", "Strategy", "Recall", "Precision", "MRR", "NDCG")
+	fmt.Fprintf(&b, "%s\n", strings.Repeat("-", 68))
+	for _, n := range names {
+		a := reports[n].AggregateNonNegative
+		fmt.Fprintf(&b, "%-24s %10.4f %10.4f %10.4f %10.4f\n", n, a.Recall, a.Precision, a.MRR, a.NDCG)
+	}
+	return b.String()
 }
 
 func meanScores(cases []CaseResult) Aggregate {
@@ -139,8 +208,12 @@ func (r *EvalReport) String() string {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if n <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	return string(runes[:n-1]) + "…"
 }

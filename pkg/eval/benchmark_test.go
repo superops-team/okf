@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/superops-team/okf/pkg/convert"
 	"github.com/superops-team/okf/pkg/query"
@@ -19,6 +20,10 @@ var benchmarkFixtures = []string{
 // buildBenchmarkBundle converts all 7 fixtures to markdown and constructs a
 // query.KnowledgeBundle. This exercises the real conversion output (not
 // hand-written content) so retrieval quality is measured on actual data.
+//
+// FilePath 是评测的文档标识（与真实 okf.LoadBundle 加载的 bundle 一致）。
+// 刻意不设置 Resource：转换类概念的 frontmatter 不含该字段，真实场景下恒为空，
+// 若评测依赖它会得到恒为 0 的假绿基线。
 func buildBenchmarkBundle(t *testing.T) *query.KnowledgeBundle {
 	t.Helper()
 	bundle := &query.KnowledgeBundle{}
@@ -30,7 +35,7 @@ func buildBenchmarkBundle(t *testing.T) *query.KnowledgeBundle {
 		bundle.Concepts = append(bundle.Concepts, &query.Concept{
 			Type:     "source",
 			Title:    f,
-			Resource: f + ".md",
+			FilePath: f + ".md",
 			Content:  r.Markdown,
 		})
 	}
@@ -127,6 +132,25 @@ func TestLoadGoldenCases(t *testing.T) {
 
 // TestRunBenchmarkEmptyBundle verifies the runner handles an empty bundle
 // without panicking and returns zero scores for positive queries.
+func TestTruncatePreservesUTF8(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		n    int
+	}{
+		{name: "ascii", in: "short", n: 10},
+		{name: "multibyte", in: "知识库检索评估报告", n: 5},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncate(tc.in, tc.n)
+			if !utf8.ValidString(got) {
+				t.Fatalf("truncate produced invalid UTF-8: %q", got)
+			}
+		})
+	}
+}
+
 func TestRunBenchmarkEmptyBundle(t *testing.T) {
 	t.Parallel()
 	bundle := &query.KnowledgeBundle{}
@@ -144,5 +168,54 @@ func TestRunBenchmarkEmptyBundle(t *testing.T) {
 	// negative case on empty bundle: recall=1.0 (no relevant docs to miss), precision=0 (no results)
 	if report.Cases[1].Recall != 1.0 {
 		t.Errorf("negative case recall = %v, want 1.0", report.Cases[1].Recall)
+	}
+}
+
+// TestBenchmarkUsesFilePathNotResource 防回归：
+// 评测的文档标识必须用 FilePath。历史缺陷是用 Resource——该字段在真实
+// bundle（okf.LoadBundle 加载的转换类概念）中恒为空，导致所有指标恒为 0，
+// 而单测因手工设置 Resource 而"假绿"。本测试构造只有 FilePath 的概念，
+// 若实现改回读 Resource，指标会掉到 0 从而失败。
+func TestBenchmarkUsesFilePathNotResource(t *testing.T) {
+	t.Parallel()
+	bundle := &query.KnowledgeBundle{Concepts: []*query.Concept{
+		{Type: "source", Title: "alpha", FilePath: "alpha.md", Content: "unique-token-alpha"},
+		{Type: "source", Title: "beta", FilePath: "beta.md", Content: "unique-token-beta"},
+	}}
+	bundle.BuildIndex()
+
+	report := RunBenchmark(bundle, []EvalCase{
+		{Query: "unique-token-alpha", ExpectedDocs: []string{"alpha.md"}},
+	}, 5)
+
+	if report.Aggregate.Recall != 1.0 {
+		t.Fatalf("Recall = %.4f, want 1.0（文档标识应取 FilePath；若取 Resource 则恒为 0）",
+			report.Aggregate.Recall)
+	}
+	if got := report.Cases[0].Top1; got != "alpha.md" {
+		t.Fatalf("Top1 = %q, want alpha.md", got)
+	}
+}
+
+// 评测结果必须可复现（spec: 评测 / 结果可复现）。
+func TestBenchmarkIsReproducible(t *testing.T) {
+	t.Parallel()
+	bundle := buildBenchmarkBundle(t)
+	cases, err := LoadGoldenCases("testdata/golden_queries.json")
+	if err != nil {
+		t.Fatalf("LoadGoldenCases: %v", err)
+	}
+	first := RunBenchmark(bundle, cases, 5)
+	for round := 0; round < 3; round++ {
+		got := RunBenchmark(bundle, cases, 5)
+		if got.Aggregate != first.Aggregate {
+			t.Fatalf("第 %d 轮聚合指标 %+v != 首轮 %+v", round, got.Aggregate, first.Aggregate)
+		}
+		for i := range got.Cases {
+			if got.Cases[i].Top1 != first.Cases[i].Top1 {
+				t.Fatalf("第 %d 轮 case %d Top1 = %q，首轮 %q",
+					round, i, got.Cases[i].Top1, first.Cases[i].Top1)
+			}
+		}
 	}
 }

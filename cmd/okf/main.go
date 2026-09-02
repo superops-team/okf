@@ -34,6 +34,7 @@ Commands:
   watch       Watch source directories and auto-sync on file changes (requires .watch.yaml)
   metadata    Manage the metadata index (inspect|rebuild|clean)
   vector      Manage the semantic vector index (index|status|rebuild)
+  eval        Run the IR evaluation benchmark against a golden query set
   config      Manage configuration
   tool        Agent-facing JSON tool operations (status|init|refresh|query|context)
   mcp         Start MCP (Model Context Protocol) server for AI agent integration
@@ -82,6 +83,8 @@ func main() {
 		os.Exit(cmdMetadata(os.Args[2:]))
 	case "vector":
 		os.Exit(cmdVector(os.Args[2:]))
+	case "eval":
+		os.Exit(cmdEval(os.Args[2:]))
 	case "config":
 		os.Exit(cmdConfig(os.Args[2:]))
 	case "tool":
@@ -352,6 +355,8 @@ func cmdSearch(args []string) {
 	codeRelationKind := fs.String("code-relation-kind", "", "Filter by code relation kind")
 	semantic := fs.Bool("semantic", false, "Enable semantic (natural-language) search; requires `okf vector index` first")
 	k := fs.Int("k", 10, "Number of results for semantic search")
+	lexicalWeight := fs.Float64("lexical-weight", -1,
+		"Weight of the BM25 lexical channel in hybrid search (default 0.5; 0 disables it for pure semantic search)")
 	fs.Parse(args)
 
 	if *path == "" {
@@ -384,7 +389,7 @@ func cmdSearch(args []string) {
 	var searchResults []query.SearchResult
 	semanticUsed := false
 	if *semantic && *queryStr != "" {
-		semRes, err := runSemanticSearch(queryBundle, *queryStr, *path, *k)
+		semRes, err := runSemanticSearch(queryBundle, *queryStr, *path, *k, *lexicalWeight)
 		if err != nil {
 			fmt.Printf("Warning: %v（回退到词法检索）\n", err)
 		} else {

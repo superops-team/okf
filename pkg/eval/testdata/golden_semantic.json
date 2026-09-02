@@ -1,0 +1,118 @@
+{
+  "description": "Semantic golden query set over the okf project knowledge base (docs/knowledge). Complements golden_queries.json, whose 20 cases are exact-word lookups over tiny conversion fixtures and therefore score full marks on substring matching alone — they cannot discriminate retrieval strategies. These cases are natural-language, multi-word, identifier and Chinese queries where substring matching measurably fails, so they can separate semantic / lexical / hybrid strategies. Every expected_docs entry was verified to contain the answer. expected_docs are file names relative to docs/knowledge (matching Concept.FilePath).",
+  "k": 5,
+  "cases": [
+    {
+      "query": "how to build the vector index",
+      "expected_docs": ["cli.md"]
+    },
+    {
+      "query": "vector index rebuild command",
+      "expected_docs": ["cli.md"]
+    },
+    {
+      "query": "what MCP tools are available",
+      "expected_docs": ["mcp-server.md"]
+    },
+    {
+      "query": "durable note capture over MCP",
+      "expected_docs": ["durable-capture.md"]
+    },
+    {
+      "query": "check knowledge base for spec violations",
+      "expected_docs": ["lint.md"]
+    },
+    {
+      "query": "error codes and severity levels",
+      "expected_docs": ["lint.md"]
+    },
+    {
+      "query": "frontmatter parsing round trip stability",
+      "expected_docs": ["parser.md"]
+    },
+    {
+      "query": "Concept and KnowledgeBundle core types",
+      "expected_docs": ["core-types.md"]
+    },
+    {
+      "query": "semantic search release notes",
+      "expected_docs": ["releases.md"]
+    },
+    {
+      "query": "okf_semantic_search tool",
+      "expected_docs": ["mcp-server.md"]
+    },
+    {
+      "query": "TrustTier values",
+      "expected_docs": ["core-types.md"]
+    },
+    {
+      "query": "ConceptStatus lifecycle",
+      "expected_docs": ["core-types.md"]
+    },
+    {
+      "query": "strict mode lint behaviour",
+      "expected_docs": ["lint.md", "cli.md"]
+    },
+    {
+      "query": "stdio protocol startup",
+      "expected_docs": ["mcp-server.md", "cli.md"]
+    },
+    {
+      "query": "global command line options",
+      "expected_docs": ["cli.md"]
+    },
+    {
+      "query": "watch mode for continuous import",
+      "expected_docs": ["cli.md"]
+    },
+    {
+      "query": "MCP write rollback",
+      "expected_docs": ["releases.md"]
+    },
+    {
+      "query": "resources and prompts exposed to clients",
+      "expected_docs": ["mcp-server.md"]
+    },
+    {
+      "query": "serialization constraints",
+      "expected_docs": ["parser.md"]
+    },
+    {
+      "query": "document format import pdf docx xlsx",
+      "expected_docs": ["releases.md", "cli.md"]
+    },
+    {
+      "query": "如何构建向量索引",
+      "expected_docs": ["cli.md"]
+    },
+    {
+      "query": "检查知识库规范错误",
+      "expected_docs": ["lint.md"]
+    },
+    {
+      "query": "MCP 服务器有哪些工具",
+      "expected_docs": ["mcp-server.md"]
+    },
+    {
+      "query": "概念的核心类型定义",
+      "expected_docs": ["core-types.md"]
+    },
+    {
+      "query": "语义搜索的发布说明",
+      "expected_docs": ["releases.md"]
+    },
+    {
+      "query": "解析器的往返稳定性",
+      "expected_docs": ["parser.md"]
+    },
+    {
+      "query": "nonexistent_zzz_topic_123",
+      "expected_docs": []
+    },
+    {
+      "query": "quantum blockchain mining rig",
+      "expected_docs": []
+    }
+  ]
+}

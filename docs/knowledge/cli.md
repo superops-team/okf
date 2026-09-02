@@ -47,6 +47,9 @@ Search the knowledge base.
 - `-q QUERY` - Search query text
 - `-type TYPE` - Filter by concept type
 - `-tag TAG` - Filter by tag
+- `-semantic` - Enable hybrid semantic search (requires `okf vector index` first)
+- `-k N` - Number of results for semantic search (default 10)
+- `-lexical-weight W` - Weight of the BM25 lexical channel in hybrid search (default 0.5; `0` disables it for pure semantic search)
 - Code filters: `-code-language`, `-code-path`, `-code-symbol-kind`, `-code-qualified-name`, `-code-relation-kind`
 
 ### add
@@ -71,6 +74,31 @@ Watch source directories and auto-sync on file changes (requires .watch.yaml).
 ### metadata
 Manage the metadata index.
 - Subcommands: `inspect`, `rebuild`, `clean`
+
+### vector
+Manage the semantic vector index. The index stores one vector per **chunk**
+(concepts are split on `##`–`####` headings), keyed as `<concept fingerprint>#<ordinal>`.
+- Subcommands: `index`, `status`, `rebuild`
+- `index` - Build or incrementally update the index
+- `index -force` - Force re-encode all chunks
+- `status` - Show chunk count, concept count, dimensions, model and index format version
+- `rebuild` - Remove the old index and rebuild from scratch (required when the
+  index format version changes; loading an incompatible index fails with an
+  explicit prompt rather than returning wrong results)
+- `-path PATH` - Knowledge base path
+
+### eval
+Run the IR evaluation benchmark against a golden query set. Used to quantify
+retrieval quality changes instead of relying on impressions.
+- `-golden PATH` - Golden query set JSON (required)
+- `-path PATH` - Knowledge base path
+- `-k N` - Cut-off K for Recall@K / Precision@K / NDCG@K (default: the value declared in the golden set, else 5)
+- `-compare` - Compare strategies side by side: `lexical-substring`, `bm25-only`, `semantic-only`, `hybrid-default`
+- `-verbose` - Print per-case results
+
+Warns when the golden set's expected documents are absent from the knowledge
+base, since that yields all-zero metrics that are easy to misread as a
+retrieval failure.
 
 ### config
 Manage configuration.

@@ -42,7 +42,7 @@
 - **🛠 Git Hook** — One-click installation, automatic knowledge base updates on every commit
 - **📋 Lint Checking** — Built-in specification compliance checker (16 rules)
 - **🔎 Advanced Query** — Filter by type, tags, or full-text search
-- **🧠 Semantic Search** — Local natural-language search over concepts (MiniLM embeddings, fully offline, no CGO)
+- **🧠 Hybrid Semantic Search** — Local natural-language search: chunk-level MiniLM embeddings + BM25, fused with weighted RRF (fully offline, no CGO)
 - **🤖 Agent-facing MCP** — Standard MCP tools for repository status/init/refresh/query/context plus durable note/event/feedback capture
 - **🏗 Modular Architecture** — Clean, layered design following Go best practices
 
@@ -149,26 +149,50 @@ Writes require a stable `idempotency_key`, use deterministic identities, reject 
 
 ## Semantic Search
 
-`okf search -semantic` performs natural-language search over concepts, using a locally embedded MiniLM model (384-dim vectors) and an HNSW index — no network, no external runtime required.
+`okf search -semantic` performs natural-language search over concepts, using a locally embedded MiniLM model (384-dim vectors) and an HNSW index — no network, no external runtime required. Long documents are split into heading-aware chunks, and results blend a **semantic** channel with a **BM25 lexical** channel via weighted Reciprocal Rank Fusion.
 
 ```bash
 # Build (or incrementally update) the vector index — one-time, per knowledge base
 okf vector index
-# Inspect index state
+# Inspect index state (chunks, concepts, index format version)
 okf vector status
-# Full rebuild (after content changes)
+# Full rebuild (after content changes, or when upgrading index format)
 okf vector rebuild
-# Search semantically (blends semantic + lexical results via RRF)
+# Search semantically (hybrid: semantic + BM25, fused with weighted RRF)
 okf search -q "check my notes for errors" -semantic
+# Pure semantic, no lexical channel
+okf search -q "how do I rebuild the index" -semantic -lexical-weight 0
 ```
 
 Results are annotated with their source: `semantic`, `lexical`, or `both`. If no index exists, `-semantic` warns and falls back to lexical search. The MCP server exposes the same capability via `okf_semantic_search`.
 
+### Measuring retrieval quality
+
+`okf eval` scores retrieval against a golden query set and can compare strategies side by side:
+
+```bash
+okf eval -golden pkg/eval/testdata/golden_semantic.json -path docs/knowledge -compare
+```
+
+Measured on this repository's own knowledge base (28 queries, 26 positive, K=5):
+
+| Strategy | Recall@5 | MRR |
+|---|---|---|
+| `lexical-substring` (pre-0.5.0 behaviour) | 0.0769 | 0.0769 |
+| `bm25-only` | 0.8077 | 0.7019 |
+| `semantic-only` | 0.9615 | 0.7276 |
+| **`hybrid-default`** | **0.9615** | **0.8109** |
+
 ### How it works & constraints
 
+- **Chunked indexing**: concepts are split on `##`–`####` headings into ≤1024-character chunks (code fences and tables are never split), each carrying a `Title > Section` breadcrumb. This matters because MiniLM truncates at 256 tokens: indexing whole concepts dropped **70.6%** of this repository's knowledge-base content, so text past the truncation point was unsearchable.
+- **Hybrid retrieval**: the semantic channel (HNSW over chunk vectors) and the BM25 channel are fused with weighted RRF (`k=60`, equal weights by default). Tune with `-lexical-weight`; `0` disables the lexical channel. BM25 tokenizes identifiers into subwords (`okf_semantic_search` → `okf`/`semantic`/`search`) and CJK text into overlapping bigrams, with no dictionary dependency.
+- **Reproducibility**: the HNSW graph uses a fixed RNG seed and ranking applies deterministic tie-breaks, so the same query on the same index always returns the same order.
+- **Index cost (measured, 7 concepts → 86 chunks)**: chunking increases index size ~14x (17.7 KB → 250 KB) and build time ~4x (161 ms → 706 ms). Both scale with content volume, not concept count.
+- **Index format v2 is not backward compatible**: chunk-level keys differ from the old concept-level keys. `okf vector status` reports the format version, and loading an older index fails with an explicit prompt to run `okf vector rebuild` (search falls back to lexical meanwhile) rather than silently returning wrong results.
 - **Embedded resources**: the ONNX Runtime CPU library (per-OS, ~10–15 MB) plus a quantized MiniLM model (~23 MB) are embedded into the binary via `go:embed` and extracted to the user cache directory on first use (checksum-verified). Building for each platform only embeds that platform's resources (`scripts/fetch-ort.sh` / `scripts/fetch-model.sh` fetch them at build time; the runtime never goes online).
 - **Dynamic loading (transparency)**: the ONNX Runtime shared library is loaded at runtime via `dlopen` from the extracted cache — the binary is self-contained but not statically linked. Cache location: `os.UserCacheDir()/okf/` (override with `OKF_ORT_DIR`).
-- **Limits**: MiniLM truncates text to 256 tokens per concept; embeddings are English-centric, so Chinese semantic quality is limited (lexical search still applies). `Embedder` is an interface, leaving room for stronger models (e.g. BGE-M3) or remote APIs later.
+- **Limits**: MiniLM embeddings are English-centric. Chunking and BM25's CJK bigrams improve Chinese retrieval, but a purely Chinese query against English content still relies on the semantic channel alone. `Embedder` is an interface, leaving room for stronger models (e.g. BGE-M3) or remote APIs later.
 - **Licenses**: pure-onnx (MIT), coder/hnsw (CC0-1.0), ONNX Runtime (MIT), MiniLM-L6-v2 model (Apache-2.0).
 
 ## Documentation

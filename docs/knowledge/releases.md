@@ -1,18 +1,115 @@
 # OKF Release Notes
 
-## v0.5.0 (unreleased) — IR Evaluation Benchmark
+## v0.5.0 (unreleased) — Retrieval Quality: Chunking, BM25 and Weighted RRF
 
-### New: IR evaluation benchmark
+> Minor version bump: this release changes retrieval behaviour and the on-disk
+> vector index format. **`okf vector rebuild` is required after upgrading.**
 
-- `pkg/eval` provides canonical information-retrieval metrics: `Recall@K`,
-  `Precision@K`, `MRR`, `NDCG@K` (pure functions, standard library only).
-- A committed golden query set (`pkg/eval/testdata/golden_queries.json`,
-  20 cases over all 7 document formats) with expected relevant documents.
-- `tools/eval.sh` is the one-command reproducible benchmark entrypoint.
-- **Baseline scores (K=5, 20 cases):** Recall@5 = 1.0000, Precision@5 = 0.9000
-  (positive-only = 1.0000), MRR = 0.9000 (positive-only = 1.0000),
-  NDCG@5 = 1.0000. All 18 positive queries return the correct top-1; both
-  negative queries return zero results.
+### Breaking: vector index format v2
+
+The vector index now stores one vector per **chunk** instead of per concept, so
+keys changed from `<concept fingerprint>` to `<concept fingerprint>#<ordinal>`.
+
+- `index.meta.json` carries `index_format_version` (now `2`).
+- Loading an index written by an earlier version **fails with an explicit error**
+  telling you to run `okf vector rebuild`; semantic search falls back to lexical
+  search meanwhile. It deliberately does not silently reuse the old index,
+  because concept-level keys cannot be resolved back to chunks and would
+  return empty or wrong results.
+- `okf vector status` now reports chunk count, concept count and format version.
+
+### New: heading-aware chunking
+
+- New package `pkg/chunk` splits concepts on `##`–`####` headings into chunks of
+  at most 1024 characters, each prefixed with a `Title > Section` breadcrumb so
+  an isolated chunk keeps its context. Code fences and tables are never split;
+  oversized segments fall back to paragraph, line and finally rune-boundary
+  splitting; adjacent tiny chunks under the same heading are merged.
+- **Why:** MiniLM truncates input at 256 tokens. Indexing whole concepts meant
+  only **29.4%** of this repository's knowledge-base content ever reached the
+  index — **70.6% was silently unsearchable**. After chunking, coverage is
+  complete (7 concepts → 86 chunks, 0 oversized chunks).
+
+### New: BM25 lexical channel
+
+- New package `pkg/lexical` provides tokenization and BM25 (`k1=1.2`, `b=0.75`),
+  standard library only, no dictionary or third-party dependency.
+- Tokenization keeps whole identifiers *and* their subwords
+  (`okf_semantic_search` → `okf` / `semantic` / `search`, `HTTPServer` →
+  `http` / `server`) and splits CJK runs into overlapping bigrams.
+- **Why:** the previous lexical channel was whole-string substring matching with
+  no scoring. Multi-word and Chinese queries scored **Recall 0.0769** on the new
+  golden set — as an RRF input it was mostly noise.
+
+### New: configurable weighted RRF
+
+- `query.SearchOptions` gains `RRFK`, `VectorWeight`, `LexicalWeight`,
+  `CandidateFactor` and a pluggable `Lexical` backend.
+- Defaults: `k=60` (matching Elasticsearch / Milvus convention) and **equal
+  weights** for the two channels. Equal weighting was chosen from a measured
+  sweep of vector:lexical ratios from 0.8 to 4.0 on two independent query sets;
+  differences inside the 0.8–1.5 band were within one case of noise, so no
+  single "peak" ratio was fitted.
+- `okf search -lexical-weight W` tunes the blend; `0` disables the lexical
+  channel for pure semantic search.
+
+### New: `okf eval` command
+
+- `pkg/eval` gains injectable strategies (`RunBenchmarkWith`,
+  `CompareStrategies`, `FormatComparison`) so one golden set can score several
+  retrieval strategies.
+- `okf eval -golden <set> [-compare] [-verbose]` exposes this on the CLI, and
+  warns when a golden set's expected documents are missing from the knowledge
+  base (which otherwise yields all-zero metrics that look like total failure).
+- New golden set `pkg/eval/testdata/golden_semantic.json`: 28 natural-language,
+  multi-word, identifier and Chinese queries over `docs/knowledge`. The existing
+  `golden_queries.json` cases are exact single-word lookups that score full
+  marks on substring matching alone and therefore cannot discriminate
+  strategies.
+
+### Fixed: reproducibility
+
+- `pkg/vectorindex` pins the HNSW RNG seed and rewrites `Search` to over-sample
+  candidates and re-rank them exactly, with `key`-ascending tie-breaks.
+  Previously identical queries could return different orderings across index
+  rebuilds — the underlying library picks its layer entry point by Go map
+  iteration order, which fixing the seed alone does not address.
+- `pkg/query` fusion ranking gained deterministic tie-breaks (score, semantic
+  rank, semantic presence, source, fingerprint).
+- `pkg/eval` now identifies documents by `FilePath` rather than the optional
+  `Resource` frontmatter field, which is empty for converted concepts and made
+  every metric collapse to zero on real bundles.
+
+### Measured results
+
+`okf eval -golden pkg/eval/testdata/golden_semantic.json -path docs/knowledge -compare`
+(28 cases, 26 positive, K=5, means over positive cases):
+
+| Strategy | Recall@5 | Precision@5 | MRR | NDCG@5 |
+|---|---|---|---|---|
+| `lexical-substring` (previous behaviour) | 0.0769 | 0.0769 | 0.0769 | 0.0769 |
+| `bm25-only` | 0.8077 | 0.2776 | 0.7019 | 0.7290 |
+| `semantic-only` | 0.9615 | 0.2583 | 0.7276 | 0.7894 |
+| **`hybrid-default`** | **0.9615** | 0.2333 | **0.8109** | **0.8447** |
+
+Hybrid retrieval improves MRR by **+11.5%** over the semantic channel alone.
+
+### Costs
+
+- Index size grows ~14x and build time ~4x for the same content
+  (7 concepts: 17.7 KB → 250 KB, 161 ms → 706 ms). Both scale with content
+  volume rather than concept count.
+- The BM25 index is built in memory per search invocation (<10 ms on this
+  repository's knowledge base) and is not persisted, avoiding a second on-disk
+  artifact to keep consistent with the vector index.
+
+### Unchanged
+
+- Core OKF v0.2 model (`Concept`, `KnowledgeBundle`) is untouched.
+- `SmartImportSource`, `CollectFiles`, `ImportResult` and watch configuration
+  are untouched.
+- Retained IR metrics from the previous release: `Recall@K`, `Precision@K`,
+  `MRR`, `NDCG@K` in `pkg/eval`, plus `tools/eval.sh`.
 
 ## v0.4.1 — Durable MCP write rollback
 
