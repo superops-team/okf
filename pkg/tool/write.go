@@ -178,11 +178,25 @@ func invalidWriteRequest(message string) error {
 	return toolError{code: ErrInvalidRequest, message: message, remediation: "Correct the request and retry without sensitive credential fields."}
 }
 
+func normalizeCredentialFieldName(name string) string {
+	runes := []rune(name)
+	var b strings.Builder
+	for i, r := range runes {
+		if i > 0 && r >= 'A' && r <= 'Z' &&
+			((runes[i-1] >= 'a' && runes[i-1] <= 'z') ||
+				(i+1 < len(runes) && runes[i+1] >= 'a' && runes[i+1] <= 'z')) {
+			b.WriteByte('_')
+		}
+		b.WriteRune(r)
+	}
+	return strings.NewReplacer("-", "_", ".", "_", " ", "_").Replace(strings.ToLower(b.String()))
+}
+
 func hasCredentialField(value any) bool {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, nested := range typed {
-			normalized := strings.NewReplacer("-", "_", ".", "_", " ", "_").Replace(strings.ToLower(key))
+			normalized := normalizeCredentialFieldName(key)
 			for _, marker := range []string{"password", "passwd", "secret", "token", "api_key", "access_key", "private_key", "credential"} {
 				if normalized == marker || strings.HasSuffix(normalized, "_"+marker) {
 					return true

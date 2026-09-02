@@ -280,6 +280,7 @@ func TestWriteKnowledgeValidationMatrix(t *testing.T) {
 		{name: "unknown kind", req: WriteKnowledgeRequest{Kind: "memo", Content: "x", IdempotencyKey: "k"}},
 		{name: "missing key", req: WriteKnowledgeRequest{Kind: "note", Content: "x"}},
 		{name: "credential metadata", req: WriteKnowledgeRequest{Kind: "note", Content: "x", IdempotencyKey: "k", Metadata: map[string]any{"api_token": "secret"}}},
+		{name: "camelCase credential metadata", req: WriteKnowledgeRequest{Kind: "note", Content: "x", IdempotencyKey: "k", Metadata: map[string]any{"apiKey": "secret"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
