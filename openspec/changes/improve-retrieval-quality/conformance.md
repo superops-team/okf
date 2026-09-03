@@ -20,11 +20,19 @@
 
 | # | Scenario | 实现 | 测试 | 对齐度 |
 |---|---|---|---|---|
-| 1 | 重复构建索引产生相同检索序列 | `pkg/vectorindex/vectorindex.go`：`indexRngSeed=42` 固定 `g.Rng`；`Search` 候选放大 + 精确重排 | `TestSearchIsDeterministicAcrossRebuilds`、`TestSearchDeterministicAfterReload`、`TestSearchDeterministicOnLargeIndex` | fully |
+| 1 | 重复构建索引产生相同检索序列 | `pkg/vectorindex/vectorindex.go`：`indexRngSeed=42` 固定 `g.Rng`；小索引走 `vecs` 全量精算，大索引候选放大 + 精确重排；`Meta.Keys` 使 `Load` 能恢复精确路径 | `TestSearchIsDeterministicAcrossRebuilds`、`TestSearchDeterministicAfterReload`、`TestSearchDeterministicOnLargeIndex`、`TestSmallIndexRecallsEveryNode`、`TestLoadedIndexKeepsExactSearch` | fully |
 | 2 | 融合排序在分数并列时稳定 | `pkg/query/semantic.go` 五级 tie-break：分数 > 语义 rank > 有无语义命中 > 来源 > Fingerprint | `TestWeightedFusionIsReproducible` | fully |
 | 3 | BM25 检索在分数并列时稳定 | `pkg/lexical/lexical.go`：`Search` 同分按 `Key` 升序 | `TestBM25TieBreakIsStable`、`TestBM25IsDeterministic` | fully |
 
-**实施记录（重要偏差）**：初版仅固定 `Rng` 并**未能**消除漂移，漂移位置只是从 rank 1 移到 rank 2。根因是 `coder/hnsw@v0.6.1` 的 `layer.entry()`（`graph.go` 约 198 行）用 `for _, node := range l.nodes { return node }` 取搜索入口，依赖 Go map 遍历顺序，固定种子覆盖不到。经暴力全量真值对照确认漂移性质是**召回不足**而非排序不稳（候选分数各不相同，全量召回三次一致且精确匹配真值），故最终方案改为「候选放大 + 封装层精确重排」：索引规模 ≤ `searchExactMaxNodes=2048` 时全量召回（等价精确检索），超过时取 `k*8 + len(removed)` 且不低于 128。
+**实施记录（两轮修复，第二轮由 code review 发现）**：
+
+第一轮：仅固定 `Rng` **未能**消除漂移，漂移位置只是从 rank 1 移到 rank 2。根因是 `coder/hnsw@v0.6.1` 的 `layer.entry()`（`graph.go` 约 198 行）用 `for _, node := range l.nodes { return node }` 取搜索入口，依赖 Go map 遍历顺序，固定种子覆盖不到。当时改为「候选放大 + 封装层精确重排」，并假设「索引规模 ≤ 2048 时向底层请求全部节点即等价精确检索」。
+
+第二轮（code review 复核时推翻上述假设）：该假设**不成立**。`h.g.Search(vec, total)` 是近似检索，请求全部节点也不会返回全部——实测 97 个请求 97 只返回 96，500 只返回 427。遗漏哪个节点取决于图结构，而图结构随 `Export`/`Import` 的 map 遍历顺序在每次 rebuild 后变化。因此单元测试（同进程内建图后直接检索）全绿，真实链路（建索引 → 落盘 → 加载 → 检索）却仍在漂移：`docs/knowledge` 上表现为查询「MCP write rollback」的 top1 在 `releases.md` 与 `mcp-server.md` 之间摇摆，`semantic-only` 的 MRR 在 0.7577 / 0.7769 之间跳变。
+
+最终方案：`HNSW` 自持 `vecs map[string][]float32`，索引规模 ≤ `searchExactMaxNodes=2048` 时直接对其全量精算（彻底不经过图遍历），超过时才走近似图检索 + `k*8` 放大重排；`Meta.Keys` 持久化排序后的 key 列表，使 `Load` 能重建 `vecs`（否则加载出的索引会退回近似路径）。已通过连续 6 次 rebuild + eval 验证指标完全不变。
+
+**教训**：Scenario 1 的原测试在同进程内建图检索，覆盖不到「落盘 → 加载」这段真实路径，也覆盖不到「请求 k=全部却召回不全」这一底层行为，因此在缺陷仍然存在时保持绿色。新增 `TestSmallIndexRecallsEveryNode`、`TestLoadedIndexKeepsExactSearch` 补上这两个缺口。
 
 ---
 
@@ -158,11 +166,14 @@ okf eval -golden pkg/eval/testdata/golden_semantic.json -path docs/knowledge -co
 | Strategy | Recall@5 | Precision@5 | MRR | NDCG@5 |
 |---|---|---|---|---|
 | `lexical-substring`（改动前行为） | 0.0769 | 0.0769 | 0.0769 | 0.0769 |
-| `bm25-only` | 0.8077 | 0.2776 | 0.7019 | 0.7290 |
-| `semantic-only` | 0.9615 | 0.2583 | 0.7276 | 0.7894 |
-| **`hybrid-default`** | **0.9615** | 0.2333 | **0.8109** | **0.8447** |
+| `bm25-only` | 0.8077 | 0.2744 | 0.6538 | 0.6941 |
+| `semantic-only` | 0.9615 | 0.2641 | 0.7096 | 0.7685 |
+| **`hybrid-default`** | **0.9615** | 0.2288 | **0.7256** | **0.7828** |
 
-- 混合检索相对纯语义通道 **MRR +11.5%**。
+- 混合检索在 MRR / NDCG 上优于纯语义通道，但差距约合 26 条样本中的 1 条，属噪声量级；
+  应表述为「不劣于纯语义，且在偏词法的查询上更好」，不宜宣称显著提升。
+  真正决定性的收益是相对改动前子串通道（MRR 0.0769）。
+- 上述数字在反复 rebuild 后不变（见 R1 修订说明）。
 - 改动前的子串词法通道 Recall 仅 **0.0769**，印证了本次改造的前提（作为 RRF 输入基本是噪声）。
 - `hybrid-default` 的 Precision 低于 `semantic-only` 属预期：词法通道引入更多候选，在「每条 query 通常只有 1 个正确文档、K=5」的口径下 Precision 上限本身仅 0.2，该指标在此不具区分度，故以 MRR / NDCG 为主。
 
@@ -194,3 +205,22 @@ okf eval -golden pkg/eval/testdata/golden_semantic.json -path docs/knowledge -co
 - 多租户与权限体系
 
 `Embedder` 仍是接口，未来若需更强模型（BGE-M3 等）或远程 API 可替换，不影响本次索引格式与融合逻辑。
+
+---
+
+## Code review 复核记录（落地后追加）
+
+对 commit `eed2639` 执行两轮审查，发现并修复 5 项问题。其中 1 项推翻了本文档原先对 R1 的「fully」判定（见上方 R1 修订说明），其余 4 项为独立缺陷。
+
+| 严重度 | 类别 | 位置 | 问题 | 处置 |
+|---|---|---|---|---|
+| high | Correctness | `pkg/vectorindex/vectorindex.go:Search` | 「请求 k=全部节点即等价精确检索」的假设不成立，底层近似检索会漏节点且遗漏项随重建变化，导致真实链路指标在 0.7577/0.7769 间跳变 | 小索引改为对自持 `vecs` 全量精算；`Meta.Keys` 使 `Load` 能恢复该路径 |
+| medium | Scope | `pkg/mcp/tools.go:849` | MCP `okf_semantic_search` 未注入词法后端，静默退化为子串通道（Recall@5 0.0769），面向 agent 的入口反而比 CLI 差 | 接入 `query.BuildLexicalBackend`，与 CLI 同链路 |
+| medium | Architecture | `cmd/okf/cmd_vector.go` / `pkg/mcp` | 分块与 BM25 构建在两处各自实现，口径一旦漂移会使两通道 ChunkKey 对不齐 | 上移为 `query.ConceptChunks` / `query.BuildLexicalBackend` 单一实现 |
+| medium | Correctness | `pkg/query/semantic.go` | `VectorWeight=0` 被静默替换为默认值，语义通道无法关闭（与 `LexicalWeight` 不对称），「纯词法」配置无法表达 | 新增 `WithVectorWeight`，两侧语义对称；权重为 0 时跳过对应通道 |
+| medium | Correctness | `tools/gauntlet.sh` L10（off-diff） | 三处断言写作 `cmd \| grep -q`，`grep -q` 命中后立即退出会向 `cmd` 发 SIGPIPE，在 `set -o pipefail` 下整条管道判失败——表现为「检索明明有结果却 GATE-FAILED」。实测同一命令旧二进制 1/10 命中、新二进制 4/10 命中，属既有 flaky 门禁而非本次回归；此前的 PASS 是撞运气 | 改为先落盘再 `grep`，实测 20/20 稳定，完整 gauntlet 连跑 2 次均 PASS |
+| low | Correctness | `pkg/chunk/chunk.go:truncateRunes` | off-by-one 且返回 rune 起始位置而非结束位置，结果恒比上限多一个完整 rune（`truncateRunes("𝄞𝄞",5)` 返回 8 字节）；当时未造成越界仅因 `minBodyBudget=16` 余量吸收 | 重写并补属性测试固定「≤n 字节 + 合法 UTF-8 + 原串前缀」 |
+
+新增回归测试：`TestSmallIndexRecallsEveryNode`、`TestLoadedIndexKeepsExactSearch`、`TestLexicalBackendChangesRecallForMultiWordQuery`、`TestVectorAndLexicalChannelsShareChunkKeys`、`TestBuildLexicalBackendNilBundle`、`TestBuildLexicalBackendIndexesTitleOnlyConcept`、`TestRRFScoreNeverInfOrNaN`、`TestSemanticSearchHandlesDegenerateOptions`、`TestTruncateRunesRespectsByteLimit`、`TestPropertyTruncateRunesInvariants`。
+
+**权重默认值复核**：在确定性索引上重做比例扫描（0.5:1 至 4:1 及两端），全域极差仅 0.0385 ≈ 2 个 case，噪声量级，不足以支持任何单点选择。维持等权默认值不变——原选择结论未被推翻，但原先据以论证的「+11.5%」表述已按实测更正为噪声量级差异。

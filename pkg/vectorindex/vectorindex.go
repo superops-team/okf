@@ -52,6 +52,11 @@ type Meta struct {
 	IndexFormatVersion int `json:"index_format_version"`
 	// Concepts 是索引覆盖的概念数（chunk 的父概念去重计数），用于 status 展示。
 	Concepts int `json:"concepts,omitempty"`
+	// Keys 是索引内全部 key（已排序）。
+	//
+	// 存它是因为 coder/hnsw 未提供枚举全部节点的 API，而 Load 后需要重建
+	// h.vecs 才能继续走精确检索路径；顺带使 meta 内容与插入顺序无关。
+	Keys []string `json:"keys,omitempty"`
 }
 
 const (
@@ -71,6 +76,15 @@ type HNSW struct {
 	g       *hnsw.Graph[string]
 	dims    int
 	removed map[string]struct{} // tombstone：已删除（不参与检索）
+	// vecs 保存全部向量，供小索引精确检索使用。
+	//
+	// 必要性：coder/hnsw 的 Search 是近似检索，即使请求 k=全部节点数也**不保证**
+	// 返回全部节点（实测 97 节点请求 97 个仅返回 96 个，500 → 427）。
+	// 漏掉哪个节点取决于图结构，而图结构会随 Export/Import 的 map 遍历顺序变化，
+	// 于是同一份数据每次 rebuild 后检索结果可能不同（实测导致某条查询的
+	// top1 在两个文档间摇摆，评测 MRR 在 0.7577/0.7769 间跳变）。
+	// 保留原始向量后，小索引直接全量精算，彻底摆脱图遍历的不确定性。
+	vecs map[string][]float32
 }
 
 // indexRngSeed 是 HNSW 层级生成的固定随机种子。
@@ -101,7 +115,7 @@ func NewHNSW(dims int) *HNSW {
 	g.M = 16
 	g.EfSearch = 64
 	g.Rng = rand.New(rand.NewSource(indexRngSeed))
-	return &HNSW{g: g, dims: dims, removed: make(map[string]struct{})}
+	return &HNSW{g: g, dims: dims, removed: make(map[string]struct{}), vecs: make(map[string][]float32)}
 }
 
 // Add 幂等插入：key 已存在则跳过（不覆盖、不 panic）。
@@ -116,6 +130,10 @@ func (h *HNSW) Add(key string, vec []float32) {
 		return // 幂等跳过
 	}
 	h.g.Add(hnsw.MakeNode(key, vec))
+	if h.vecs == nil {
+		h.vecs = make(map[string][]float32, 1)
+	}
+	h.vecs[key] = vec
 }
 
 // Remove 标记 key 为已删除（tombstone），返回是否有效。P0 不物理删除节点。
@@ -146,26 +164,37 @@ func (h *HNSW) Search(vec []float32, k int) []Match {
 	if h.g.Len() == 0 || k <= 0 {
 		return nil
 	}
-	// 候选池规模：小索引全量召回（等价精确检索），大索引按倍数放大。
-	// 实测：召回池不足会使尾部结果在多次 rebuild 间漂移（分数互异，属召回缺失而非排序不稳）。
+	// 候选池规模：小索引全量精确扫描，大索引走近似图检索 + 放大重排。
+	//
+	// 小索引不走 h.g.Search：它是近似检索，即使请求 k=总节点数也不保证返回全部
+	// （实测 97 请求 97 只回 96），且遗漏项随图结构变化，会让同一份数据
+	// 每次 rebuild 后的检索结果不同。直接对 h.vecs 全量精算可消除该不确定性。
 	total := h.g.Len()
-	want := total
-	if total > searchExactMaxNodes {
-		want = k*searchOversampleFactor + len(h.removed)
+	var out []Match
+	if total <= searchExactMaxNodes && len(h.vecs) > 0 {
+		out = make([]Match, 0, len(h.vecs))
+		for key, v := range h.vecs {
+			if _, ok := h.removed[key]; ok {
+				continue
+			}
+			out = append(out, Match{Key: key, Score: 1 - hnsw.CosineDistance(vec, v)})
+		}
+	} else {
+		want := k*searchOversampleFactor + len(h.removed)
 		if want < searchOversampleFloor {
 			want = searchOversampleFloor
 		}
 		if want > total {
 			want = total
 		}
-	}
-	nodes := h.g.Search(vec, want)
-	out := make([]Match, 0, len(nodes))
-	for _, n := range nodes {
-		if _, ok := h.removed[n.Key]; ok {
-			continue
+		nodes := h.g.Search(vec, want)
+		out = make([]Match, 0, len(nodes))
+		for _, n := range nodes {
+			if _, ok := h.removed[n.Key]; ok {
+				continue
+			}
+			out = append(out, Match{Key: n.Key, Score: 1 - hnsw.CosineDistance(vec, n.Value)})
 		}
-		out = append(out, Match{Key: n.Key, Score: 1 - hnsw.CosineDistance(vec, n.Value)})
 	}
 	// 精确重排：分数降序；同分按 key 升序，保证顺序不依赖 map 遍历。
 	sort.SliceStable(out, func(i, j int) bool {
@@ -197,6 +226,14 @@ func (h *HNSW) Save(dir string, meta Meta) error {
 	meta.Dims = h.dims
 	meta.Count = h.g.Len() - len(h.removed) // 有效节点数（排除 tombstone）
 	meta.IndexFormatVersion = CurrentIndexFormatVersion
+	meta.Keys = make([]string, 0, len(h.vecs))
+	for key := range h.vecs {
+		if _, gone := h.removed[key]; gone {
+			continue
+		}
+		meta.Keys = append(meta.Keys, key)
+	}
+	sort.Strings(meta.Keys) // 排序：使 meta 字节不依赖 map 遍历顺序
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -263,5 +300,13 @@ func (h *HNSW) Load(dir string) (Meta, error) {
 		return meta, fmt.Errorf("加载索引失败（%w），请执行 okf vector rebuild", err)
 	}
 	h.dims = meta.Dims
+	// 重建 vecs：Import 只恢复图，未恢复我们自己的向量表。
+	// 缺了它，Load 出来的索引会退回近似检索路径，失去可复现性。
+	h.vecs = make(map[string][]float32, len(meta.Keys))
+	for _, key := range meta.Keys {
+		if v, ok := h.g.Lookup(key); ok {
+			h.vecs[key] = v
+		}
+	}
 	return meta, nil
 }

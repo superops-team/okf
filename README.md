@@ -179,16 +179,16 @@ Measured on this repository's own knowledge base (28 queries, 26 positive, K=5):
 | Strategy | Recall@5 | MRR |
 |---|---|---|
 | `lexical-substring` (pre-0.5.0 behaviour) | 0.0769 | 0.0769 |
-| `bm25-only` | 0.8077 | 0.7019 |
-| `semantic-only` | 0.9615 | 0.7276 |
-| **`hybrid-default`** | **0.9615** | **0.8109** |
+| `bm25-only` | 0.8077 | 0.6538 |
+| `semantic-only` | 0.9615 | 0.7096 |
+| **`hybrid-default`** | **0.9615** | **0.7256** |
 
 ### How it works & constraints
 
 - **Chunked indexing**: concepts are split on `##`–`####` headings into ≤1024-character chunks (code fences and tables are never split), each carrying a `Title > Section` breadcrumb. This matters because MiniLM truncates at 256 tokens: indexing whole concepts dropped **70.6%** of this repository's knowledge-base content, so text past the truncation point was unsearchable.
 - **Hybrid retrieval**: the semantic channel (HNSW over chunk vectors) and the BM25 channel are fused with weighted RRF (`k=60`, equal weights by default). Tune with `-lexical-weight`; `0` disables the lexical channel. BM25 tokenizes identifiers into subwords (`okf_semantic_search` → `okf`/`semantic`/`search`) and CJK text into overlapping bigrams, with no dictionary dependency.
-- **Reproducibility**: the HNSW graph uses a fixed RNG seed and ranking applies deterministic tie-breaks, so the same query on the same index always returns the same order.
-- **Index cost (measured, 7 concepts → 86 chunks)**: chunking increases index size ~14x (17.7 KB → 250 KB) and build time ~4x (161 ms → 706 ms). Both scale with content volume, not concept count.
+- **Reproducibility**: indexes below 2048 chunks are searched by exact scan rather than HNSW's approximate traversal, because the approximate path does not return every node even when asked for all of them, and which nodes it misses shifts between rebuilds. Combined with a fixed RNG seed and deterministic tie-breaks, this makes results identical across rebuilds — verified by rebuilding this knowledge base repeatedly and confirming the evaluation metrics do not move.
+- **Index cost (measured, 7 concepts → 97 chunks)**: chunking increases index size ~20x (14.5 KB → 287 KB) and build time ~6x (128 ms → 800 ms). Both scale with content volume, not concept count.
 - **Index format v2 is not backward compatible**: chunk-level keys differ from the old concept-level keys. `okf vector status` reports the format version, and loading an older index fails with an explicit prompt to run `okf vector rebuild` (search falls back to lexical meanwhile) rather than silently returning wrong results.
 - **Embedded resources**: the ONNX Runtime CPU library (per-OS, ~10–15 MB) plus a quantized MiniLM model (~23 MB) are embedded into the binary via `go:embed` and extracted to the user cache directory on first use (checksum-verified). Building for each platform only embeds that platform's resources (`scripts/fetch-ort.sh` / `scripts/fetch-model.sh` fetch them at build time; the runtime never goes online).
 - **Dynamic loading (transparency)**: the ONNX Runtime shared library is loaded at runtime via `dlopen` from the extracted cache — the binary is self-contained but not statically linked. Cache location: `os.UserCacheDir()/okf/` (override with `OKF_ORT_DIR`).

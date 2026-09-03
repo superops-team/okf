@@ -1,8 +1,10 @@
 package vectorindex
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 	"testing"
 )
 
@@ -141,5 +143,71 @@ func TestSearchDeterministicOnLargeIndex(t *testing.T) {
 				t.Fatalf("大索引第 %d 轮 rank %d = %q，首轮 %q", round, i, got[i].Key, base[i].Key)
 			}
 		}
+	}
+}
+
+// 回归：coder/hnsw 的 Search 是近似检索，即使请求 k = 全部节点数也不保证
+// 返回全部节点（修复前实测 97 请求 97 只返回 96，500 只返回 427）。
+// 遗漏项取决于图结构，而图结构随 Export/Import 的 map 遍历顺序变化，
+// 于是同一份数据每次 rebuild 后检索结果不同——真实链路上表现为某条查询的
+// top1 在两个文档间摇摆，评测 MRR 在 0.7577/0.7769 之间跳变。
+// 小索引改走 h.vecs 全量精算后，召回必须完整。
+func TestSmallIndexRecallsEveryNode(t *testing.T) {
+	const dim = 8
+	for _, n := range []int{1, 50, 97, 200, 500} {
+		h := NewHNSW(dim)
+		r := rand.New(rand.NewSource(7))
+		for i := 0; i < n; i++ {
+			v := make([]float32, dim)
+			for j := range v {
+				v[j] = r.Float32()
+			}
+			h.Add(fmt.Sprintf("k%04d", i), v)
+		}
+		q := make([]float32, dim)
+		for j := range q {
+			q[j] = r.Float32()
+		}
+		if got := h.Search(q, n); len(got) != n {
+			t.Errorf("n=%d：请求 %d 个，仅返回 %d 个（召回不完整）", n, n, len(got))
+		}
+	}
+}
+
+// Save→Load 之后必须仍走精确检索：Import 只恢复图，
+// 若不重建 h.vecs，加载出来的索引会退回近似路径，可复现性随之丢失。
+func TestLoadedIndexKeepsExactSearch(t *testing.T) {
+	const dim, n = 8, 120
+	h := NewHNSW(dim)
+	r := rand.New(rand.NewSource(11))
+	for i := 0; i < n; i++ {
+		v := make([]float32, dim)
+		for j := range v {
+			v[j] = r.Float32()
+		}
+		h.Add(fmt.Sprintf("k%04d", i), v)
+	}
+	dir := t.TempDir()
+	if err := h.Save(dir, Meta{Model: "m", Dims: dim}); err != nil {
+		t.Fatal(err)
+	}
+
+	h2 := NewHNSW(dim)
+	meta, err := h2.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Keys) != n {
+		t.Errorf("meta.Keys = %d 条，期望 %d 条", len(meta.Keys), n)
+	}
+	if !sort.StringsAreSorted(meta.Keys) {
+		t.Error("meta.Keys 未排序，元信息字节将依赖 map 遍历顺序")
+	}
+	q := make([]float32, dim)
+	for j := range q {
+		q[j] = r.Float32()
+	}
+	if got := h2.Search(q, n); len(got) != n {
+		t.Errorf("Load 后请求 %d 个仅返回 %d 个，未走精确检索", n, len(got))
 	}
 }

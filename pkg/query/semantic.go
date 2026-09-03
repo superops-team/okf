@@ -69,8 +69,15 @@ const (
 )
 
 // rrfScore 计算加权 RRF 分量：weight / (k + rank)。
+//
+// k+rank <= 0 时返回 0：调用方（SemanticSearch）已把 RRFK<=0 归一化为默认值，
+// 该分支实际不可达，此处仅防御未来新增调用点时出现除零（Inf/NaN 会污染整个排序）。
 func rrfScore(weight float64, k, rank int) float32 {
-	return float32(weight / float64(k+rank))
+	denom := k + rank
+	if denom <= 0 {
+		return 0
+	}
+	return float32(weight / float64(denom))
 }
 
 // LexicalBackend 抽象词法检索通道（生产实现：pkg/lexical.BM25 以 chunk 为索引单位）。
@@ -101,9 +108,10 @@ type SearchOptions struct {
 	// Lexical 是可选的 BM25 词法后端。为 nil 时回退到内置子串匹配通道。
 	Lexical LexicalBackend
 
-	// lexicalWeightSet 记录调用方是否显式设置过 LexicalWeight，
-	// 用于区分"未设置（用默认值）"与"显式设为 0（关闭词法）"。
+	// lexicalWeightSet / vectorWeightSet 记录调用方是否显式设置过对应权重，
+	// 用于区分"未设置（用默认值）"与"显式设为 0（关闭该通道）"。
 	lexicalWeightSet bool
+	vectorWeightSet  bool
 }
 
 // WithLexicalWeight 返回显式设置词法权重后的选项副本（0 表示关闭词法通道）。
@@ -111,6 +119,15 @@ type SearchOptions struct {
 func (o SearchOptions) WithLexicalWeight(w float64) SearchOptions {
 	o.LexicalWeight = w
 	o.lexicalWeightSet = true
+	return o
+}
+
+// WithVectorWeight 返回显式设置语义权重后的选项副本（0 表示关闭语义通道）。
+// 与 WithLexicalWeight 对称：两个通道都应可被显式关闭，
+// 否则"纯词法"这类配置无法表达（直接把字段设 0 会被当成未设置而回落默认值）。
+func (o SearchOptions) WithVectorWeight(w float64) SearchOptions {
+	o.VectorWeight = w
+	o.vectorWeightSet = true
 	return o
 }
 
@@ -135,11 +152,17 @@ func SemanticSearch(bundle *KnowledgeBundle, text string, backend SemanticBacken
 	if opts.RRFK <= 0 {
 		opts.RRFK = DefaultRRFK
 	}
-	if opts.VectorWeight <= 0 {
+	if !opts.vectorWeightSet && opts.VectorWeight == 0 {
 		opts.VectorWeight = DefaultVectorWeight
+	}
+	if opts.VectorWeight < 0 {
+		opts.VectorWeight = 0 // 负权重无意义，等同关闭该通道
 	}
 	if !opts.lexicalWeightSet && opts.LexicalWeight == 0 {
 		opts.LexicalWeight = DefaultLexicalWeight
+	}
+	if opts.LexicalWeight < 0 {
+		opts.LexicalWeight = 0
 	}
 
 	// 指纹 → 概念 映射
@@ -153,7 +176,8 @@ func SemanticSearch(bundle *KnowledgeBundle, text string, backend SemanticBacken
 	// rank 取最靠前的那个 chunk（用于同分 tie-break）。
 	semRank := make(map[*Concept]int) // 1-based rank
 	semHits := make(map[*Concept]int) // 命中块数（>1 表示多块命中）
-	if backend != nil {
+	// 语义通道：权重为 0 时完全跳过（与词法通道对称，避免无谓的编码开销）。
+	if backend != nil && opts.VectorWeight > 0 {
 		vec, err := backend.EmbedQuery(text)
 		if err != nil {
 			return nil, fmt.Errorf("semantic embed query: %w", err)

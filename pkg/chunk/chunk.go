@@ -227,23 +227,32 @@ func fitPieces(breadcrumb, body string, max int) ([]string, string) {
 }
 
 // truncateRunes 把 s 截断到不超过 n 字节，且不切裂 UTF-8 字符。
+// 返回值满足 len(result) <= n。
 func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	if len(s) <= n {
 		return s
 	}
+	// range string 的下标是每个 rune 的起始字节位置；
+	// 第一个起始位置 > n 的 rune 意味着它无法完整放入，
+	// 故截到该位置即为满足 <= n 的最长前缀。
 	for i := range s {
 		if i > n {
-			return s[:lastRuneStart(s, i)]
+			return s[:prevRuneStart(s, i)]
 		}
 	}
-	return s
+	// 所有 rune 起始位置都 <= n，但 len(s) > n：
+	// 说明最后一个 rune 跨过了 n，需要去掉它。
+	return s[:prevRuneStart(s, len(s))]
 }
 
-// lastRuneStart 返回不超过 limit 的最后一个 rune 起始位置。
-func lastRuneStart(s string, limit int) int {
+// prevRuneStart 返回 pos 之前最后一个 rune 的起始位置（pos 本身为 rune 边界）。
+func prevRuneStart(s string, pos int) int {
 	prev := 0
 	for i := range s {
-		if i > limit {
+		if i >= pos {
 			break
 		}
 		prev = i

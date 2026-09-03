@@ -64,11 +64,13 @@ BIN="$WORK/okf"
 KB="$WORK/kb"
 mkdir -p "$KB"
 "$BIN" add -dir "$KB" pkg/convert/testdata >/dev/null
-if ! "$BIN" search -path "$KB" -q "banana" 2>/dev/null | grep -q "sample.xlsx.md"; then
+"$BIN" search -path "$KB" -q "banana" >"$WORK/out_banana.txt" 2>/dev/null || true
+if ! grep -q "sample.xlsx.md" "$WORK/out_banana.txt"; then
   echo "GATE-FAILED: real-execution search did not hit sample.xlsx.md"
   exit 1
 fi
-if ! "$BIN" search -path "$KB" -q "Section One" 2>/dev/null | grep -q "sample.docx.md"; then
+"$BIN" search -path "$KB" -q "Section One" >"$WORK/out_section.txt" 2>/dev/null || true
+if ! grep -q "sample.docx.md" "$WORK/out_section.txt"; then
   echo "GATE-FAILED: real-execution search did not hit sample.docx.md"
   exit 1
 fi
@@ -77,11 +79,14 @@ if ! "$BIN" lint -path "$KB" >/dev/null 2>&1; then
   exit 1
 fi
 # 向量语义搜索冒烟：需构建期资源已就绪（scripts/fetch-ort.sh + fetch-model.sh，见 README）
+# 注意：这些断言先把输出落盘再 grep。若写成 "cmd | grep -q"，grep 命中后立即退出会向
+# cmd 发 SIGPIPE，在 set -o pipefail 下整条管道被判失败——表现为「检索明明有结果却 GATE-FAILED」。
 if ! "$BIN" vector index -path "$KB" >/dev/null 2>&1; then
   echo "GATE-FAILED: real-execution vector index failed (run scripts/fetch-ort.sh darwin arm64 etc first)"
   exit 1
 fi
-if ! "$BIN" search -path "$KB" -q "check my notes for errors" -semantic 2>/dev/null | grep -q "source="; then
+"$BIN" search -path "$KB" -q "check my notes for errors" -semantic >"$WORK/out_semantic.txt" 2>/dev/null || true
+if ! grep -q "source=" "$WORK/out_semantic.txt"; then
   echo "GATE-FAILED: real-execution semantic search produced no sourced results"
   exit 1
 fi

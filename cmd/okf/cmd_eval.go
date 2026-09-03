@@ -97,7 +97,7 @@ func runEvalComparison(qb *query.KnowledgeBundle, cases []eval.EvalCase, cutoff 
 			fmt.Printf("Warning: 向量索引不可用 (%v)，仅评测词法策略。请先执行 okf vector index\n\n", lerr)
 		} else {
 			sem := &semanticBackend{emb: emb, idx: idx}
-			lex := buildLexicalBackend(qb)
+			lex := query.BuildLexicalBackend(qb)
 			strategies["bm25-only"] = makeEvalStrategy(nil, lex, cutoff, 0, 1.0)
 			strategies["semantic-only"] = makeEvalStrategy(sem, nil, cutoff, 1.0, 0)
 			strategies["hybrid-default"] = makeEvalStrategy(sem, lex, cutoff,
@@ -126,8 +126,10 @@ func runEvalComparison(qb *query.KnowledgeBundle, cases []eval.EvalCase, cutoff 
 // makeEvalStrategy 构造一个注入指定通道与权重的评测策略。
 func makeEvalStrategy(sem query.SemanticBackend, lex query.LexicalBackend, topK int, wv, wl float64) eval.SearchStrategy {
 	return func(bundle *query.KnowledgeBundle, q string) []*query.Concept {
-		opts := query.SearchOptions{TopK: topK, VectorWeight: wv, Lexical: lex}
-		opts = opts.WithLexicalWeight(wl)
+		opts := query.SearchOptions{TopK: topK, Lexical: lex}
+		// 两侧都用 WithXxx 显式设置：直接赋字段时 0 会被当作"未设置"而回落默认值，
+		// 导致"纯词法/纯语义"策略名与实际配置不符。
+		opts = opts.WithVectorWeight(wv).WithLexicalWeight(wl)
 		res, err := query.SemanticSearch(bundle, q, sem, opts)
 		if err != nil {
 			return nil

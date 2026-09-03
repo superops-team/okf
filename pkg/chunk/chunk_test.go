@@ -3,6 +3,7 @@ package chunk
 import (
 	"strings"
 	"testing"
+	"testing/quick"
 	"unicode/utf8"
 )
 
@@ -337,5 +338,56 @@ func TestTruncatedBreadcrumbKeepsValidUTF8(t *testing.T) {
 		if !utf8.ValidString(c.Text()) {
 			t.Errorf("块 %d 的 Text() 不是合法 UTF-8", i)
 		}
+	}
+}
+
+func TestTruncateRunesRespectsByteLimit(t *testing.T) {
+	// 回归：早期实现用 i > n 且返回 rune 起始位置（而非结束位置），
+	// 导致结果总比 n 多出一个完整 rune，例如
+	// truncateRunes("𝄞𝄞", 5) 返回 8 字节。当时未造成实际越界，
+	// 仅因 minBodyBudget=16 的余量恰好吸收了超额——属侥幸而非设计。
+	cases := []struct {
+		s    string
+		n    int
+		want string
+	}{
+		{"abcdef", 3, "abc"},
+		{"字字字", 4, "字"}, // 3 字节/字：放不下第二个
+		{"字字字", 1, ""},  // 一个都放不下
+		{"a字b", 2, "a"}, // a(1) + 字(3) = 4 > 2
+		{"𝄞𝄞", 5, "𝄞"},  // 4 字节/字符
+		{"字", 3, "字"},   // 恰好放下
+		{"字a", 4, "字a"}, // 恰好放下
+		{"abc", 0, ""},
+		{"abc", -1, ""},
+		{"", 5, ""},
+		{"short", 100, "short"},
+	}
+	for _, c := range cases {
+		got := truncateRunes(c.s, c.n)
+		if got != c.want {
+			t.Errorf("truncateRunes(%q, %d) = %q，期望 %q", c.s, c.n, got, c.want)
+		}
+		if c.n >= 0 && len(got) > c.n {
+			t.Errorf("truncateRunes(%q, %d) 返回 %d 字节，超过上限", c.s, c.n, len(got))
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("truncateRunes(%q, %d) 返回非法 UTF-8", c.s, c.n)
+		}
+		if !strings.HasPrefix(c.s, got) {
+			t.Errorf("truncateRunes(%q, %d) = %q 不是原串前缀", c.s, c.n, got)
+		}
+	}
+}
+
+func TestPropertyTruncateRunesInvariants(t *testing.T) {
+	// 属性：结果 <= n 字节、合法 UTF-8、且为原串前缀
+	f := func(s string, n uint8) bool {
+		lim := int(n)
+		got := truncateRunes(s, lim)
+		return len(got) <= lim && utf8.ValidString(got) && strings.HasPrefix(s, got)
+	}
+	if err := quick.Check(f, &quick.Config{MaxCount: 500}); err != nil {
+		t.Error(err)
 	}
 }

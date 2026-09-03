@@ -846,7 +846,11 @@ func (r *ToolRegistry) handleSemanticSearch(args map[string]interface{}) (*ToolC
 	}
 
 	backend := &mcpSemanticBackend{emb: emb, idx: idx}
-	results, err := query.SemanticSearch(mcpToQueryBundle(bundle), q, backend, query.SearchOptions{TopK: limit})
+	qb := mcpToQueryBundle(bundle)
+	// 必须与 CLI 走同一条融合路径：不接词法后端时，SemanticSearch 会退化为
+	// 内置子串匹配通道（实测 Recall@5 仅 0.0769），使 MCP 消费方拿到明显更差的结果。
+	opts := query.SearchOptions{TopK: limit, Lexical: query.BuildLexicalBackend(qb)}
+	results, err := query.SemanticSearch(qb, q, backend, opts)
 	if err != nil {
 		return errorResult(fmt.Sprintf("语义检索失败: %v", err)), nil
 	}

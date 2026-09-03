@@ -28,7 +28,7 @@ keys changed from `<concept fingerprint>` to `<concept fingerprint>#<ordinal>`.
 - **Why:** MiniLM truncates input at 256 tokens. Indexing whole concepts meant
   only **29.4%** of this repository's knowledge-base content ever reached the
   index — **70.6% was silently unsearchable**. After chunking, coverage is
-  complete (7 concepts → 86 chunks, 0 oversized chunks).
+  complete (7 concepts → 97 chunks, 0 oversized chunks).
 
 ### New: BM25 lexical channel
 
@@ -69,16 +69,35 @@ keys changed from `<concept fingerprint>` to `<concept fingerprint>#<ordinal>`.
 
 ### Fixed: reproducibility
 
-- `pkg/vectorindex` pins the HNSW RNG seed and rewrites `Search` to over-sample
-  candidates and re-rank them exactly, with `key`-ascending tie-breaks.
-  Previously identical queries could return different orderings across index
-  rebuilds — the underlying library picks its layer entry point by Go map
-  iteration order, which fixing the seed alone does not address.
+- `pkg/vectorindex` pins the HNSW RNG seed, and searches indexes below 2048
+  chunks by scanning stored vectors exactly instead of traversing the graph.
+  Identical queries could otherwise return different orderings across index
+  rebuilds. Two independent causes had to be addressed: the underlying library
+  picks its layer entry point by Go map iteration order (fixing the seed alone
+  does not help), and its `Search` is approximate — asking for every node does
+  **not** return every node (97 requested, 96 returned; 500 requested, 427
+  returned), with the omissions shifting as the graph changes. On this
+  knowledge base that surfaced as one query's top hit alternating between two
+  documents, moving the reported MRR between 0.7577 and 0.7769 run to run.
+  Results are now identical across repeated rebuilds.
+- `Meta` records the sorted key list, both so a loaded index can restore the
+  exact-search path and so the metadata bytes no longer depend on map order.
 - `pkg/query` fusion ranking gained deterministic tie-breaks (score, semantic
   rank, semantic presence, source, fingerprint).
 - `pkg/eval` now identifies documents by `FilePath` rather than the optional
   `Resource` frontmatter field, which is empty for converted concepts and made
   every metric collapse to zero on real bundles.
+- The MCP `okf_semantic_search` tool now uses the same fused pipeline as the
+  CLI. It passed no lexical backend, so it silently fell back to the substring
+  channel (Recall@5 0.0769) — the agent-facing entry point was getting
+  materially worse results than the command line. Chunking and BM25 index
+  construction moved into `pkg/query` (`ConceptChunks`, `BuildLexicalBackend`)
+  so both callers share one implementation and their chunk keys cannot drift.
+- `SearchOptions.VectorWeight` can now be set to 0 via `WithVectorWeight` to
+  disable the semantic channel, mirroring `WithLexicalWeight`. Assigning the
+  field directly was indistinguishable from leaving it unset, so the value
+  silently reverted to the default and a lexical-only configuration could not
+  be expressed.
 
 ### Measured results
 
@@ -88,16 +107,19 @@ keys changed from `<concept fingerprint>` to `<concept fingerprint>#<ordinal>`.
 | Strategy | Recall@5 | Precision@5 | MRR | NDCG@5 |
 |---|---|---|---|---|
 | `lexical-substring` (previous behaviour) | 0.0769 | 0.0769 | 0.0769 | 0.0769 |
-| `bm25-only` | 0.8077 | 0.2776 | 0.7019 | 0.7290 |
-| `semantic-only` | 0.9615 | 0.2583 | 0.7276 | 0.7894 |
-| **`hybrid-default`** | **0.9615** | 0.2333 | **0.8109** | **0.8447** |
+| `bm25-only` | 0.8077 | 0.2744 | 0.6538 | 0.6941 |
+| `semantic-only` | 0.9615 | 0.2641 | 0.7096 | 0.7685 |
+| **`hybrid-default`** | **0.9615** | 0.2288 | **0.7256** | **0.7828** |
 
-Hybrid retrieval improves MRR by **+11.5%** over the semantic channel alone.
+Hybrid retrieval edges out the semantic channel alone on MRR and NDCG. The gap is roughly one
+query on a 26-query set, so treat it as "not worse, and better on lexical-heavy queries"
+rather than a large win; the decisive gain here is over the pre-0.5.0 substring channel
+(MRR 0.0769). Numbers are reproducible: rebuilding the index does not change them.
 
 ### Costs
 
-- Index size grows ~14x and build time ~4x for the same content
-  (7 concepts: 17.7 KB → 250 KB, 161 ms → 706 ms). Both scale with content
+- Index size grows ~20x and build time ~4x for the same content
+  (7 concepts: 14.5 KB → 287 KB, 128 ms → 800 ms). Both scale with content
   volume rather than concept count.
 - The BM25 index is built in memory per search invocation (<10 ms on this
   repository's knowledge base) and is not persisted, avoiding a second on-disk
