@@ -1,0 +1,27 @@
+id: add-retrieval-quality-closed-loop
+name: Retrieval Quality Closed Loop
+description: Close the retrieval quality gap identified in the khoj comparison — (1) content chunking with heading inheritance for document-level precision, (2) cross-encoder two-stage re-ranking on the existing ONNX infrastructure, (3) unified search result format with re-rank scores and chunk metadata. All aligned to the IR evaluation benchmark baseline.
+author: okf-team
+version: 0.6.0
+status: proposed
+created_at: "2026-09-05"
+updated_at: "2026-09-05"
+related_changes:
+  - add-vector-semantic-search
+  - add-ir-eval-benchmark
+  - add-document-format-import
+specs:
+  - specs/retrieval-quality-closed-loop/spec.md
+requires:
+  - okf >= 0.5.0
+  - go >= 1.26.0
+impacts:
+  - pkg/convert: new chunk.go (pure-Go chunking with heading inheritance); ConvertToMarkdown unchanged
+  - pkg/query: rerank.go (Reranker interface + two-stage pipeline); SearchResult gains RerankScore/Heading/ChunkIndex
+  - pkg/embeddings: new crossencoder.go (pure-onnx AdvancedSession + tokenizer EncodePair); MiniLM unchanged
+  - internal/embeddings/assets: cross-encoder model resource (build-time fetched, embedded, checksum-verified)
+  - cmd/okf: cmd_add chunk-aware import for documents over threshold; cmd_search/vector output unified format
+  - pkg/mcp: okf_search / okf_semantic_search responses include rerank score and chunk metadata
+  - pkg/eval: benchmark adapts to chunked resources (dedupe by source file, top-hit scoring); new chunked-bundle searchability test
+  - tests: chunk unit/property tests, rerank unit tests with fake ranker, integration tests, eval regression
+  - docs: README + docs/knowledge/releases.md v0.6.0 + docs/knowledge/search.md

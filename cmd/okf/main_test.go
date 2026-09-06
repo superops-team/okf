@@ -6,8 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/query"
@@ -412,15 +415,26 @@ AlphaToken content.
 	assertToolTopLevelFields(t, contextEnv)
 }
 
+// okfBinOnce 复用一次 CLI 构建：完整二进制内嵌 ~45MB ONNX Runtime 与模型，
+// 链接成本高（~85s/次），每个测试各自 go build 会让 cmd/okf 包全量超时。
+// 单例构建后所有 CLI 测试共享同一二进制（临时目录，测试进程退出后由 OS 清理）。
+var (
+	okfBinOnce sync.Once
+	okfBinPath string
+)
+
 func buildOKF(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "okf")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
-	cmd.Dir = "."
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build CLI failed: %v\n%s", err, out)
-	}
-	return bin
+	okfBinOnce.Do(func() {
+		bin := filepath.Join(os.TempDir(), "okf-test-bin-"+strconv.FormatInt(time.Now().UnixNano(), 36))
+		cmd := exec.Command("go", "build", "-o", bin, ".")
+		cmd.Dir = "."
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("go build CLI failed: %v\n%s", err, out)
+		}
+		okfBinPath = bin
+	})
+	return okfBinPath
 }
 
 func initCLIRepo(t *testing.T) string {

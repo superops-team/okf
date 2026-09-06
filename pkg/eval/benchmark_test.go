@@ -62,12 +62,16 @@ func TestEvalBenchmark(t *testing.T) {
 	// Print the full report for baseline documentation.
 	t.Logf("\n%s", report.String())
 
-	// --- Aggregate assertions ---
-	if report.Aggregate.MRR <= 0.7 {
-		t.Errorf("aggregate MRR = %.4f, want > 0.7 (existing search should rank relevant docs well)", report.Aggregate.MRR)
+	// --- Aggregate assertions (spec §Eval Benchmark Adaptation: lexical
+	// baseline Recall@5 ≥ 0.9 and NDCG@5 ≥ 0.9) ---
+	if report.Aggregate.MRR < 0.9 {
+		t.Errorf("aggregate MRR = %.4f, want >= 0.9 (existing search should rank relevant docs well)", report.Aggregate.MRR)
 	}
-	if report.AggregateNonNegative.Recall < 0.8 {
-		t.Errorf("positive aggregate Recall@5 = %.4f, want >= 0.8", report.AggregateNonNegative.Recall)
+	if report.AggregateNonNegative.Recall < 0.9 {
+		t.Errorf("positive aggregate Recall@5 = %.4f, want >= 0.9", report.AggregateNonNegative.Recall)
+	}
+	if report.AggregateNonNegative.NDCG < 0.9 {
+		t.Errorf("positive aggregate NDCG@5 = %.4f, want >= 0.9", report.AggregateNonNegative.NDCG)
 	}
 	if report.PositiveCount != 18 {
 		t.Errorf("positive count = %d, want 18", report.PositiveCount)

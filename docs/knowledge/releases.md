@@ -1,5 +1,43 @@
 # OKF Release Notes
 
+## v0.6.0 (unreleased) — Retrieval Quality Closed Loop (M1)
+
+This release builds on v0.5.0's index-time chunking, BM25 and weighted RRF with
+source-tracked import chunks, result deduplication and lifecycle cleanup.
+
+### New: source-tracked document chunks
+
+- Pure-Go import chunker (`pkg/convert.Split`) preserves heading context, fenced
+  code and table rows, with CJK-aware word counting (`MaxWords` default 256).
+- `okf add` imports documents over `convert.ChunkThreshold` (2000 words) as a
+  whole concept plus `__cN` derived concepts carrying `chunk_index`,
+  `chunk_count`, `heading_path`, `source_path` and `derived: true`.
+- Small documents retain the prior single-concept behavior.
+
+### New: search deduplication and evaluation linkage
+
+- Semantic CLI/MCP results return at most one concept per source document;
+  `dup=N` reports hidden same-source hits. `SearchOptions.DisableDedupe` exposes
+  the raw list for library callers.
+- Evaluation normalizes derived chunk identifiers to their source document and
+  counts that source once, while retaining v0.5.0's injectable strategy API.
+- Deep-tail document content is covered through both persisted import chunks
+  and v0.5.0's index-time heading-aware chunks.
+
+### New: generated-file lifecycle
+
+- `okf sync -prune` removes trusted generated whole concepts and matching
+  derived chunks when their source disappears.
+- Metadata and source-path checks protect author-owned Markdown from deletion.
+- Documents imported before generated markers were introduced must be imported
+  once with v0.6.0 before prune can manage their generated files.
+
+### Upgrade notes
+
+- Existing v0.5.0 vector indexes remain format v2; no additional vector rebuild
+  is required solely for v0.6.0.
+- `okf version` reports **v0.6.0**.
+
 ## v0.5.0 (unreleased) — Retrieval Quality: Chunking, BM25 and Weighted RRF
 
 > Minor version bump: this release changes retrieval behaviour and the on-disk

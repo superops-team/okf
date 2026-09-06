@@ -779,6 +779,54 @@ func removeKnowledgeFile(knowledgeDir, resource string) {
 		return
 	}
 	_ = os.Remove(path)
+	removeDerivedChunks(knowledgeDir, resource)
+}
+
+// removeDerivedChunks removes chunk concepts derived from resource: files
+// named <resource>__c<digits>.md in the same directory whose frontmatter
+// carries source_path == resource AND derived == true. The lifecycle is
+// metadata-driven, not name-driven: a chunk whose derived marker was edited
+// away survives, and a different document's chunks are untouched.
+func removeDerivedChunks(knowledgeDir, resource string) {
+	base := filepath.Base(resource)
+	dir := filepath.Join(knowledgeDir, filepath.Dir(resource))
+	prefix := base + "__c"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		digits := name[len(prefix) : len(name)-len(".md")]
+		if digits == "" {
+			continue
+		}
+		allDigits := true
+		for _, r := range digits {
+			if r < '0' || r > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if !allDigits {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		concept, perr := parser.ParseConcept(p)
+		if perr != nil {
+			continue
+		}
+		if sp, _ := concept.CustomFields["source_path"].(string); sp != resource {
+			continue
+		}
+		if fmt.Sprint(concept.CustomFields["derived"]) != "true" {
+			continue
+		}
+		_ = os.Remove(p)
+	}
 }
 
 func attachGeneratedMetadata(concept *okf.Concept, sourcePath, sourceKind, sourceCommit string) {
