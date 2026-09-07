@@ -182,3 +182,54 @@ func TestSemanticSearch_DedupeStillFusesLexical(t *testing.T) {
 		t.Fatalf("top = %q/%q, want Alpha/both", res[0].Concept.Title, res[0].Source)
 	}
 }
+
+// --- Gap 4: dedupe result ordering is stable and score-descending ---
+
+func TestSemanticSearch_DedupeResultsSortedByScore(t *testing.T) {
+	// Three distinct sources (no dedupe collapse); assert results are sorted by
+	// SemanticScore descending and the order is deterministic across runs (the
+	// sort is SliceStable, so equal-score ties preserve input order — this is
+	// the tie-breaking contract even though RRF rank uniqueness makes exact ties
+	// unreachable in practice).
+	b := &KnowledgeBundle{Concepts: []*Concept{
+		{Type: "doc", Title: "Low", Content: "zzz quiet", FilePath: "kb/low.md"},
+		{Type: "doc", Title: "High", Content: "apple banana fruit", FilePath: "kb/high.md"},
+		{Type: "doc", Title: "Mid", Content: "banana cherry", FilePath: "kb/mid.md"},
+	}}
+	fb := &fakeBackend{hits: []SemanticHit{
+		{Key: Fingerprint(b.Concepts[1]), Score: 0.95}, // High rank1
+		{Key: Fingerprint(b.Concepts[2]), Score: 0.80}, // Mid rank2
+		{Key: Fingerprint(b.Concepts[0]), Score: 0.60}, // Low rank3
+	}}
+	// Run twice; order must be identical (deterministic).
+	var first []string
+	for run := 0; run < 2; run++ {
+		res, err := SemanticSearch(b, "apple banana", fb, SearchOptions{TopK: 5})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res) != 3 {
+			t.Fatalf("run %d: got %d results, want 3", run, len(res))
+		}
+		// score descending
+		for i := 1; i < len(res); i++ {
+			if res[i].SemanticScore > res[i-1].SemanticScore {
+				t.Fatalf("run %d: results not score-descending: res[%d]=%.4f > res[%d]=%.4f",
+					run, i, res[i].SemanticScore, i-1, res[i-1].SemanticScore)
+			}
+		}
+		// top must be High (both channels: lexical + semantic rank1)
+		if res[0].Concept.Title != "High" {
+			t.Fatalf("run %d: top = %q, want High", run, res[0].Concept.Title)
+		}
+		titles := make([]string, len(res))
+		for i, r := range res {
+			titles[i] = r.Concept.Title
+		}
+		if run == 0 {
+			first = titles
+		} else if strings.Join(titles, ",") != strings.Join(first, ",") {
+			t.Fatalf("non-deterministic order: run0=%v run1=%v", first, titles)
+		}
+	}
+}

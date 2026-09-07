@@ -62,7 +62,7 @@ error, latency budget): **gap (M2)**. No cross-encoder code shipped in M1.
 | 27 | chunked deep-tail content is searchable (semantic) | `TestSemanticDeepTailChunkedVsUnchunked` (real MiniLM + HNSW) | fully |
 | 28 | unchunked semantic control cannot retrieve deep-tail content | `TestSemanticDeepTailChunkedVsUnchunked` control leg — verified at the **vector layer** (cosine < 0), see note | aligned |
 | 29 | re-import is idempotent | `TestCmdAddChunkedReimportIdempotent` | fully |
-| 30 | chunk files are derived artifacts | `TestRemoveKnowledgeFileRemovesDerivedChunks` / `TestRemoveKnowledgeFileKeepsEditedChunk` / `TestRemoveKnowledgeFileNestedSource` | fully |
+| 30 | chunk files are derived artifacts | `TestRemoveKnowledgeFileRemovesDerivedChunks` / `TestRemoveKnowledgeFileKeepsEditedChunk` / `TestRemoveKnowledgeFileNestedSource` (unit layer) + `TestCmdSyncPruneClearsMetadataForMissingSource` (sync end-to-end) | partial |
 | 31 | MCP chunked import is failure-atomic | `TestMCPSemanticChunkedAtomicWrite (pkg/mcp/tools_import_test.go)` / `TestMCPSemanticChunkedRollbackNoPartial (pkg/mcp/tools_import_test.go)` | fully |
 
 Note on scenario 28 (`aligned`): the spec asserts "the term is not retrievable in
@@ -103,7 +103,16 @@ intent.
 
 M1 surface addition: CLI (`okf search -semantic`) and MCP (`okf_semantic_search`)
 both append `dup=N` when `DuplicateCount > 0` (no field-shape change, envelope
-version intact).
+version intact). Verified by `TestCLISemanticSearchOutputsDupCount` (real binary +
+MiniLM vector index, asserts output contains `dup=`).
+
+Coverage-gap follow-ups (all wired + tested in this PR):
+- ChunkThreshold boundary: `TestCmdAddChunkThresholdBoundary` (2000 words = not
+  chunked, 2001 words = chunked).
+- Chunker mutation: `tools/mutants.sh` extended to 8 mutants (4 convert + 4 chunk),
+  all killed.
+- Dedupe ordering stability: `TestSemanticSearch_DedupeResultsSortedByScore`
+  (score-descending + deterministic across runs).
 
 ## Requirement: Eval Benchmark Adaptation (5/5 fully)
 
