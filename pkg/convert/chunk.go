@@ -319,6 +319,16 @@ func tokenize(text string) []string {
 				cur.Reset()
 			}
 			toks = append(toks, string(r))
+		} else if isCJK(r) {
+			// countWords counts every CJK char as one word, so splitLongText
+			// must be able to split inside a CJK run: emit one token per CJK
+			// char instead of merging the run into a single un-splittable token
+			// (which let a 27-char CJK paragraph overflow a 26-word budget).
+			if cur.Len() > 0 {
+				toks = append(toks, cur.String())
+				cur.Reset()
+			}
+			toks = append(toks, string(r))
 		} else {
 			cur.WriteRune(r)
 		}
