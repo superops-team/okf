@@ -85,8 +85,8 @@ run "M3 invert no-text mapping" \
 
 run "M4 hardcode WrapConcept ctype" \
   "pkg/convert/convert.go" \
-  'fmt.Sprintf("---\ntype: %s\ntitle: %q\ndescription: %q\n---\n%s\n", ctype, title, desc, body)' \
-  'fmt.Sprintf("---\ntype: %s\ntitle: %q\ndescription: %q\n---\n%s\n", "source", title, desc, body)' \
+  'fmt.Sprintf("---\ntype: %s\ntitle: %q\ndescription: %q\ngenerated: true\ngenerator: %q\nsource_path: %q\n---\n%s\n",\n\t\tctype, title, desc, generatorName, filename, body)' \
+  'fmt.Sprintf("---\ntype: %s\ntitle: %q\ndescription: %q\ngenerated: true\ngenerator: %q\nsource_path: %q\n---\n%s\n",\n\t\t"source", title, desc, generatorName, filename, body)' \
   ./pkg/mcp/ -run TestMCPImportWithOverrides
 
 # ---------- pkg/convert: persisted import chunks ----------
