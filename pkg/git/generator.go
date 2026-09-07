@@ -755,78 +755,9 @@ func parseGeneratedSymbol(line, pkg, filePath string) (Symbol, bool) {
 }
 
 func removeKnowledgeFile(knowledgeDir, resource string) {
-	if resource == "" {
-		return
-	}
-	path := filepath.Join(knowledgeDir, resource)
-	if !strings.HasSuffix(path, ".md") {
-		path += ".md"
-	}
-	concept, err := parser.ParseConcept(path)
-	if err != nil {
-		return
-	}
-	// Check both legacy boolean "generated" in CustomFields and v0.2 Generated struct.
-	trusted := hasTrustedGeneratedMetadata(concept.CustomFields, resource)
-	if !trusted && concept.Generated != nil {
-		if gen, ok := concept.CustomFields["generator"].(string); ok && gen == "okf.git" {
-			if sp, ok := concept.CustomFields["source_path"].(string); ok && (sp == resource || codeFileResource(sp) == resource) {
-				trusted = true
-			}
-		}
-	}
-	if !trusted {
-		return
-	}
-	_ = os.Remove(path)
-	removeDerivedChunks(knowledgeDir, resource)
-}
-
-// removeDerivedChunks removes chunk concepts derived from resource: files
-// named <resource>__c<digits>.md in the same directory whose frontmatter
-// carries source_path == resource AND derived == true. The lifecycle is
-// metadata-driven, not name-driven: a chunk whose derived marker was edited
-// away survives, and a different document's chunks are untouched.
-func removeDerivedChunks(knowledgeDir, resource string) {
-	base := filepath.Base(resource)
-	dir := filepath.Join(knowledgeDir, filepath.Dir(resource))
-	prefix := base + "__c"
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".md") {
-			continue
-		}
-		digits := name[len(prefix) : len(name)-len(".md")]
-		if digits == "" {
-			continue
-		}
-		allDigits := true
-		for _, r := range digits {
-			if r < '0' || r > '9' {
-				allDigits = false
-				break
-			}
-		}
-		if !allDigits {
-			continue
-		}
-		p := filepath.Join(dir, name)
-		concept, perr := parser.ParseConcept(p)
-		if perr != nil {
-			continue
-		}
-		if sp, _ := concept.CustomFields["source_path"].(string); sp != resource {
-			continue
-		}
-		if fmt.Sprint(concept.CustomFields["derived"]) != "true" {
-			continue
-		}
-		_ = os.Remove(p)
-	}
+	// Single source of truth lives in pkg/okf (RemoveGeneratedKnowledgeFiles),
+	// shared with okf sync -prune; see pkg/okf/prune_files.go.
+	okf.RemoveGeneratedKnowledgeFiles(knowledgeDir, resource)
 }
 
 func attachGeneratedMetadata(concept *okf.Concept, sourcePath, sourceKind, sourceCommit string) {
@@ -841,34 +772,6 @@ func attachGeneratedMetadata(concept *okf.Concept, sourcePath, sourceKind, sourc
 	if sourceCommit != "" {
 		concept.CustomFields["source_commit"] = sourceCommit
 	}
-}
-
-func hasTrustedGeneratedMetadata(fields map[string]interface{}, sourcePath string) bool {
-	if fields == nil {
-		return false
-	}
-	// Accept both legacy boolean form (generated: true) and v0.2 mapping form (generated: {by: ...}).
-	generatedOk := false
-	switch v := fields["generated"].(type) {
-	case bool:
-		generatedOk = v
-	case map[string]interface{}:
-		generatedOk = v != nil
-	default:
-		generatedOk = fields["generated"] != nil
-	}
-	if !generatedOk {
-		return false
-	}
-	generator, ok := fields["generator"].(string)
-	if !ok || generator != "okf.git" {
-		return false
-	}
-	metadataSourcePath, ok := fields["source_path"].(string)
-	if !ok || metadataSourcePath == "" {
-		return false
-	}
-	return metadataSourcePath == sourcePath || codeFileResource(metadataSourcePath) == sourcePath
 }
 
 // UpdateFromLastCommit updates based on the last commit.

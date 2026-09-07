@@ -62,7 +62,7 @@ error, latency budget): **gap (M2)**. No cross-encoder code shipped in M1.
 | 27 | chunked deep-tail content is searchable (semantic) | `TestSemanticDeepTailChunkedVsUnchunked` (real MiniLM + HNSW) | fully |
 | 28 | unchunked semantic control cannot retrieve deep-tail content | `TestSemanticDeepTailChunkedVsUnchunked` control leg — verified at the **vector layer** (cosine < 0), see note | aligned |
 | 29 | re-import is idempotent | `TestCmdAddChunkedReimportIdempotent` | fully |
-| 30 | chunk files are derived artifacts | `TestRemoveKnowledgeFileRemovesDerivedChunks` / `TestRemoveKnowledgeFileKeepsEditedChunk` / `TestRemoveKnowledgeFileNestedSource` (unit layer) + `TestCmdSyncPruneClearsMetadataForMissingSource` (sync end-to-end) | partial |
+| 30 | chunk files are derived artifacts | `TestRemoveKnowledgeFileRemovesDerivedChunks` / `TestRemoveKnowledgeFileKeepsEditedChunk` / `TestRemoveKnowledgeFileNestedSource` (unit layer) + `TestCmdSyncPruneClearsMetadataForMissingSource` + `TestCmdSyncPruneKeepsAuthorOwnedFiles` (sync end-to-end: whole concept AND derived __cN chunks removed together with the missing source; author-owned files kept) | fully |
 | 31 | MCP chunked import is failure-atomic | `TestMCPSemanticChunkedAtomicWrite (pkg/mcp/tools_import_test.go)` / `TestMCPSemanticChunkedRollbackNoPartial (pkg/mcp/tools_import_test.go)` | fully |
 
 Note on scenario 28 (`aligned`): the spec asserts "the term is not retrievable in
@@ -175,3 +175,10 @@ suite now completes in ~99 s.
 3. `okf sync` treats chunk files as derived only when BOTH `derived: true` and
    `source_path` match the removed source; a user who edits a chunk's derived flag
    to `false` opts that chunk out of lifecycle deletion (intended, metadata-driven).
+4. Behavior change (this milestone): `okf sync -prune` now deletes generated disk
+   files together with their metadata — the whole concept and derived `__cN`
+   chunks (trusted `generator: okf.git` / `okf.document` products only;
+   author-owned files are never removed). Document products imported by earlier
+   releases lack the `generated`/`generator` marker and are therefore NOT deleted
+   by sync -prune until re-imported once under this release (marker is now emitted
+   by `WrapConcept`/`WrapChunkConcept`).

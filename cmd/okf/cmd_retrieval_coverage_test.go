@@ -61,7 +61,8 @@ func TestCmdAddChunkThresholdBoundary(t *testing.T) {
 }
 
 // =============================================================================
-// Gap 3: okf sync -prune end-to-end (metadata cleared for missing source)
+// Gap 3: okf sync -prune end-to-end (metadata cleared + generated disk files
+// removed: whole concept AND derived __cN chunks)
 // =============================================================================
 
 func TestCmdSyncPruneClearsMetadataForMissingSource(t *testing.T) {
@@ -81,6 +82,14 @@ func TestCmdSyncPruneClearsMetadataForMissingSource(t *testing.T) {
 	if idx.Len() == 0 {
 		t.Fatal("metadata empty after add")
 	}
+	// disk has whole + chunk files after add
+	wholePath := filepath.Join(kb, "big.txt.md")
+	if _, err := os.Stat(wholePath); err != nil {
+		t.Fatalf("whole concept %s missing after add: %v", wholePath, err)
+	}
+	if n := countChunkFiles(t, kb); n < 1 {
+		t.Fatalf("chunk files after add = %d, want >= 1", n)
+	}
 
 	// remove the source file from disk
 	if err := os.Remove(filepath.Join(src, "big.txt")); err != nil {
@@ -98,14 +107,39 @@ func TestCmdSyncPruneClearsMetadataForMissingSource(t *testing.T) {
 	if idx2.Len() != 0 {
 		t.Fatalf("metadata after sync -prune = %d entries, want 0", idx2.Len())
 	}
+	// generated disk files removed too (whole concept + derived chunks)
+	if _, err := os.Stat(wholePath); !os.IsNotExist(err) {
+		t.Fatalf("whole concept %s still on disk after sync -prune (want removed)", wholePath)
+	}
+	if n := countChunkFiles(t, kb); n != 0 {
+		t.Fatalf("chunk files after sync -prune = %d, want 0 (derived chunks removed with source)", n)
+	}
+}
 
-	// Known spec↔implementation gap (recorded, not asserted here):
-	// sync -prune clears metadata but does NOT delete disk files (whole concept
-	// or derived __cN chunks). Disk-file deletion happens via the SaveKnowledgeBase
-	// incremental-update path (removeKnowledgeFile + removeDerivedChunks), not via
-	// sync. Spec scenario "chunk files are derived artifacts — okf sync removes them"
-	// is therefore only verified at the removeDerivedChunks unit layer
-	// (TestRemoveKnowledgeFileRemovesDerivedChunks), not end-to-end through sync.
+// TestCmdSyncPruneKeepsAuthorOwnedFiles: sync -prune must NOT delete concepts
+// without trusted generated metadata (hand-written knowledge is author-owned).
+func TestCmdSyncPruneKeepsAuthorOwnedFiles(t *testing.T) {
+	kb := newKB(t)
+	// hand-written concept (no generated marker)
+	authorFile := filepath.Join(kb, "notes.md")
+	if err := os.WriteFile(authorFile, []byte("---\ntitle: My Notes\n---\nhand written\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// an indexed source that disappears
+	src := t.TempDir()
+	writeLongText(t, src, "big.txt", 3000, "tailword")
+	if code := cmdAdd([]string{"-dir", kb, "-silent", src}); code != 0 {
+		t.Fatalf("cmdAdd = %d, want 0", code)
+	}
+	if err := os.Remove(filepath.Join(src, "big.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if code := cmdSync([]string{"-dir", kb, "-prune", "-silent"}); code != 0 {
+		t.Fatalf("cmdSync -prune = %d, want 0", code)
+	}
+	if _, err := os.Stat(authorFile); err != nil {
+		t.Fatalf("author-owned notes.md was deleted by sync -prune (want kept): %v", err)
+	}
 }
 
 // =============================================================================
