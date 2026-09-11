@@ -52,13 +52,21 @@ Search the knowledge base.
 - `-lexical-weight W` - Weight of the BM25 lexical channel in hybrid search (default 0.5; `0` disables it for pure semantic search)
 - Code filters: `-code-language`, `-code-path`, `-code-symbol-kind`, `-code-qualified-name`, `-code-relation-kind`
 
+Semantic results annotate their source (`semantic` / `lexical` / `both`) and,
+when search deduplication collapses same-source chunk concepts, append `dup=N`
+with the number of hidden chunks.
+
 ### add
 Import files, directories, or archives into the knowledge base with smart detection.
 Documents (PDF, DOCX, XLSX, PPTX, HTML, CSV, TXT, DOC) are automatically
 converted to Markdown (`<original>.md`) before import via the built-in pure-Go
 converter (downmark). Conversion is deterministic and pinned to downmark
 v0.10.0; a downmark upgrade may trigger a one-time re-import of previously
-imported documents (documented re-import semantics — see Release Notes).
+imported documents (documented re-import semantics — see Release Notes). Documents
+over `convert.ChunkThreshold` (2000 words) are imported as a whole concept plus
+chunk concepts (`<original>__cN.md`) with explicit titles and derived metadata
+(`chunk_index`, `chunk_count`, `heading_path`, `source_path`, `derived: true`),
+so deep-tail content stays semantically retrievable (see Release Notes v0.6.0).
 - `-strategy STRATEGY` - Merge strategy: skip|overwrite|merge|patch
 - `-patch-fields LIST` - Comma-separated frontmatter fields for patch strategy
 - `-detect-only` - Only detect changes without importing

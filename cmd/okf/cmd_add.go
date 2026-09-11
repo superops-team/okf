@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/superops-team/okf/pkg/convert"
@@ -401,6 +402,25 @@ func convertAndStageDocuments(srcPath string) (stagingDir string, convertedCount
 			return "", 0, 0, cleanup, werr
 		}
 		convertedCount++
+
+		// Chunk large documents (opt-in by size; small docs untouched):
+		// write <original>__cN.md chunk concepts sharing source_path.
+		// Chunk titles are explicit at import time — never filename-derived —
+		// so "doc.pdf__c1.md" can never leak into the title.
+		if convert.Words(res.Markdown) > convert.ChunkThreshold {
+			chunks := convert.Split(res.Markdown, nil)
+			for i, ck := range chunks {
+				chunkTitle := title + " — part " + strconv.Itoa(i+1)
+				if ck.HeadingPath != "" {
+					chunkTitle = ck.HeadingPath // heading-derived title
+				}
+				chunkFile := strings.TrimSuffix(out, ".md") + "__c" + strconv.Itoa(i+1) + ".md"
+				cbody := convert.WrapChunkConcept(chunkTitle, filepath.Base(doc), convert.DocumentType(doc), rel, i, len(chunks), ck.HeadingPath, ck.Text)
+				if werr := os.WriteFile(chunkFile, []byte(cbody), 0o644); werr != nil {
+					return "", 0, 0, cleanup, werr
+				}
+			}
+		}
 	}
 	return stagingDir, convertedCount, failedCount, cleanup, nil
 }

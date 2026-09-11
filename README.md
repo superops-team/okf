@@ -42,7 +42,7 @@
 - **🛠 Git Hook** — One-click installation, automatic knowledge base updates on every commit
 - **📋 Lint Checking** — Built-in specification compliance checker (16 rules)
 - **🔎 Advanced Query** — Filter by type, tags, or full-text search
-- **🧠 Hybrid Semantic Search** — Local natural-language search: chunk-level MiniLM embeddings + BM25, fused with weighted RRF (fully offline, no CGO)
+- **🧠 Hybrid Semantic Search** — Local natural-language search: chunk-level MiniLM embeddings + BM25, fused with weighted RRF; large imported documents also gain source-tracked derived chunks and per-source result deduplication (fully offline, no CGO)
 - **🤖 Agent-facing MCP** — Standard MCP tools for repository status/init/refresh/query/context plus durable note/event/feedback capture
 - **🏗 Modular Architecture** — Clean, layered design following Go best practices
 
@@ -190,9 +190,10 @@ Measured on this repository's own knowledge base (28 queries, 26 positive, K=5):
 - **Reproducibility**: indexes below 2048 chunks are searched by exact scan rather than HNSW's approximate traversal, because the approximate path does not return every node even when asked for all of them, and which nodes it misses shifts between rebuilds. Combined with a fixed RNG seed and deterministic tie-breaks, this makes results identical across rebuilds — verified by rebuilding this knowledge base repeatedly and confirming the evaluation metrics do not move.
 - **Index cost (measured, 7 concepts → 97 chunks)**: chunking increases index size ~20x (14.5 KB → 287 KB) and build time ~6x (128 ms → 800 ms). Both scale with content volume, not concept count.
 - **Index format v2 is not backward compatible**: chunk-level keys differ from the old concept-level keys. `okf vector status` reports the format version, and loading an older index fails with an explicit prompt to run `okf vector rebuild` (search falls back to lexical meanwhile) rather than silently returning wrong results.
-- **Embedded resources**: the ONNX Runtime CPU library (per-OS, ~10–15 MB) plus a quantized MiniLM model (~23 MB) are embedded into the binary via `go:embed` and extracted to the user cache directory on first use (checksum-verified). Building for each platform only embeds that platform's resources (`scripts/fetch-ort.sh` / `scripts/fetch-model.sh` fetch them at build time; the runtime never goes online).
-- **Dynamic loading (transparency)**: the ONNX Runtime shared library is loaded at runtime via `dlopen` from the extracted cache — the binary is self-contained but not statically linked. Cache location: `os.UserCacheDir()/okf/` (override with `OKF_ORT_DIR`).
-- **Limits**: MiniLM embeddings are English-centric. Chunking and BM25's CJK bigrams improve Chinese retrieval, but a purely Chinese query against English content still relies on the semantic channel alone. `Embedder` is an interface, leaving room for stronger models (e.g. BGE-M3) or remote APIs later.
+- **Embedded resources**: the ONNX Runtime CPU library (per-OS, ~10–15 MB), the pure-tokenizers native library (~5–6 MB), a quantized MiniLM model (~23 MB), and `tokenizer.json` are embedded into the binary via `go:embed` and extracted to the user cache directory on first use (checksum-verified). Building for each platform only embeds that platform's resources (`scripts/fetch-ort.sh`, `scripts/fetch-tokenizers.sh`, and `scripts/fetch-model.sh` fetch them at build time; the runtime never goes online).
+- **Dynamic loading (transparency)**: the ONNX Runtime and pure-tokenizers shared libraries are loaded at runtime via `dlopen` from the extracted cache — the binary is self-contained but not statically linked. Cache location: `os.UserCacheDir()/okf/` (override with `OKF_ORT_DIR`).
+- **Large-document lifecycle**: document imports over 2000 words additionally persist source-tracked `__cN` concepts with heading context and `derived: true`. Semantic results are deduplicated by source document and report the hidden count as `dup=N`; this lets `okf sync -prune` remove generated whole/chunk files safely without touching author-owned files.
+- **Limits**: MiniLM embeddings are English-centric. Persisted document chunks and BM25's CJK bigrams improve Chinese retrieval, but a purely Chinese query against English content still relies on the semantic channel alone. `Embedder` is an interface, leaving room for stronger models (e.g. BGE-M3) or remote APIs later.
 - **Licenses**: pure-onnx (MIT), coder/hnsw (CC0-1.0), ONNX Runtime (MIT), MiniLM-L6-v2 model (Apache-2.0).
 
 ## Documentation

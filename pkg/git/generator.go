@@ -755,30 +755,9 @@ func parseGeneratedSymbol(line, pkg, filePath string) (Symbol, bool) {
 }
 
 func removeKnowledgeFile(knowledgeDir, resource string) {
-	if resource == "" {
-		return
-	}
-	path := filepath.Join(knowledgeDir, resource)
-	if !strings.HasSuffix(path, ".md") {
-		path += ".md"
-	}
-	concept, err := parser.ParseConcept(path)
-	if err != nil {
-		return
-	}
-	// Check both legacy boolean "generated" in CustomFields and v0.2 Generated struct.
-	trusted := hasTrustedGeneratedMetadata(concept.CustomFields, resource)
-	if !trusted && concept.Generated != nil {
-		if gen, ok := concept.CustomFields["generator"].(string); ok && gen == "okf.git" {
-			if sp, ok := concept.CustomFields["source_path"].(string); ok && (sp == resource || codeFileResource(sp) == resource) {
-				trusted = true
-			}
-		}
-	}
-	if !trusted {
-		return
-	}
-	_ = os.Remove(path)
+	// Single source of truth lives in pkg/okf (RemoveGeneratedKnowledgeFiles),
+	// shared with okf sync -prune; see pkg/okf/prune_files.go.
+	okf.RemoveGeneratedKnowledgeFiles(knowledgeDir, resource)
 }
 
 func attachGeneratedMetadata(concept *okf.Concept, sourcePath, sourceKind, sourceCommit string) {
@@ -793,34 +772,6 @@ func attachGeneratedMetadata(concept *okf.Concept, sourcePath, sourceKind, sourc
 	if sourceCommit != "" {
 		concept.CustomFields["source_commit"] = sourceCommit
 	}
-}
-
-func hasTrustedGeneratedMetadata(fields map[string]interface{}, sourcePath string) bool {
-	if fields == nil {
-		return false
-	}
-	// Accept both legacy boolean form (generated: true) and v0.2 mapping form (generated: {by: ...}).
-	generatedOk := false
-	switch v := fields["generated"].(type) {
-	case bool:
-		generatedOk = v
-	case map[string]interface{}:
-		generatedOk = v != nil
-	default:
-		generatedOk = fields["generated"] != nil
-	}
-	if !generatedOk {
-		return false
-	}
-	generator, ok := fields["generator"].(string)
-	if !ok || generator != "okf.git" {
-		return false
-	}
-	metadataSourcePath, ok := fields["source_path"].(string)
-	if !ok || metadataSourcePath == "" {
-		return false
-	}
-	return metadataSourcePath == sourcePath || codeFileResource(metadataSourcePath) == sourcePath
 }
 
 // UpdateFromLastCommit updates based on the last commit.

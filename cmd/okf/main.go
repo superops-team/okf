@@ -16,7 +16,7 @@ import (
 	"github.com/superops-team/okf/pkg/query"
 )
 
-const Version = "0.4.1"
+const Version = "0.6.0"
 
 const usage = `okf - Open Knowledge Format CLI
 
@@ -412,7 +412,11 @@ func cmdSearch(args []string) {
 		c := result.Concept
 		prefix := fmt.Sprintf("%d. [%s] %s", i+1, c.Type, c.Title)
 		if semanticUsed {
-			prefix = fmt.Sprintf("%d. [%s] %s (source=%s, score=%.4f)", i+1, c.Type, c.Title, result.Source, result.SemanticScore)
+			prefix = fmt.Sprintf("%d. [%s] %s (source=%s, score=%.4f", i+1, c.Type, c.Title, result.Source, result.SemanticScore)
+			if result.DuplicateCount > 0 {
+				prefix += fmt.Sprintf(", dup=%d", result.DuplicateCount)
+			}
+			prefix += ")"
 		}
 		fmt.Println(prefix)
 		fmt.Printf("   %s\n", c.Description)

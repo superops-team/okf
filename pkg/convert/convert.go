@@ -85,6 +85,16 @@ func IsSupportedDocument(path string) bool {
 	return ok
 }
 
+// ChunkThreshold 是文档分块阈值：转换后 markdown 的 CJK-aware 词数超过它时，
+// 导入方（cmd_add / MCP）应生成整文档概念 + 每块一个 <original>__cN.md
+// 派生概念。小于等于该值的文档保持单概念（与既有行为完全一致）。
+const ChunkThreshold = 2000
+
+// Words returns the CJK-aware word count of text: whitespace-separated tokens
+// count as words; each CJK character counts as one word. Used by callers to
+// decide whether a converted document exceeds the chunking threshold.
+func Words(text string) int { return countWords(text) }
+
 // DocumentType returns the format type (pdf/docx/xlsx/pptx/html/csv/txt/doc),
 // or "" when unsupported.
 func DocumentType(path string) string {
@@ -154,10 +164,40 @@ func summarizeWarnings(ws []downmark.Warning) []string {
 
 // WrapConcept builds a full OKF concept document (frontmatter + body) from a
 // converted document. Shared by cmd_add and the MCP import tool so the
-// frontmatter format stays single-sourced.
+// frontmatter format stays single-sourced. Emits the okf.document generation
+// marker so generated-file lifecycle (okf sync -prune, incremental updates)
+// can identify and remove the product without touching author-owned files.
 func WrapConcept(title, filename, format, ctype, body string) string {
 	desc := fmt.Sprintf("Converted from %s (via %s)", filename, format)
-	return fmt.Sprintf("---\ntype: %s\ntitle: %q\ndescription: %q\n---\n%s\n", ctype, title, desc, body)
+	return fmt.Sprintf("---\ntype: %s\ntitle: %q\ndescription: %q\ngenerated: true\ngenerator: %q\nsource_path: %q\n---\n%s\n",
+		ctype, title, desc, generatorName, filename, body)
+}
+
+// generatorName identifies products of the document-conversion import path.
+// hasTrustedGeneratedMetadata (pkg/okf/prune_files.go) accepts it alongside
+// the git generator's "okf.git".
+const generatorName = "okf.document"
+
+// WrapChunkConcept builds a chunk-concept document (frontmatter + body) for a
+// chunk of a converted document. The chunk title is written explicitly at
+// import time (never filename-derived); custom fields carry chunk_index,
+// chunk_count, source_path, derived:true, the okf.document generation marker
+// and heading_path (when present) so dedupe and sync lifecycle can identify
+// derived artifacts.
+func WrapChunkConcept(title, filename, format, sourcePath string, index, count int, headingPath, body string) string {
+	desc := fmt.Sprintf("Converted from %s (via %s)", filename, format)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "---\ntype: source\ntitle: %q\ndescription: %q\n", title, desc)
+	fmt.Fprintf(&sb, "generated: true\ngenerator: %q\n", generatorName)
+	fmt.Fprintf(&sb, "chunk_index: %d\nchunk_count: %d\n", index, count)
+	fmt.Fprintf(&sb, "source_path: %q\nderived: \"true\"\n", sourcePath)
+	if headingPath != "" {
+		fmt.Fprintf(&sb, "heading_path: %q\n", headingPath)
+	}
+	sb.WriteString("---\n")
+	sb.WriteString(body)
+	sb.WriteString("\n")
+	return sb.String()
 }
 
 // isNoTextError reports whether err is downmark's scanned/blank-PDF error,

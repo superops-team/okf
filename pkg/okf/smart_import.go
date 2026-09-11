@@ -309,6 +309,9 @@ func (s *SmartImporter) Prune() (int, error) {
 		}
 	}
 	for _, target := range toDelete {
+		// 删除知识库磁盘文件（含派生 chunk；仅 trusted-generated 文件会被删，
+		// 元数据驱动，见 prune_files.go）。先删文件再清理索引条目。
+		RemoveGeneratedKnowledgeFiles(s.knowledgeDir, target)
 		// 已在外部持锁，直接操作 map（DeleteByTarget 内部会再次加锁）
 		if meta, exists := s.idx.Files[target]; exists {
 			delete(s.idx.Files, target)

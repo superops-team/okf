@@ -25,7 +25,7 @@ func TestEnsureExtractsToCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, path := range map[string]string{
-		"ORT lib": p.ORTLib, "model": p.Model, "tokenizer": p.Tokenizer,
+		"ORT lib": p.ORTLib, "tokenizer lib": p.TokenizerLib, "model": p.Model, "tokenizer": p.Tokenizer,
 	} {
 		st, err := os.Stat(path)
 		if err != nil {
@@ -38,6 +38,9 @@ func TestEnsureExtractsToCache(t *testing.T) {
 	// 校验路径位于 OKF_ORT_DIR/okf/{ort,models}
 	if filepath.Dir(p.ORTLib) != filepath.Join(dir, "okf", "ort") {
 		t.Fatalf("ORT 路径异常: %s", p.ORTLib)
+	}
+	if filepath.Dir(p.TokenizerLib) != filepath.Join(dir, "okf", "tokenizers") {
+		t.Fatalf("tokenizer 动态库路径异常: %s", p.TokenizerLib)
 	}
 	if filepath.Dir(p.Model) != filepath.Join(dir, "okf", "models") {
 		t.Fatalf("模型路径异常: %s", p.Model)
@@ -65,6 +68,31 @@ func TestEnsureReusesCacheWithoutRewrite(t *testing.T) {
 	}
 	if !before.ModTime().Equal(after.ModTime()) {
 		t.Fatal("缓存未复用：文件被重写")
+	}
+}
+
+func TestEnsureRewritesCorruptedTokenizerLibrary(t *testing.T) {
+	t.Setenv("OKF_ORT_DIR", t.TempDir())
+	p1, err := Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p1.TokenizerLib, []byte("corrupted"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p2, err := Ensure()
+	if err != nil {
+		t.Fatalf("损坏 tokenizer 动态库应被重写而非报错: %v", err)
+	}
+	data, err := os.ReadFile(p2.TokenizerLib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) == "corrupted" {
+		t.Fatal("损坏 tokenizer 动态库未被重写")
+	}
+	if len(data) != len(tokenizerLibData) {
+		t.Fatalf("重写后大小 %d != 内嵌 %d", len(data), len(tokenizerLibData))
 	}
 }
 

@@ -1,5 +1,43 @@
 # OKF Release Notes
 
+## v0.6.0 (unreleased) — Retrieval Quality Closed Loop (M1)
+
+This release builds on v0.5.0's index-time chunking, BM25 and weighted RRF with
+source-tracked import chunks, result deduplication and lifecycle cleanup.
+
+### New: source-tracked document chunks
+
+- Pure-Go import chunker (`pkg/convert.Split`) preserves heading context, fenced
+  code and table rows, with CJK-aware word counting (`MaxWords` default 256).
+- `okf add` imports documents over `convert.ChunkThreshold` (2000 words) as a
+  whole concept plus `__cN` derived concepts carrying `chunk_index`,
+  `chunk_count`, `heading_path`, `source_path` and `derived: true`.
+- Small documents retain the prior single-concept behavior.
+
+### New: search deduplication and evaluation linkage
+
+- Semantic CLI/MCP results return at most one concept per source document;
+  `dup=N` reports hidden same-source hits. `SearchOptions.DisableDedupe` exposes
+  the raw list for library callers.
+- Evaluation normalizes derived chunk identifiers to their source document and
+  counts that source once, while retaining v0.5.0's injectable strategy API.
+- Deep-tail document content is covered through both persisted import chunks
+  and v0.5.0's index-time heading-aware chunks.
+
+### New: generated-file lifecycle
+
+- `okf sync -prune` removes trusted generated whole concepts and matching
+  derived chunks when their source disappears.
+- Metadata and source-path checks protect author-owned Markdown from deletion.
+- Documents imported before generated markers were introduced must be imported
+  once with v0.6.0 before prune can manage their generated files.
+
+### Upgrade notes
+
+- Existing v0.5.0 vector indexes remain format v2; no additional vector rebuild
+  is required solely for v0.6.0.
+- `okf version` reports **v0.6.0**.
+
 ## v0.5.0 (unreleased) — Retrieval Quality: Chunking, BM25 and Weighted RRF
 
 > Minor version bump: this release changes retrieval behaviour and the on-disk
@@ -150,9 +188,10 @@ The CLI and MCP handshake report version 0.4.1.
 
 - `okf search -q "..." -semantic` performs natural-language search over concepts
   using a locally embedded MiniLM embedding model (384-dim) and an HNSW index.
-- Fully offline and **no CGO**: the ONNX Runtime CPU library and a quantized
-  MiniLM model are embedded into the binary (per-platform, via `go:embed`) and
-  extracted to the user cache on first use (checksum-verified).
+- Fully offline and **no CGO**: the ONNX Runtime CPU library, the
+  pure-tokenizers native library, a quantized MiniLM model, and `tokenizer.json`
+  are embedded into the binary (per-platform, via `go:embed`) and extracted to
+  the user cache on first use (checksum-verified).
 - Results blend semantic and lexical retrieval via RRF and are annotated with
   their source (`semantic` / `lexical` / `both`).
 - New CLI group: `okf vector index | status | rebuild`.
@@ -160,13 +199,14 @@ The CLI and MCP handshake report version 0.4.1.
 
 ### Behavior notes
 
-- The ONNX Runtime shared library is loaded at runtime from the extracted cache
-  (`os.UserCacheDir()/okf/`, override with `OKF_ORT_DIR`); the binary is
-  self-contained but not statically linked.
+- The ONNX Runtime and pure-tokenizers shared libraries are loaded at runtime
+  from the extracted cache (`os.UserCacheDir()/okf/`, override with
+  `OKF_ORT_DIR`); the binary is self-contained but not statically linked.
 - MiniLM truncates each concept to 256 tokens; embeddings are English-centric,
   so Chinese semantic quality is limited (lexical search still applies).
 - Model/library sources and licenses are declared in the README; resources are
-  fetched at build time by `scripts/fetch-ort.sh` / `scripts/fetch-model.sh`.
+  fetched at build time by `scripts/fetch-ort.sh`, `scripts/fetch-tokenizers.sh`,
+  and `scripts/fetch-model.sh`.
 - New pinned dependencies: pure-onnx v0.0.1 (MIT), coder/hnsw v0.6.1 (CC0-1.0);
   `renameio` is replaced by a local cross-platform fork (upstream v1.0.1 does not
   compile on Windows).

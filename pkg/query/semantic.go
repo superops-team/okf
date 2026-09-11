@@ -107,11 +107,32 @@ type SearchOptions struct {
 	LexicalWeight float64
 	// Lexical 是可选的 BM25 词法后端。为 nil 时回退到内置子串匹配通道。
 	Lexical LexicalBackend
+	// DisableDedupe 为 true 时关闭按源去重（默认 false = 去重开启）。
+	DisableDedupe bool
 
 	// lexicalWeightSet / vectorWeightSet 记录调用方是否显式设置过对应权重，
-	// 用于区分"未设置（用默认值）"与"显式设为 0（关闭该通道）"。
+	// 用于区分“未设置（用默认值）”与“显式设为 0（关闭该通道）”。
 	lexicalWeightSet bool
 	vectorWeightSet  bool
+}
+
+// sourceKey 返回概念的去重键：优先 source_path（chunk 派生概念），其次
+// FilePath 剥离 __cN 后缀，普通概念回退到自身指纹。
+func sourceKey(c *Concept) string {
+	if p, ok := c.CustomFields["source_path"]; ok {
+		if s, ok := p.(string); ok && s != "" {
+			return "src:" + s
+		}
+	}
+	fp := filepath.ToSlash(filepath.Clean(c.FilePath))
+	if i := strings.LastIndex(fp, "__c"); i >= 0 {
+		rest := fp[i+3:]
+		if len(rest) >= 3 && rest[0] >= '0' && rest[0] <= '9' && strings.HasSuffix(rest, ".md") {
+			return "src:" + fp[:i]
+		}
+	}
+	return "concept:" + Fingerprint(c)
+
 }
 
 // WithLexicalWeight 返回显式设置词法权重后的选项副本（0 表示关闭词法通道）。
@@ -264,9 +285,49 @@ func SemanticSearch(bundle *KnowledgeBundle, text string, backend SemanticBacken
 		}
 	}
 
-	// 排序（降序）。同分时必须有确定的 tie-break，否则顺序取决于 map 遍历顺序，
-	// 同一查询多次执行返回不同排列（不可复现）。
-	// 依据：分数 > 语义 rank > 有无语义命中 > 来源(both>semantic>lexical) > 指纹兜底。
+	// 按源去重（默认开）：每个 source 仅保留最高分概念，其余以
+	// DuplicateCount 计数。普通概念（sourceKey=自身指纹）不受影响。
+	dupCount := make(map[*Concept]int)
+	if !opts.DisableDedupe {
+		best := make(map[string]*Concept)
+		bestScore := make(map[string]float32)
+		bestSemRank := make(map[string]int)
+		for c := range score {
+			key := sourceKey(c)
+			if _, seen := best[key]; !seen {
+				best[key] = c
+				bestScore[key] = score[c]
+				bestSemRank[key] = semRank[c]
+				continue
+			}
+			if score[c] > bestScore[key] ||
+				(score[c] == bestScore[key] && semRank[c] > 0 && (bestSemRank[key] == 0 || semRank[c] < bestSemRank[key])) {
+				best[key] = c
+				bestScore[key] = score[c]
+				bestSemRank[key] = semRank[c]
+			}
+		}
+		perSource := make(map[string]int, len(best))
+		for c := range score {
+			perSource[sourceKey(c)]++
+		}
+		kept := make(map[*Concept]struct{}, len(best))
+		for key, c := range best {
+			dupCount[c] = perSource[key] - 1
+			kept[c] = struct{}{}
+		}
+		for c := range score {
+			if _, ok := kept[c]; !ok {
+				delete(score, c)
+				delete(source, c)
+				delete(semRank, c)
+			}
+		}
+	}
+
+	// 排序（降序）。同分时使用语义 rank、来源和指纹做确定性 tie-break，
+	// 避免结果受 map 遍历顺序影响。
+
 	keys := make([]*Concept, 0, len(score))
 	for c := range score {
 		keys = append(keys, c)
@@ -296,9 +357,10 @@ func SemanticSearch(bundle *KnowledgeBundle, text string, backend SemanticBacken
 			break
 		}
 		out = append(out, SearchResult{
-			Concept:       c,
-			Source:        source[c],
-			SemanticScore: score[c],
+			Concept:        c,
+			Source:         source[c],
+			SemanticScore:  score[c],
+			DuplicateCount: dupCount[c],
 		})
 	}
 	return out, nil

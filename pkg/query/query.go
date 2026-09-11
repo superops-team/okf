@@ -86,6 +86,9 @@ type SearchResult struct {
 	Source string
 	// SemanticScore 为 RRF 融合分（k=60），非余弦相似度。
 	SemanticScore float32
+	// DuplicateCount 是按源去重时被隐藏的同源命中数（0 表示未去重或该源
+	// 仅此一条）。仅语义检索（SemanticSearch）填充。
+	DuplicateCount int
 }
 
 // SymbolMatch describes a symbol hit parsed from generated OKF concept content.

@@ -132,3 +132,93 @@ func TestMCPImportError(t *testing.T) {
 		t.Errorf("expected IsError for unsupported format")
 	}
 }
+
+// --- P2-5: chunked MCP import is failure-atomic ---
+
+// writeBigText writes a synthetic large text file.
+func writeBigText(t *testing.T, dir, name string, words int) string {
+	t.Helper()
+	var sb strings.Builder
+	for i := 0; i < words; i++ {
+		sb.WriteString("common filler word ")
+	}
+	sb.WriteString("taillabel unique")
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, []byte(sb.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestMCPImportLargeDocumentChunkedAtomic(t *testing.T) {
+	kb := filepath.Join(t.TempDir(), "kb")
+	if err := os.MkdirAll(kb, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	big := writeBigText(t, src, "big.txt", 3000)
+	r := NewToolRegistry()
+	r.SetBundle(&okf.KnowledgeBundle{}, kb)
+	res, err := r.Call("okf_import_document", map[string]interface{}{"path": big})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Content[0].Text)
+	}
+	// whole + 2+ chunks, no leftover temp files
+	if _, rerr := os.Stat(filepath.Join(kb, "big.txt.md")); rerr != nil {
+		t.Fatalf("whole concept missing: %v", rerr)
+	}
+	chunks := 0
+	entries, _ := os.ReadDir(kb)
+	for _, e := range entries {
+		if strings.Contains(e.Name(), "__c") && strings.HasSuffix(e.Name(), ".md") {
+			chunks++
+		}
+		if strings.Contains(e.Name(), ".okf-tmp") {
+			t.Fatalf("leftover temp file: %s", e.Name())
+		}
+	}
+	if chunks < 2 {
+		t.Fatalf("chunk files = %d, want >= 2", chunks)
+	}
+}
+
+func TestMCPImportAtomicRollbackOnChunkWriteFailure(t *testing.T) {
+	kb := filepath.Join(t.TempDir(), "kb")
+	if err := os.MkdirAll(kb, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	big := writeBigText(t, src, "big.txt", 3000)
+	// Make the second chunk's target path a directory so rename fails
+	// after the whole concept + first chunk have already been renamed.
+	blocker := filepath.Join(kb, "big.txt__c2.md")
+	if err := os.MkdirAll(blocker, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := NewToolRegistry()
+	r.SetBundle(&okf.KnowledgeBundle{}, kb)
+	res, err := r.Call("okf_import_document", map[string]interface{}{"path": big})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error result, got success")
+	}
+	// failure-atomic: no partial chunk set, no temp files, and the blocker
+	// directory is untouched
+	entries, _ := os.ReadDir(kb)
+	for _, e := range entries {
+		if e.Name() == "big.txt__c2.md" {
+			continue // the pre-existing blocker dir
+		}
+		if strings.Contains(e.Name(), "big.txt") {
+			t.Errorf("partial artifact left behind after failed import: %s", e.Name())
+		}
+		if strings.Contains(e.Name(), ".okf-tmp") {
+			t.Errorf("temp file left behind: %s", e.Name())
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -862,7 +863,12 @@ func (r *ToolRegistry) handleSemanticSearch(args map[string]interface{}) (*ToolC
 	}
 	for i, res := range results {
 		c := res.Concept
-		sb.WriteString(fmt.Sprintf("%d. [%s] %s (source=%s, score=%.4f)\n", i+1, c.Type, c.FilePath, res.Source, res.SemanticScore))
+		line := fmt.Sprintf("%d. [%s] %s (source=%s, score=%.4f", i+1, c.Type, c.FilePath, res.Source, res.SemanticScore)
+		if res.DuplicateCount > 0 {
+			line += fmt.Sprintf(", dup=%d", res.DuplicateCount)
+		}
+		line += ")\n"
+		sb.WriteString(line)
 		if c.Title != "" {
 			sb.WriteString(fmt.Sprintf("   Title: %s\n", c.Title))
 		}
@@ -1034,7 +1040,23 @@ func (r *ToolRegistry) handleImportDocument(args map[string]interface{}) (*ToolC
 	}
 	body := convert.WrapConcept(title, filepath.Base(path), convert.DocumentType(path), ctype, res.Markdown)
 	out := filepath.Join(bundlePath, filepath.Base(path)+".md")
-	if err := os.WriteFile(out, []byte(body), 0o644); err != nil {
+	files := []targetFile{{path: out, data: []byte(body)}}
+
+	// Chunk large documents (same threshold and naming as cmd_add): whole
+	// concept plus <original>__cN.md chunk concepts, written failure-atomically.
+	if convert.Words(res.Markdown) > convert.ChunkThreshold {
+		chunks := convert.Split(res.Markdown, nil)
+		for i, ck := range chunks {
+			chunkTitle := title + " — part " + strconv.Itoa(i+1)
+			if ck.HeadingPath != "" {
+				chunkTitle = ck.HeadingPath // heading-derived title
+			}
+			chunkFile := strings.TrimSuffix(out, ".md") + "__c" + strconv.Itoa(i+1) + ".md"
+			cbody := convert.WrapChunkConcept(chunkTitle, filepath.Base(path), convert.DocumentType(path), filepath.Base(path), i, len(chunks), ck.HeadingPath, ck.Text)
+			files = append(files, targetFile{path: chunkFile, data: []byte(cbody)})
+		}
+	}
+	if err := atomicWriteFiles(files); err != nil {
 		return errorResult(fmt.Sprintf("Failed to write concept: %v", err)), nil
 	}
 	// Refresh the bundle so subsequent tools see the new concept.
@@ -1098,4 +1120,57 @@ func toLintConcepts(concepts []*okf.Concept) []*lint.Concept {
 		}
 	}
 	return result
+}
+
+// targetFile 是一次原子提交中的单个目标文件。
+type targetFile struct {
+	path string // 最终路径
+	data []byte
+}
+
+// atomicWriteFiles 将 files 原子落盘：先全部写入同目录临时文件并 fsync，
+// 再逐个 rename 到最终路径；任一步失败时回滚已 rename 的文件并清理全部
+// 临时文件，保证不留下部分文件集（failure-atomic，见 design §8）。
+func atomicWriteFiles(files []targetFile) error {
+	type staged struct {
+		target string
+		tmp    string
+	}
+	var stagedFiles []staged
+	cleanup := func() {
+		for _, s := range stagedFiles {
+			_ = os.Remove(s.tmp)
+		}
+	}
+	// 1) 全部临时文件：写入 + fsync
+	for i, f := range files {
+		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
+			cleanup()
+			return err
+		}
+		tmp := f.path + fmt.Sprintf(".okf-tmp-%d", i)
+		if err := os.WriteFile(tmp, f.data, 0o644); err != nil {
+			cleanup()
+			return err
+		}
+		if fh, err := os.Open(tmp); err == nil {
+			_ = fh.Sync()
+			_ = fh.Close()
+		}
+		stagedFiles = append(stagedFiles, staged{target: f.path, tmp: tmp})
+	}
+	// 2) 逐个 rename；失败回滚已 rename 的目标
+	renamed := 0
+	for i, s := range stagedFiles {
+		if err := os.Rename(s.tmp, s.target); err != nil {
+			for j := 0; j < renamed; j++ {
+				_ = os.Remove(stagedFiles[j].target)
+			}
+			cleanup()
+			return fmt.Errorf("rename %s: %w (rolled back %d file(s))", s.target, err, renamed)
+		}
+		renamed++
+		_ = i
+	}
+	return nil
 }

@@ -3,7 +3,7 @@
 # the first broken one (old-coder / GAUNTLET). All numbers in EVIDENCE come
 # from this command; rerun the whole report with `tools/gauntlet.sh`.
 #
-# Layers: build → vet → staticcheck → tests(-race) → coverage(threshold)
+# Layers: build → vet → staticcheck → tests → tests(-race) → coverage(threshold)
 #         → suite health(shuffle) → mutation → real execution(CLI smoke)
 #
 # Usage: tools/gauntlet.sh   (run from repo root)
@@ -40,7 +40,13 @@ fi
 step "L2 lint: staticcheck ./..."
 "$STATICCHECK" ./...
 
-step "L3 tests + concurrency: go test ./... -race"
+step "L3 full test suite: go test ./..."
+# Real MiniLM/purego integration tests run here. They are intentionally skipped
+# only in the following race process because purego's dynamically loaded
+# tokenizer crashes under the Go race runtime on GitHub's Linux runner.
+"$GO" test ./...
+
+step "L3 concurrency: go test ./... -race"
 "$GO" test ./... -race
 
 step "L4 coverage: go test -coverprofile (threshold ${COVER_THRESHOLD}%)"
@@ -92,4 +98,4 @@ if ! grep -q "source=" "$WORK/out_semantic.txt"; then
 fi
 
 echo
-echo "GAUNTLET PASS: build/vet/staticcheck/tests(-race)/coverage(${COV}%)/shuffle/mutation/real-exec"
+echo "GAUNTLET PASS: build/vet/staticcheck/tests/tests(-race)/coverage(${COV}%)/shuffle/mutation/real-exec"

@@ -44,6 +44,8 @@ type Aggregate struct {
 
 // EvalReport is the full benchmark output: per-case results + aggregates.
 type EvalReport struct {
+	// Mode 标识本次评测的检索路径：lexical / semantic-rrf / semantic-rerank。
+	Mode                 string
 	K                    int
 	Cases                []CaseResult
 	Aggregate            Aggregate // mean over all cases
@@ -78,35 +80,35 @@ func LoadGoldenCases(path string) ([]EvalCase, error) {
 	return set.Cases, nil
 }
 
-// docIDOf 返回概念在评测中的文档标识。
-//
-// 使用 FilePath 而非 Resource：Resource 是 OKF frontmatter 的可选字段，
-// 转换类概念（pkg/convert 产物）不写该字段，实测恒为空串，
-// 会使所有指标恒为 0（假绿基线）。FilePath 始终存在且与 golden set
-// 的 expected_docs（文件名）口径一致。
+// docIDOf returns the source-level document identifier used for evaluation.
+// FilePath is authoritative for loaded bundles; Resource is retained as a
+// compatibility fallback for in-memory callers. Derived __cN chunk names are
+// normalized to their source document so one source is scored at most once.
 func docIDOf(c *query.Concept) string {
 	if c == nil {
 		return ""
 	}
-	return c.FilePath
+	id := c.FilePath
+	if id == "" {
+		id = c.Resource
+	}
+	return normalizeChunkResource(id)
 }
 
-// SearchStrategy 是被评测的检索策略：给定 bundle 与查询，返回排序后的概念。
-// 抽成函数类型是为了让同一 golden set 能对比多种策略
-// （纯语义 / 纯词法 / 不同权重的混合），否则评测只能测死一条链路。
+// SearchStrategy is the retrieval strategy under evaluation.
 type SearchStrategy func(bundle *query.KnowledgeBundle, q string) []*query.Concept
 
-// DefaultStrategy 是既有的词法子串检索（query.Search），作为对比基线。
+// DefaultStrategy is the existing lexical substring search baseline.
 func DefaultStrategy(bundle *query.KnowledgeBundle, q string) []*query.Concept {
 	return query.Search(bundle, q)
 }
 
-// RunBenchmark runs every case against the bundle's default search and scores results.
+// RunBenchmark runs every case against the default lexical search and scores results.
 func RunBenchmark(bundle *query.KnowledgeBundle, cases []EvalCase, k int) *EvalReport {
 	return RunBenchmarkWith(bundle, cases, k, DefaultStrategy)
 }
 
-// RunBenchmarkWith 用指定策略执行评测；strategy 为 nil 时回退 DefaultStrategy。
+// RunBenchmarkWith runs every case through strategy; nil uses DefaultStrategy.
 func RunBenchmarkWith(bundle *query.KnowledgeBundle, cases []EvalCase, k int, strategy SearchStrategy) *EvalReport {
 	if strategy == nil {
 		strategy = DefaultStrategy
@@ -116,8 +118,17 @@ func RunBenchmarkWith(bundle *query.KnowledgeBundle, cases []EvalCase, k int, st
 	for _, c := range cases {
 		results := strategy(bundle, c.Query)
 		docs := make([]string, 0, len(results))
+		seen := make(map[string]struct{}, len(results))
 		for _, concept := range results {
-			docs = append(docs, docIDOf(concept))
+			id := docIDOf(concept)
+			if id == "" {
+				continue
+			}
+			if _, duplicate := seen[id]; duplicate {
+				continue
+			}
+			seen[id] = struct{}{}
+			docs = append(docs, id)
 		}
 		cr := CaseResult{
 			Query:     c.Query,
@@ -143,31 +154,59 @@ func RunBenchmarkWith(bundle *query.KnowledgeBundle, cases []EvalCase, k int, st
 	return report
 }
 
-// CompareStrategies 对同一 golden set 跑多种策略，返回 策略名 → 报告。
+// normalizeChunkResource maps a chunk identifier back to its source document.
+func normalizeChunkResource(res string) string {
+	if i := strings.LastIndex(res, "__c"); i >= 0 {
+		rest := res[i+3:]
+		if len(rest) >= 3 && rest[0] >= '0' && rest[0] <= '9' && strings.HasSuffix(rest, ".md") {
+			return res[:i] + ".md"
+		}
+	}
+	return res
+}
+
+// CompareStrategies runs several strategies against one golden set.
 func CompareStrategies(bundle *query.KnowledgeBundle, cases []EvalCase, k int, strategies map[string]SearchStrategy) map[string]*EvalReport {
 	out := make(map[string]*EvalReport, len(strategies))
-	for name, s := range strategies {
-		out[name] = RunBenchmarkWith(bundle, cases, k, s)
+	for name, strategy := range strategies {
+		out[name] = RunBenchmarkWith(bundle, cases, k, strategy)
 	}
 	return out
 }
 
-// FormatComparison 渲染多策略对比表。策略名按字典序排列，保证输出可复现。
+// FormatComparison renders reports in deterministic strategy-name order.
 func FormatComparison(reports map[string]*EvalReport) string {
 	names := make([]string, 0, len(reports))
-	for n := range reports {
-		names = append(names, n)
+	for name := range reports {
+		names = append(names, name)
 	}
 	sort.Strings(names)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%-24s %10s %10s %10s %10s\n", "Strategy", "Recall", "Precision", "MRR", "NDCG")
 	fmt.Fprintf(&b, "%s\n", strings.Repeat("-", 68))
-	for _, n := range names {
-		a := reports[n].AggregateNonNegative
-		fmt.Fprintf(&b, "%-24s %10.4f %10.4f %10.4f %10.4f\n", n, a.Recall, a.Precision, a.MRR, a.NDCG)
+	for _, name := range names {
+		a := reports[name].AggregateNonNegative
+		fmt.Fprintf(&b, "%-24s %10.4f %10.4f %10.4f %10.4f\n", name, a.Recall, a.Precision, a.MRR, a.NDCG)
 	}
 	return b.String()
+}
+
+// SemanticSearcher adapts SemanticSearch to the evaluation strategy contract.
+func SemanticSearcher(backend query.SemanticBackend) SearchStrategy {
+	return func(bundle *query.KnowledgeBundle, q string) []*query.Concept {
+		results, err := query.SemanticSearch(bundle, q, backend, query.SearchOptions{TopK: len(bundle.Concepts)})
+		if err != nil {
+			return nil
+		}
+		concepts := make([]*query.Concept, 0, len(results))
+		for _, result := range results {
+			if result.Concept != nil {
+				concepts = append(concepts, result.Concept)
+			}
+		}
+		return concepts
+	}
 }
 
 func meanScores(cases []CaseResult) Aggregate {
@@ -192,8 +231,12 @@ func meanScores(cases []CaseResult) Aggregate {
 // String renders a human-readable benchmark report.
 func (r *EvalReport) String() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "=== IR Eval Benchmark (K=%d, %d cases: %d positive, %d negative) ===\n",
-		r.K, len(r.Cases), r.PositiveCount, r.NegativeCount)
+	mode := r.Mode
+	if mode == "" {
+		mode = "lexical"
+	}
+	fmt.Fprintf(&b, "=== IR Eval Benchmark (%s, K=%d, %d cases: %d positive, %d negative) ===\n",
+		mode, r.K, len(r.Cases), r.PositiveCount, r.NegativeCount)
 	fmt.Fprintf(&b, "%-14s %10s %10s\n", "Metric", "All cases", "Positive")
 	fmt.Fprintf(&b, "%-14s %10.4f %10.4f\n", "Recall@K", r.Aggregate.Recall, r.AggregateNonNegative.Recall)
 	fmt.Fprintf(&b, "%-14s %10.4f %10.4f\n", "Precision@K", r.Aggregate.Precision, r.AggregateNonNegative.Precision)

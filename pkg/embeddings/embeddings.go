@@ -67,6 +67,7 @@ func NewMiniLM() (*MiniLM, error) {
 		return nil, err
 	}
 	inner, err := minilm.NewEmbedder(paths.Model, paths.Tokenizer,
+		minilm.WithTokenizerLibraryPath(paths.TokenizerLib),
 		minilm.WithMeanPooling(),
 		minilm.WithL2Normalization(),
 	)
