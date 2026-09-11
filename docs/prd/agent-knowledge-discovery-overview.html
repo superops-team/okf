@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OKF Agent Knowledge Discovery — 规划总览</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%230b5d5b' d='M8 12h48v40H8z'/%3E%3Cpath fill='%23f4f1e9' d='M17 21h30v5H17zm0 10h21v5H17zm0 10h26v5H17z'/%3E%3C/svg%3E">
+<style>
+:root{--ink:#18201f;--muted:#5e6967;--paper:#f6f4ed;--panel:#fffdf7;--line:#b9c2bc;--teal:#0b5d5b;--mint:#cfe4dc;--amber:#d79a38;--red:#a74c3c;--blue:#446b82}*{box-sizing:border-box}html{background:var(--paper)}body{margin:0;color:var(--ink);font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif}.sheet{max-width:1180px;margin:0 auto;padding:42px 38px 52px}.mast{display:grid;grid-template-columns:1.5fr .7fr;gap:34px;align-items:end;border-bottom:3px solid var(--ink);padding-bottom:24px}.mast h1{margin:0;font-size:clamp(32px,5vw,68px);line-height:.98;letter-spacing:-.045em;max-width:900px}.mast p{margin:0;color:var(--muted);font-size:15px;line-height:1.7}.stamp{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--teal);font-weight:700}.summary{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid var(--line)}.summary>div{padding:18px 20px;border-right:1px solid var(--line)}.summary>div:first-child{padding-left:0}.summary>div:last-child{border-right:0}.summary b{display:block;font-size:26px}.summary span{font-size:13px;color:var(--muted)}.section-title{display:flex;align-items:baseline;gap:16px;margin:34px 0 18px}.section-title h2{margin:0;font-size:24px}.section-title span{font-size:13px;color:var(--muted)}.chain{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--ink);background:var(--panel)}.node{position:relative;padding:24px 20px 22px;min-height:190px;border-right:1px solid var(--ink)}.node:last-child{border-right:0}.node:not(:last-child):after{content:"";position:absolute;right:-8px;top:46px;width:14px;height:14px;border-top:2px solid var(--amber);border-right:2px solid var(--amber);transform:rotate(45deg);background:var(--panel);z-index:2}.num{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;color:var(--teal)}.node h3{margin:9px 0 9px;font-size:20px}.node p{margin:0;font-size:14px;line-height:1.65;color:var(--muted)}.value{display:inline-block;margin-top:16px;padding:5px 8px;border:1px solid currentColor;color:var(--teal);font-size:12px}.architecture{display:grid;grid-template-columns:1fr 1.7fr 1fr;gap:14px;align-items:stretch}.layer{border:1px solid var(--line);background:var(--panel);padding:18px}.layer h3{margin:0 0 12px;font-size:16px}.layer ul{list-style:none;margin:0;padding:0}.layer li{border-top:1px solid #dde1dc;padding:9px 0;font-size:13px;color:var(--muted)}.layer li:first-child{border-top:0}.core{border:2px solid var(--teal);display:grid;grid-template-rows:auto 1fr}.core .core-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.chip{background:var(--mint);padding:11px 12px;font-size:13px;font-weight:700}.guardrails{display:grid;grid-template-columns:1.25fr 1fr;gap:24px}.do-not{border-left:7px solid var(--red);padding:3px 0 3px 18px}.do-not h3,.gates h3{margin:0 0 12px}.do-not ul{margin:0;padding-left:18px;columns:2;column-gap:28px}.do-not li{font-size:13px;line-height:1.7;color:var(--muted);break-inside:avoid}.gates{border:1px solid var(--ink);background:var(--panel);padding:18px}.gate{display:grid;grid-template-columns:34px 1fr;gap:9px;padding:8px 0;border-bottom:1px solid #dde1dc}.gate:last-child{border-bottom:0}.gate b{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--amber)}.gate span{font-size:13px}.footer{margin-top:34px;padding-top:16px;border-top:3px solid var(--ink);display:flex;justify-content:space-between;gap:20px;font-size:12px;color:var(--muted)}@media(max-width:760px){.sheet{padding:24px 18px 36px}.mast{grid-template-columns:1fr;gap:18px}.mast h1{font-size:40px}.summary{grid-template-columns:1fr}.summary>div{padding:13px 0;border-right:0;border-bottom:1px solid var(--line)}.summary span,.section-title span,.num,.value,.layer li,.chip,.do-not li,.gate span,.footer{font-size:14px}.chain{grid-template-columns:1fr}.node{min-height:auto;border-right:0;border-bottom:1px solid var(--ink)}.node:last-child{border-bottom:0}.node:not(:last-child):after{right:auto;left:32px;top:auto;bottom:-8px;transform:rotate(135deg)}.architecture{grid-template-columns:1fr}.core .core-grid{grid-template-columns:1fr 1fr}.guardrails{grid-template-columns:1fr}.do-not ul{columns:1}.footer{display:block}.footer span{display:block;margin-top:6px}}
+</style>
+</head>
+<body>
+<main class="sheet">
+<section class="mast">
+<div><div class="stamp">OKF 0.7.0 / PROPOSED</div><h1>Agent Knowledge Discovery</h1></div>
+<p>不再造知识模型与检索内核，而是在现有 Markdown、Service、Query、MCP 之上补齐长期身份、低成本发现、结果组织和 Agent 接入。</p>
+</section>
+<section class="summary" aria-label="规划摘要">
+<div><b>4</b><span>项协同能力，形成一条依赖链</span></div>
+<div><b>50 / 50</b><span>Scenario 已映射任务、测试与接线</span></div>
+<div><b>0</b><span>新增第三方依赖（规划目标）</span></div>
+</section>
+<div class="section-title"><h2>能力链路</h2><span>每一步为下一步提供稳定语义</span></div>
+<section class="chain">
+<article class="node"><span class="num">01 / P0</span><h3>Stable Concept ID</h3><p>用随机 128-bit <code>okf_id</code> 脱离标题与路径；显式迁移，最终写盘才生成，重导入保留。</p><span class="value">价值：长期引用</span></article>
+<article class="node"><span class="num">02 / P1</span><h3>Manifest</h3><p>只解析 bounded frontmatter 与 stat；不解析正文、不启动 embedding、不构建索引。</p><span class="value">价值：低成本发现</span></article>
+<article class="node"><span class="num">03 / P2</span><h3>分层检索投影</h3><p>在既有有限候选池上按 chunk / concept / source / folder 组织；不改变召回与分数。</p><span class="value">价值：多粒度消费</span></article>
+<article class="node"><span class="num">04 / P3</span><h3>Agent Integration</h3><p>项目级接入 Cursor、Claude Code、Codex；plan-first、幂等、可诊断、可安全移除。</p><span class="value">价值：持续工作流</span></article>
+</section>
+<div class="section-title"><h2>架构复用边界</h2><span>新增适配层，不建立第二套系统</span></div>
+<section class="architecture">
+<div class="layer"><h3>用户与 Agent 入口</h3><ul><li>CLI：identity / manifest / grouped search / agent</li><li>MCP：resolve / manifest / query / context</li><li>Service：统一 envelope 与错误契约</li></ul></div>
+<div class="layer core"><h3>新增的窄能力层</h3><div class="core-grid"><div class="chip">pkg/identity<br>稳定身份与 resolver</div><div class="chip">pkg/manifest<br>元数据扫描</div><div class="chip">pkg/query project<br>结果投影</div><div class="chip">pkg/agentconfig<br>项目文件适配</div></div></div>
+<div class="layer"><h3>必须保持不变的核心</h3><ul><li>Markdown Concept = 唯一事实源</li><li>BM25 / MiniLM / HNSW / weighted RRF</li><li>OKF v0.2 必填字段与现有 ToolEnvelope</li></ul></div>
+</section>
+<div class="section-title"><h2>边界与完成门禁</h2><span>小改动获得核心收益，但验证不缩水</span></div>
+<section class="guardrails">
+<div class="do-not"><h3>明确不做</h3><ul><li>SQLite / LanceDB 第二事实源</li><li>自动在 Load/Parse 回填 ID</li><li>新排序公式或固定权重</li><li>外部 embedding 默认路径</li><li>全局 Agent 配置</li><li>install-state / 原文件快照</li><li>force 删除未受管内容</li><li>Node / Python / CGO 运行时</li></ul></div>
+<div class="gates"><h3>只有全部通过才算完成</h3><div class="gate"><b>P0</b><span>身份、迁移、resolver、索引 v3</span></div><div class="gate"><b>P1</b><span>Manifest + CLI/MCP/Service</span></div><div class="gate"><b>P2</b><span>投影 + 真实检索评测</span></div><div class="gate"><b>P3</b><span>三客户端 apply/status/remove</span></div><div class="gate"><b>P4</b><span>Gauntlet、E2E、EVIDENCE、50 条 conformance</span></div></div>
+</section>
+<footer class="footer"><strong>设计准入：通过，等待 Spec 审批后实施</strong><span>实现状态：未开始；当前 S01–S50 均为 gap</span></footer>
+</main>
+</body>
+</html>
