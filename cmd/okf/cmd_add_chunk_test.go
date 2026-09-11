@@ -218,6 +218,7 @@ func TestCmdAddChunkedReimportIdempotent(t *testing.T) {
 // token window so the tail never enters the vector; chunked concepts embed
 // the tail chunk.
 func TestSemanticDeepTailChunkedVsUnchunked(t *testing.T) {
+	skipPuregoUnderRace(t)
 	// two bundles: chunked (3000 words > threshold) and unchunked (1500 words
 	// < threshold), same unique tail term
 	tail := "zebraquasar42x7"
@@ -285,6 +286,7 @@ func TestSemanticDeepTailChunkedVsUnchunked(t *testing.T) {
 
 // --- chunked document occupies one result slot in semantic search ---
 func TestSemanticSearchChunkedOneSlot(t *testing.T) {
+	skipPuregoUnderRace(t)
 	src := t.TempDir()
 	writeLongText(t, src, "big.txt", 3000, "common filler word")
 	kb := newKB(t)

@@ -52,6 +52,7 @@ func (b *evalBackend) Search(vec []float32, k int) []query.SemanticHit {
 // TestEvalSemanticLinkRuns: the semantic path (RRF-only) is measured over the
 // golden set and reported with a distinct mode row.
 func TestEvalSemanticLinkRuns(t *testing.T) {
+	skipPuregoUnderRace(t)
 	bundle := buildBenchmarkBundle(t)
 	cases, err := LoadGoldenCases("testdata/golden_queries.json")
 	if err != nil {
@@ -75,6 +76,7 @@ func TestEvalSemanticLinkRuns(t *testing.T) {
 // real cross-encoder in M2 may improve them). This is the delta assertion from
 // the spec, not an absolute threshold.
 func TestEvalRerankDoesNotHurtSemanticRanking(t *testing.T) {
+	skipPuregoUnderRace(t)
 	bundle := buildBenchmarkBundle(t)
 	cases, err := LoadGoldenCases("testdata/golden_queries.json")
 	if err != nil {
@@ -175,6 +177,7 @@ func buildChunkedBundleOnDisk(t *testing.T, words int) *query.KnowledgeBundle {
 // bundle via semantic search, not retrievable in the unchunked semantic
 // control (MiniLM's 256-token truncation drops the tail without chunking).
 func TestChunkedBundleSearchable(t *testing.T) {
+	skipPuregoUnderRace(t)
 	tail := "zebraquasar42x7"
 	chunked := buildChunkedBundleOnDisk(t, 3000)
 	unchunked := buildChunkedBundleOnDisk(t, 1500)
