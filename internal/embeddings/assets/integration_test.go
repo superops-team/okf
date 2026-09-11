@@ -27,7 +27,13 @@ func TestIntegrationInt8Embedding(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = ort.DestroyEnvironment() })
 
-	emb, err := minilm.NewEmbedder(p.Model, p.Tokenizer, minilm.WithMeanPooling(), minilm.WithL2Normalization())
+	emb, err := minilm.NewEmbedder(
+		p.Model,
+		p.Tokenizer,
+		minilm.WithTokenizerLibraryPath(p.TokenizerLib),
+		minilm.WithMeanPooling(),
+		minilm.WithL2Normalization(),
+	)
 	if err != nil {
 		t.Fatalf("NewEmbedder: %v", err)
 	}

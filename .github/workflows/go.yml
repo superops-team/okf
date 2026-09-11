@@ -24,6 +24,7 @@ jobs:
       # 后必须先在构建期下载，否则 go:embed 会报 "no matching files found"。
       run: |
         ./scripts/fetch-ort.sh linux amd64
+        ./scripts/fetch-tokenizers.sh linux amd64
         ./scripts/fetch-model.sh amd64
     - name: Run gauntlet
       run: bash tools/gauntlet.sh

@@ -188,8 +188,8 @@ okf eval -golden pkg/eval/testdata/golden_semantic.json -path docs/knowledge -co
 - **可复现性**：块数低于 2048 的索引走全量精确扫描，而非 HNSW 的近似遍历——近似路径即使请求全部节点也不会全部返回，且遗漏项随重建而变。配合固定随机种子与确定性 tie-break，检索结果在多次重建之间完全一致；该性质通过反复重建本知识库、确认评测指标不发生变化来验证。
 - **索引成本（实测，7 概念 → 97 块）**：分块使索引体积增大约 20 倍（14.5 KB → 287 KB），构建耗时增加约 6 倍（128 ms → 800 ms）。两者随内容量增长，而非随概念数增长。
 - **索引格式 v2 不向下兼容**：分块级 key 与旧的概念级 key 不同。`okf vector status` 会显示格式版本；加载旧索引时会明确报错并提示执行 `okf vector rebuild`（此期间检索回退到词法），而不是静默返回错误结果。
-- **内嵌资源**：ONNX Runtime CPU 库（按 OS，约 10–15 MB）与量化 MiniLM 模型（约 23 MB）通过 `go:embed` 内嵌进二进制，首次使用时解包到用户缓存目录（带 SHA256 校验）。每个平台构建只内嵌该平台资源（`scripts/fetch-ort.sh` / `scripts/fetch-model.sh` 在构建期获取，运行时零联网）。
-- **动态加载（如实声明）**：ONNX Runtime 动态库在运行时通过 `dlopen` 从缓存目录加载——二进制自包含但并非静态链接。缓存位置：`os.UserCacheDir()/okf/`（可用 `OKF_ORT_DIR` 覆盖）。
+- **内嵌资源**：ONNX Runtime CPU 库（按 OS，约 10–15 MB）、pure-tokenizers 原生库（约 5–6 MB）、量化 MiniLM 模型（约 23 MB）和 `tokenizer.json` 均通过 `go:embed` 内嵌进二进制，首次使用时解包到用户缓存目录（带 SHA256 校验）。每个平台构建只内嵌该平台资源（`scripts/fetch-ort.sh`、`scripts/fetch-tokenizers.sh`、`scripts/fetch-model.sh` 在构建期获取，运行时零联网）。
+- **动态加载（如实声明）**：ONNX Runtime 与 pure-tokenizers 动态库在运行时通过 `dlopen` 从缓存目录加载——二进制自包含但并非静态链接。缓存位置：`os.UserCacheDir()/okf/`（可用 `OKF_ORT_DIR` 覆盖）。
 - **限制**：MiniLM 以英文语义为主。分块与 BM25 的中文 bigram 提升了中文检索效果，但纯中文 query 检索英文内容时仍只能依赖语义通道。`Embedder` 是接口，为后续更强模型（如 BGE-M3）或远程 API 预留替换点。
 - **许可**：pure-onnx（MIT）、coder/hnsw（CC0-1.0）、ONNX Runtime（MIT）、MiniLM-L6-v2 模型（Apache-2.0）。
 

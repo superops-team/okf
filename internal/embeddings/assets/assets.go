@@ -18,9 +18,10 @@ var ErrChecksumMismatch = errors.New("embedded asset checksum mismatch")
 
 // Paths 返回解包后各资源的本地路径。
 type Paths struct {
-	ORTLib    string // ONNX Runtime 动态库
-	Model     string // MiniLM 模型（.onnx）
-	Tokenizer string // tokenizer.json
+	ORTLib       string // ONNX Runtime 动态库
+	TokenizerLib string // pure-tokenizers 动态库
+	Model        string // MiniLM 模型（.onnx）
+	Tokenizer    string // tokenizer.json
 }
 
 // DefaultDir 返回资源缓存根目录；环境变量 OKF_ORT_DIR 可覆盖默认的用户缓存目录。
@@ -40,11 +41,16 @@ func Ensure() (Paths, error) {
 		return Paths{}, fmt.Errorf("resolve cache dir: %w", err)
 	}
 	ortDir := filepath.Join(base, "okf", "ort")
+	tokenizerLibDir := filepath.Join(base, "okf", "tokenizers")
 	modelDir := filepath.Join(base, "okf", "models")
 
 	libPath, err := ensureFile(ortDir, ortLibName, ortLibData, ortLibSHA256, 0o755)
 	if err != nil {
 		return Paths{}, fmt.Errorf("ensure ORT library (删除 %s 后重试): %w", ortDir, err)
+	}
+	tokenizerLibPath, err := ensureFile(tokenizerLibDir, tokenizerLibName, tokenizerLibData, tokenizerLibSHA256, 0o755)
+	if err != nil {
+		return Paths{}, fmt.Errorf("ensure tokenizer library (删除 %s 后重试): %w", tokenizerLibDir, err)
 	}
 	modelPath, err := ensureFile(modelDir, modelName, modelData, modelSHA256, 0o644)
 	if err != nil {
@@ -54,7 +60,7 @@ func Ensure() (Paths, error) {
 	if err != nil {
 		return Paths{}, fmt.Errorf("ensure tokenizer: %w", err)
 	}
-	return Paths{ORTLib: libPath, Model: modelPath, Tokenizer: tokPath}, nil
+	return Paths{ORTLib: libPath, TokenizerLib: tokenizerLibPath, Model: modelPath, Tokenizer: tokPath}, nil
 }
 
 // ensureFile 原子写盘（临时文件 + rename）+ SHA256 校验 + 缓存复用。

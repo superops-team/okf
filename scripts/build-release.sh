@@ -66,6 +66,10 @@ build_platform() {
 
   echo "  ▸ ${os}/${arch}..."
 
+  "$REPO_ROOT/scripts/fetch-ort.sh" "$os" "$arch"
+  "$REPO_ROOT/scripts/fetch-tokenizers.sh" "$os" "$arch"
+  "$REPO_ROOT/scripts/fetch-model.sh" "$arch"
+
   CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
     go build -trimpath \
       -ldflags "$LD_FLAGS" \

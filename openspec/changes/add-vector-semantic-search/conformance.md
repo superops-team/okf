@@ -43,7 +43,7 @@
 
 ## 实现要点记录（与 design 的一致性）
 
-1. **内嵌资源**：`internal/embeddings/assets/` 按平台 build tag 编译，资源在 CI/构建期经 `scripts/fetch-ort.sh` / `scripts/fetch-model.sh` 下载（gitignore 排除，不入库），运行时经 `assets.Ensure()` 解包到缓存并 SHA256 校验——运行时零联网（S1-S4）✓
+1. **内嵌资源**：`internal/embeddings/assets/` 按平台 build tag 编译，资源在 CI/构建期经 `scripts/fetch-ort.sh` / `scripts/fetch-tokenizers.sh` / `scripts/fetch-model.sh` 下载（gitignore 排除，不入库），运行时经 `assets.Ensure()` 原子解包到缓存并 SHA256 校验；MiniLM 显式使用解包后的 tokenizer 动态库路径，不触发第三方共享缓存下载——运行时零联网（S1-S4）✓
 2. **交叉平台修正**：上游 `renameio v1.0.1` 的 tempfile.go 带 `!windows` build tag，导致 `coder/hnsw` 在 Windows 编译失败；以最小本地 fork（`internal/third_party/renameio`，标准库实现、去掉 build tag）`replace` 解决，四平台交叉编译全绿（S2）✓
 3. **coder/hnsw 缺陷规避**：重复 Add panic → 幂等跳过；Delete 破坏图层 → tombstone 过滤不物理删除；Search 不保证排序 → 封装层显式余弦降序重排（S8-S10）✓
 4. **指纹稳定性**：`Fingerprint` 使用归一化相对路径（不做 `filepath.Abs`），避免依赖进程 cwd 导致 CLI 与 MCP 索引 key 不一致（实测修复了 MCP 语义检索 0 结果问题，S10/S18）✓
@@ -53,7 +53,7 @@
 ## 遗留说明
 
 - S14/S15 标注 aligned：CLI 层索引未建/语义失败路径依赖真实模型，无单测（`pkg/query` 层已有 `TestSemanticSearchNilBackendIsLexicalOnly`/`TestSemanticSearchEmbedError` 覆盖核心逻辑），CLI 行为经端到端实测与 gauntlet L10 冒烟验证
-- `internal/embeddings/assets/libs|models/` 资源文件被 `.gitignore` 排除，CI 需先执行两个 fetch 脚本；本地已预置 8 个资源（4 平台 ORT + arm64/x86 模型 + tokenizer）
+- `internal/embeddings/assets/libs|models/` 资源文件被 `.gitignore` 排除，CI 和 release 构建会先执行三个 fetch 脚本；tokenizer 原生库固定为 ABI 兼容的 `rust-v0.1.5`，归档 SHA256 在脚本内按平台锁定
 - darwin/amd64 平台 ORT 官方自 1.24.1 起不再发布 x86_64 包，脚本固定回退 1.23.1（README 已声明）
 - `okf-bin` 为本地构建产物（.gitignore，供 `test_mcp.py` 使用）
 
@@ -61,4 +61,4 @@
 
 1. **MiniLM 英文语义为主**：中文语义质量有限（词法检索仍可用）；`Embedder` 接口为 BGE-M3/远程 API 预留升级路径（README 已声明）
 2. **P0 增量语义**：概念删除/内容变更需 `okf vector rebuild` 全量重建；变更检测增量（P1）留待后续变更
-3. **模型体积**：单平台内嵌约 33-38 MB（ORT ~10-15MB + 模型 ~23MB）；构建产物按平台裁剪，仅含当前平台资源
+3. **模型体积**：单平台内嵌约 38-44 MB（ORT ~10-15MB + tokenizer 原生库 ~5-6MB + 模型 ~23MB）；构建产物按平台裁剪，仅含当前平台资源

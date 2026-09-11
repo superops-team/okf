@@ -8,13 +8,13 @@
 
 ### Requirement: 内嵌资源层（embed + 按平台解包）
 
-系统 SHALL 提供 `internal/embeddings/assets`（或等价内部包），将当前平台的 ONNX Runtime 动态库、MiniLM int8 量化模型（`model_quantized.onnx`）与 tokenizer 通过 `//go:embed` 内嵌，并按平台 build tag 只编译匹配文件。
+系统 SHALL 提供 `internal/embeddings/assets`（或等价内部包），将当前平台的 ONNX Runtime 动态库、pure-tokenizers 原生动态库、MiniLM int8 量化模型（`model_quantized.onnx`）与 `tokenizer.json` 通过 `//go:embed` 内嵌，并按平台 build tag 只编译匹配文件。
 
 #### Scenario: 内嵌资源在构建期打包进二进制
 
 - **WHEN** 执行 `CGO_ENABLED=0 go build ./...`
 - **THEN** 构建 MUST 成功
-- **AND** 产物二进制 MUST 包含 ORT 动态库 + 模型 + tokenizer 的内嵌数据（通过 `//go:embed` 变量可读）
+- **AND** 产物二进制 MUST 包含 ORT 动态库 + pure-tokenizers 动态库 + 模型 + `tokenizer.json` 的内嵌数据（通过 `//go:embed` 变量可读）
 - **AND** 产物 MUST NOT 依赖系统已安装的 ONNX Runtime 或任何外部二进制
 
 #### Scenario: 按平台裁剪（按 OS 按需）
@@ -26,7 +26,7 @@
 #### Scenario: 运行时解包到缓存目录并校验
 
 - **WHEN** 首次调用 embedding 初始化
-- **THEN** 系统 MUST 将内嵌资源解包到 `os.UserCacheDir()/okf/{ort,models}/`
+- **THEN** 系统 MUST 将内嵌资源解包到 `os.UserCacheDir()/okf/{ort,tokenizers,models}/`
 - **AND** 解包 MUST 原子写（临时文件 + rename），写盘后校验 SHA256 与内嵌清单一致
 - **AND** 再次调用时若缓存文件存在且 SHA256 一致，MUST 复用缓存、跳过写盘
 - **AND** 全过程 MUST NOT 发起任何网络请求（测试方法：临时 `OKF_ORT_DIR` + 网络不可达环境跑通，且断言不调用 `EnsureOnnxRuntimeSharedLibrary`/bootstrap 路径）
