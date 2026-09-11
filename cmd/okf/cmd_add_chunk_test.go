@@ -240,11 +240,13 @@ func TestSemanticDeepTailChunkedVsUnchunked(t *testing.T) {
 		t.Cleanup(func() { emb.Close() })
 		idx := vectorindex.NewHNSW(emb.Dimension())
 		for _, c := range qb.Concepts {
-			vec, err := emb.EmbedQuery(conceptText(c))
-			if err != nil {
-				t.Fatal(err)
+			for _, ch := range query.ConceptChunks(c) {
+				vec, err := emb.EmbedQuery(ch.Text())
+				if err != nil {
+					t.Fatal(err)
+				}
+				idx.Add(query.ChunkKey(c, ch.Ordinal), vec)
 			}
-			idx.Add(query.Fingerprint(c), vec)
 		}
 		return qb, idx, emb
 	}
@@ -301,11 +303,13 @@ func TestSemanticSearchChunkedOneSlot(t *testing.T) {
 	idx := vectorindex.NewHNSW(emb.Dimension())
 	qb := toQueryBundle(bundle)
 	for _, c := range qb.Concepts {
-		vec, err := emb.EmbedQuery(conceptText(c))
-		if err != nil {
-			t.Fatal(err)
+		for _, ch := range query.ConceptChunks(c) {
+			vec, err := emb.EmbedQuery(ch.Text())
+			if err != nil {
+				t.Fatal(err)
+			}
+			idx.Add(query.ChunkKey(c, ch.Ordinal), vec)
 		}
-		idx.Add(query.Fingerprint(c), vec)
 	}
 	backend := &semanticBackend{emb: emb, idx: idx}
 	res, err := query.SemanticSearch(qb, "common filler word", backend, query.SearchOptions{TopK: 10})
