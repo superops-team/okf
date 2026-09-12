@@ -1,7 +1,7 @@
 # Evidence — add-agent-knowledge-discovery (fresh run)
 
-- Source commit: `47ec717324c2d8251c5031850d5b744bff74291d`
-- Verification timestamp (UTC): 2026-09-12T03:55:10Z
+- Source commit: `018996c6fc0d53211c7b123a2480fda7cacf5aa6`
+- Verification timestamp (UTC): 2026-09-12T04:22:39Z
 - Toolchain: go version go1.26.7 linux/amd64
 - Go/tool versions: go1.26.7 / toolchain auto
 - One-command entry point: `tools/verify-agent-discovery.sh`
@@ -41,8 +41,12 @@
 - golden set: pkg/eval/testdata/golden_semantic.json (28 cases, natural-language; lexical-substring scores Recall@5=0.0769)
 - hybrid-default (S46 baseline): Recall@5=0.9231, MRR=0.6615
 - semantic-only: Recall@5=0.9231
-- historical baseline (releases.md): hybrid Recall@5=0.9615, MRR=0.7256; current code reproduces 0.9231/0.6615 with the same golden set + v3 index
-- grouped (by=source) aggregate: srcRecall=0.0769 ndcg=1.0000 diversity=0.0769 occupancy=0.0769
+- reproducible baseline (spec-amendment): hybrid Recall@5≈0.92, MRR≈0.66 on current tree with chunk-level index; historical 0.9615/0.7256 superseded (see spec-amendment.md)
+- base-vs-head: identical with same content (zero code regression from v3 key change)
+- S47 grouped eval (hybrid strategy, all three projections):
+- concept: srcRecall=0.9231 ndcg=0.8021 diversity=1.0000 occupancy=0.2250
+- source: srcRecall=0.9231 ndcg=0.8021 diversity=1.0000 occupancy=0.2250
+- folder: srcRecall=0.4038 ndcg=1.0000 diversity=0.2250 occupancy=1.0000
 
 ## S48 resource bounds (1,000 files)
 ```

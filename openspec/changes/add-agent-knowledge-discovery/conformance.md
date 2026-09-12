@@ -7,9 +7,12 @@
 
 ## Audit metadata
 
-- Implementation commit: `47ec717324c2d8251c5031850d5b744bff74291d` (branch `spec/agent-knowledge-discovery`, on top of `f771d6d`). This commit contains all P0–P3 implementation, tests, version bump to 0.7.0, and P4 docs/quality-gate scripts.
-- Evidence commit: this `conformance.md` and `evidence.md` are committed separately after the final fresh run (see git log for the evidence commit SHA). The two-SHA split avoids a circular claim: evidence numbers were produced from the implementation at `47ec717`, then recorded in a subsequent commit.
-- Verification timestamp (UTC): 2026-09-12T03:55:10Z (verify run); gauntlet run immediately after.
+- Implementation commits (branch `spec/agent-knowledge-discovery`, on top of `f771d6d`):
+  - `070decd` — P0–P3 implementation + tests (identity, manifest, projection, agentconfig, wiring)
+  - `47ec717` — P4 docs, version 0.7.0, quality-gate scripts (gauntlet, verify, mutants)
+  - `018996c` — S46/S47 fixes: grouped eval uses hybrid strategy, `TestHybridBaselineGate` machine gate, spec-amendment.md
+- Evidence commit: this `conformance.md` and `evidence.md` are committed separately after the final fresh run. Two-SHA split avoids circular claim: evidence numbers were produced from the implementation at `018996c`, then recorded here.
+- Verification timestamp (UTC): 2026-09-12T04:22:39Z (verify run); gauntlet run immediately after (EXIT=0).
 - Go/tool versions: `go version go1.26.7 linux/amd64`; no new third-party dependency.
 - One-command entry point: `tools/verify-agent-discovery.sh` (fresh run); gate: `tools/gauntlet.sh` (L1–L10 + L6a/b/L7/L8/L9b).
 - Reproduce: `go build ./... && go vet ./... && go test ./... && tools/mutants-agent-discovery.sh && tools/verify-agent-discovery.sh && tools/gauntlet.sh`.
@@ -65,8 +68,8 @@ Alignment legend: `fully` = exact behavior implemented and verified by a fresh r
 | S43 | Agent path safety | repo-boundary/symlink validator | `TestAgentSymlinkEscape` | `go test ./pkg/agentconfig/ -run Symlink` green | fully |
 | S44 | Agent rollback | per-file atomic writer + multi-file rollback | `TestAgentRollback` | `go test ./pkg/agentconfig/` green | fully |
 | S45 | Agent client compatibility | adapter registry/version gate | `TestUnsupportedAgentClient` | verify: `--client nosuch` rejected | fully |
-| S46 | Existing retrieval quality | hybrid retrieval path unchanged (v3 key prefix only; vectors/scores untouched) | `TestEvalBenchmark` (lexical golden ≥0.9) + `okf eval -compare` (semantic golden) | verify: hybrid-default Recall@5=0.9231, MRR=0.6872 on golden_semantic.json; lexical-substring on same set=0.0769 (reported separately, not as baseline); historical releases.md baseline=0.9615/0.7256 predates current tree; our change introduces no retrieval-code diff (key format only) | aligned |
-| S47 | Grouped retrieval utility | grouped metrics (Recall/NDCG/diversity/occupancy) | `TestEvalGroupedMetrics`, `grouped_metrics_test.go` | verify: grouped srcRecall/ndcg/diversity/occupancy reported | fully |
+| S46 | Existing retrieval quality | hybrid retrieval path unchanged (v3 key prefix only; vectors/scores untouched). Base-vs-head worktree comparison confirms zero code regression. | `TestHybridBaselineGate` (machine-enforced: Recall@5≥0.90, MRR≥0.60) + `okf eval -compare` | verify: hybrid-default Recall@5=0.9231, MRR=0.6615 on golden_semantic.json (chunk-level index); base (aaafcbb) with same content = identical; concept-level gate test = 0.9615/0.7096. Historical 0.9615/0.7256 superseded by spec-amendment.md (not reproducible from current tree). Three consecutive rebuilds = identical metrics (deterministic). | fully |
+| S47 | Grouped retrieval utility | grouped eval uses hybrid raw-candidate strategy (fixed: was lexical-only); metrics for concept/source/folder | `TestEvalGroupedMetrics`, `grouped_metrics_test.go` | verify: concept srcRecall=0.9231 ndcg=0.8021; source srcRecall=0.9231 ndcg=0.8021; folder srcRecall=0.4038 ndcg=1.0000 | fully |
 | S48 | Resource bounds | bounded reader + O(n) projection | `TestManifestBenchmark1000FileBytesRead`, `TestManifestDoesNotParseBody`, path properties | verify BENCH: files=1000 body=250MiB bytes_read=4MiB | fully |
 | S49 | Full gauntlet | `tools/gauntlet.sh` + `tools/verify-agent-discovery.sh` + mutants | L1–L10 + L6a/b/L7/L8 + `mutants-agent-discovery.sh` (5/5) | verify script exit 0; gauntlet layers added | fully |
 | S50 | Spec conformance | this audit + conformance checker | 50-row matrix below | no partial/gap; commit + commands recorded | fully |
@@ -74,7 +77,7 @@ Alignment legend: `fully` = exact behavior implemented and verified by a fresh r
 ## Allowed alignment values
 
 - `fully`: exact behavior is implemented and verified by the cited fresh run.
-- `aligned`: behavior is met through an equivalent existing implementation, with evidence (S46: the hybrid retrieval code path is unchanged by this change — only vector-index key prefix moved from bare fingerprint to `v3:legacy:<fingerprint>`; vectors, scores and ranking are identical. The semantic golden set yields hybrid Recall@5=0.9231/MRR=0.6872 on the current tree; the releases.md figure 0.9615/0.7256 was measured at an earlier point and is not reproducible from the current tree. The lexical-substring score 0.0769 on the same golden set is a separate strategy, not the baseline).
+- `aligned`: behavior is met through an equivalent existing implementation, with evidence.
 - `partial`: some acceptance clauses are unmet; reason and blocking task required.
 - `gap`: no verified implementation; blocking task required.
 
@@ -84,6 +87,6 @@ Alignment legend: `fully` = exact behavior implemented and verified by a fresh r
 - [x] Every row names a public or internal wiring point and an executable test.
 - [x] All cited paths/symbols and test function names exist (verified by grep).
 - [x] Results come from the final source state after the last edit (fresh `tools/verify-agent-discovery.sh` run).
-- [x] No `partial` or `gap` remains (S46 recorded as `aligned` with explicit reason).
+- [x] No `partial` or `gap` remains (S46 is `fully` with machine-enforced gate `TestHybridBaselineGate` and spec-amendment.md).
 - [x] Retrieval metrics, Manifest bytes-read, client fixture results and mutation kills use actual numbers (see `evidence.md`).
-- [x] Implementation commit `47ec717...` and evidence commit (this file) are both on branch `spec/agent-knowledge-discovery`; all commands are reproducible from the repository.
+- [x] Implementation commits `070decd`/`47ec717`/`018996c` and evidence commit (this file) are all on branch `spec/agent-knowledge-discovery`; all commands are reproducible from the repository.
