@@ -1,7 +1,11 @@
 package agentconfig
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -70,5 +74,45 @@ func TestInspectJSONMCPUnownedConflict(t *testing.T) {
 	_, _, _, err := inspectJSONMCP(current, []string{"okf", "mcp"})
 	if err == nil {
 		t.Fatal("expected conflict for unowned okf entry, got nil")
+	}
+}
+
+// TestApplyFailsOnUnownedRulesFile proves that Apply fails closed when a
+// whole-file managed artifact (Cursor rule, Claude skill) exists without the
+// OKF ownership header. The user's file must be preserved byte-for-byte (D5).
+func TestApplyFailsOnUnownedRulesFile(t *testing.T) {
+	root := t.TempDir()
+	// Create mcp.json (OKF-managed, will be fine) and an unowned rules file.
+	if err := os.MkdirAll(filepath.Join(root, ".cursor", "rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".cursor", "mcp.json"),
+		[]byte(`{"mcpServers":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	userRule := []byte("# My custom rule\n# Do not overwrite\n")
+	if err := os.WriteFile(filepath.Join(root, ".cursor", "rules", "okf.md"), userRule, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewService(root, []string{"okf", "mcp", "--repo", "."})
+	err := svc.Apply("cursor", true)
+	if err == nil {
+		t.Fatal("Apply should fail on unowned rules file")
+	}
+	var ace *AgentConfigError
+	if !errors.As(err, &ace) {
+		t.Fatalf("expected AgentConfigError, got %T: %v", err, err)
+	}
+	if ace.Code != ErrAgentConfigConflict {
+		t.Errorf("code = %q, want %q", ace.Code, ErrAgentConfigConflict)
+	}
+	// User's file must be preserved byte-for-byte.
+	got, rerr := os.ReadFile(filepath.Join(root, ".cursor", "rules", "okf.md"))
+	if rerr != nil {
+		t.Fatalf("rules file missing after failed apply: %v", rerr)
+	}
+	if !bytes.Equal(got, userRule) {
+		t.Errorf("rules file was modified: got %q, want %q", got, userRule)
 	}
 }

@@ -290,3 +290,53 @@ func TestIdentityEnsureDuplicatesSortedDeterministic(t *testing.T) {
 		t.Fatalf("duplicate dry-run not byte-identical:\n%s\n%s", j1, j2)
 	}
 }
+
+// E3: derived chunks (doc__cN.md) must receive parent_okf_id pointing to the
+// parent concept's okf_id after identity ensure. Without this, concept-level
+// grouping cannot trace chunks back to their parent.
+func TestIdentityEnsureDerivedChunksGetParentOKFID(t *testing.T) {
+	root := t.TempDir()
+	// Parent concept (no id yet).
+	writeConceptFile(t, root, "doc.md", "")
+	// Two derived chunks (no id, no parent_okf_id yet).
+	writeConceptFile(t, root, "doc__c1.md", "derived: \"true\"\n")
+	writeConceptFile(t, root, "doc__c2.md", "derived: \"true\"\n")
+
+	if _, err := Ensure(root, true); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	parentID := readFileID(t, filepath.Join(root, "doc.md"))
+	if parentID == "" {
+		t.Fatal("parent did not receive okf_id")
+	}
+
+	for _, chunk := range []string{"doc__c1.md", "doc__c2.md"} {
+		data, err := os.ReadFile(filepath.Join(root, chunk))
+		if err != nil {
+			t.Fatalf("read %s: %v", chunk, err)
+		}
+		// Parse frontmatter to check parent_okf_id.
+		c, err := parser.ParseConceptBytes(chunk, data)
+		if err != nil {
+			t.Fatalf("parse %s: %v", chunk, err)
+		}
+		pid, _ := c.CustomFields[ParentField].(string)
+		if pid != parentID {
+			t.Errorf("%s parent_okf_id = %q, want %q", chunk, pid, parentID)
+		}
+	}
+
+	// Idempotent: second apply must not change parent_okf_id.
+	if _, err := Ensure(root, true); err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	for _, chunk := range []string{"doc__c1.md", "doc__c2.md"} {
+		data, _ := os.ReadFile(filepath.Join(root, chunk))
+		c, _ := parser.ParseConceptBytes(chunk, data)
+		pid, _ := c.CustomFields[ParentField].(string)
+		if pid != parentID {
+			t.Errorf("%s parent_okf_id changed after second apply: %q, want %q", chunk, pid, parentID)
+		}
+	}
+}

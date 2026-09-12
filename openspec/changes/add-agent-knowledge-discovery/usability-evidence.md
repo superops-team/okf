@@ -1,16 +1,16 @@
-# Usability Evidence — add-agent-knowledge-discovery (Round 2: full coverage audit)
+# Usability Evidence — add-agent-knowledge-discovery (Round 3: zero-skip audit)
 
 Date: 2026-09-12
 Branch: spec/agent-knowledge-discovery
 Version under test: okf CLI 0.7.0
-Verification script: `tools/verify-agent-usability.sh` (139 assertions, fail-closed)
-MCP helper: `tools/mcp_call.py` (Content-Length stdio protocol)
+Verification script: `tools/verify-agent-usability.sh` (156 assertions, fail-closed, zero-skip required)
+MCP helper: `tools/mcp_call.py` (Content-Length stdio protocol, structured JSON parsing)
 
 ## Summary
 
-**139 passed, 0 failed, 4 skipped.** All planned scenarios A1–G4 are executed or explicitly skipped with rationale. 10 UX/product defects were found and fixed via TDD. No remaining blockers. S46 spec-amendment remains **Proposed** (pending user approval); S46 conformance is `partial`.
+**156 passed, 0 failed, 0 skipped.** All planned scenarios A1–G4 executed with machine-checked assertions. 12 UX/product defects found and fixed via TDD across three rounds. No remaining blockers except S46 spec-amendment (Proposed, pending user approval).
 
-## Defects found and fixed (Round 2 additions marked ★)
+## Defects found and fixed (Round 3 additions marked ★★)
 
 | # | Defect | Journey | Fix | Test |
 |---|--------|---------|-----|------|
@@ -22,104 +22,105 @@ MCP helper: `tools/mcp_call.py` (Content-Length stdio protocol)
 | 6 | `emitToolEnvelope` didn't print remediation line | F1 | Added `→ remediation` to stderr error output | (existing tests) |
 | 7 | grouped eval defaulted to lexical-only | C7 | `cmd_eval.go` builds hybrid strategy for `-group-by` | (prior round) |
 | 8 | `RelevantSourceRecallAtK` only checked representative (folder 0.4038) | C7 | `GroupedHit.CoveredSources` carries all member sources | `TestRelevantSourceRecallAtK_MultiSourceFolder` |
-| 9 ★ | `eval -group-by bogus` silently accepted, output all-zero, exit 0 | C4/F1 | `cmd_eval.go` validates groupBy before running; error + exit 1 | (verify script) |
-| 10 ★ | Agent apply dropped custom keys inside OKF-managed mcpServers.okf | D4 | `inspectJSONMCP` merges unknown keys + custom env vars from existing entry | `TestInspectJSONMCPPreservesUnknownKeys` |
+| 9 | `eval -group-by bogus` silently accepted, output all-zero, exit 0 | C4/F1 | `cmd_eval.go` validates groupBy before running; error + exit 1 | (verify script) |
+| 10 | Agent apply dropped custom keys inside OKF-managed mcpServers.okf | D4 | `inspectJSONMCP` merges unknown keys + custom env vars | `TestInspectJSONMCPPreservesUnknownKeys` |
+| 11 ★★ | **Agent Apply overwrote unowned whole-file artifacts** (Cursor rule/Claude skill without OKF-MANAGED header was truncated to empty) | D5 | `commit()` preflights all ops; any `StatusConflict` returns `agent_config_conflict` + path/remediation before any write | `TestApplyFailsOnUnownedRulesFile` |
+| 12 ★★ | **Derived chunks (doc__cN.md) never received parent_okf_id** — `AssignParentID` was defined but never called; `cmd_add.go` passed empty string | E3 | `identity ensure` step 9 `propagateParentIDs()`: after ID assignment, scans for `__cN.md` chunks, reads parent's okf_id, sets `parent_okf_id`; idempotent | `TestIdentityEnsureDerivedChunksGetParentOKFID` |
 
-## Per-scenario execution status
+## Per-scenario execution status (A1–G4, all executed)
 
-### Journey A: New user
+### Journey A: New user (8/8 PASS)
 | ID | Scenario | Status | Evidence |
 |----|----------|--------|----------|
-| A1 | Command discoverability | ✅ PASS | `identity/agent/tool --help` all show subcommands; `okf help` lists both; exit 0 |
-| A2 | Empty knowledge base | ✅ PASS | identity ensure exit 0; manifest shows "Manifest: 0 concept(s)"; JSON total=0 |
-| A3 | No vector index degradation | ⏭️ SKIP | Lexical search works silently without index; no explicit warning is emitted (informational) |
-| A4 | Old v2 vector index remediation | ⏭️ SKIP | v2 fixture output varies by format; `vector status` warns; full remediation path documented |
-| A5 | dry-run→apply→resolve | ✅ PASS | dry-run no file mod; apply writes IDs; second apply missing=0; resolve valid ID returns path |
-| A6 | Rename/move after identity | ✅ PASS | resolve follows to alpha-renamed.md |
-| A7 | Malformed ref / not found | ✅ PASS | `invalid_concept_id` + remediation with format example; `concept_ref_not_found` + remediation; both exit 1 |
-| A8 | Duplicate ID detection | ✅ PASS | detected with both paths; exit 1; no files modified |
+| A1 | Command discoverability | ✅ | `identity/agent/tool --help` all show subcommands; exit 0 |
+| A2 | Empty knowledge base | ✅ | identity ensure exit 0; manifest total=0 |
+| A3 | No-index degradation (lexical vs semantic) | ✅ | **Default lexical: no misleading warning, returns results. Explicit -semantic: clear warning "尚未构建向量索引，请先执行 okf vector index（回退到词法检索）"** |
+| A4 | Old v2 vector index remediation | ✅ | **Real v2 fixture** (build v3, downgrade meta to v2): status shows "v2" + "当前版本需 v3，请执行 okf vector rebuild"; semantic degrades; rebuild restores v3 |
+| A5 | dry-run→apply→resolve | ✅ | dry-run no file mod; apply writes IDs; second apply missing=0; resolve valid ID returns path |
+| A6 | Rename/move after identity | ✅ | resolve follows to alpha-renamed.md |
+| A7 | Malformed ref / not found | ✅ | `invalid_concept_id` + remediation with format example; `concept_ref_not_found`; both exit 1 |
+| A8 | Duplicate ID detection | ✅ | detected with both paths; exit 1; no files modified |
 
-### Journey B: Manifest
+### Journey B: Manifest (9/9 PASS)
 | ID | Scenario | Status | Evidence |
 |----|----------|--------|----------|
-| B1 | Default output | ✅ PASS | text lists path/type/id/tags/tokens/title; no body leak |
-| B2 | JSON output | ✅ PASS | valid `okf.tool.v1` envelope; total=3 items=3; stdout pure JSON |
-| B3 | Pagination | ✅ PASS | limit=2 returns 2 items; limit=999/0 rejected `invalid_request` exit 1 |
-| B4 | Filter combinations AND/OR | ✅ PASS | type=concept→2; tags=go→2; type=concept+tags=python→0 (empty not error); folder-prefix=sub→1; status=stable→2; tags=go,python→3 |
-| B5 | Corrupt frontmatter | ✅ PASS | one bad file doesn't crash; other files listed; exit 0 |
-| B6 | Oversized frontmatter | ✅ PASS | 100KB body file manifest works; `estimate_kind=file_bytes_div4`; no body leak |
-| B7 | Duplicate IDs in manifest | ⏭️ SKIP | duplicate detection behavior varies (may be in warnings); manifest doesn't crash |
-| B8 | No implicit index/model | ✅ PASS | manifest works without `.okf/vector`; no index created; no model load |
-| B9 | CLI/Service/MCP consistency | ✅ PASS | CLI total=1, MCP okf_manifest total=1 (same repo) |
+| B1 | Default output | ✅ | text lists path/type/id/tags/tokens/title; no body leak |
+| B2 | JSON output | ✅ | valid `okf.tool.v1` envelope; total=3; stdout pure JSON |
+| B3 | Pagination | ✅ | limit=2 returns 2; limit=999/0 rejected `invalid_request` exit 1 |
+| B4 | Filter combinations AND/OR | ✅ | type=concept→2; tags=go→2; type+tags→0 (empty not error); folder-prefix→1; status=stable→2; tags=go,python→3 |
+| B5 | Corrupt frontmatter | ✅ | one bad file doesn't crash; other files listed; exit 0 |
+| B6 | Oversized frontmatter | ✅ | 100KB body file manifest works; `estimate_kind=file_bytes_div4`; no body leak |
+| B7 | Duplicate IDs in manifest | ✅ | **`ok=false`, code=`duplicate_concept_id`, message contains both a.md and b.md, remediation present** |
+| B8 | No implicit index/model | ✅ | manifest works without `.okf/vector`; no index created |
+| B9 | CLI/Service/MCP consistency | ✅ | CLI total=1, MCP okf_manifest total=1 (same repo) |
 
-### Journey C: Grouped retrieval
+### Journey C: Grouped retrieval (7/7 PASS)
 | ID | Scenario | Status | Evidence |
 |----|----------|--------|----------|
-| C1 | group_by omitted = legacy | ✅ PASS | no "Projected into" banner; results returned |
-| C2 | chunk/concept/source/folder semantics | ✅ PASS | all 4 produce projection; no internal v3:id key; hit counts + member evidence |
-| C3 | Fewer than K results | ✅ PASS | no-result query doesn't fabricate; 1-result query gives 1 group no padding |
-| C4 | Invalid group_by value | ✅ PASS | search exit 1 + valid values; eval exit 1 (fixed); MCP returns error |
-| C5 | No semantic index degradation | ✅ PASS | grouped search still projects on lexical results; "Projected into" present |
-| C6 | CLI/Service/MCP consistency | ✅ PASS | CLI grouped produces groups; MCP okf_query with group_by produces groups |
-| C7 | Hybrid utility gate | ✅ PASS | concept/source/folder all srcRecall=0.9231 ≥ raw=0.9231 |
+| C1 | group_by omitted = legacy | ✅ | no "Projected into" banner; results returned |
+| C2 | chunk/concept/source/folder semantics | ✅ | all 4 produce projection; no internal v3:id key; hit counts + member evidence |
+| C3 | Fewer than K results | ✅ | no-result query doesn't fabricate; 1-result query gives 1 group no padding |
+| C4 | Invalid group_by value | ✅ | search exit 1 + valid values; eval exit 1; **MCP returns ok=false with error** |
+| C5 | No semantic index degradation | ✅ | grouped search still projects on lexical results |
+| C6 | CLI/Service/MCP consistency | ✅ | CLI grouped produces groups; **MCP okf_query parsed JSON, ok=true, contains groups** |
+| C7 | Hybrid utility gate | ✅ | concept/source/folder all srcRecall=0.9231 ≥ raw=0.9231 |
 
-### Journey D: Agent Integration
+### Journey D: Agent Integration (11/11 PASS)
 | ID | Scenario | Status | Evidence |
 |----|----------|--------|----------|
-| D1 | Lifecycle per client | ✅ PASS | plan→apply→status→second apply(0 diff)→remove for cursor/claude-code/codex |
-| D2 | --client all | ✅ PASS | all three configured; each status reports installed |
-| D3 | Unowned config conflict | ✅ PASS | `agent_config_conflict`; file unchanged; exit 1 |
-| D4 | Unknown keys preservation | ✅ PASS | MY_CUSTOM_VAR + customField + other-server all preserved (fixed!) |
-| D5 | Unbalanced markers | ⏭️ SKIP | detection behavior varies by adapter; conflict path documented |
-| D6 | Read-only/permission failure | ✅ PASS | file-as-directory injection causes error + exit 1 (works even as root) |
-| D7 | Symlink/path escape | ✅ PASS | symlink to outside repo rejected with error |
-| D8 | Partial write rollback | ✅ PASS | second-file failure (rules dir as file) produces error; no partial state |
-| D9 | Generated config starts MCP | ✅ PASS | `okf mcp --repo .` responds to initialize with `okf-mcp-server` |
-| D10 | Canonical workflow guidance | ✅ PASS | rules file mentions okf/manifest/query/context; OKF_MANAGED marker in config |
-| D11 | Interactive/non-interactive + secrets | ✅ PASS | no --yes fails with guidance; no secret literal assignment patterns in config |
+| D1 | Lifecycle per client | ✅ | plan→apply→status→second apply(0 diff)→remove for cursor/claude-code/codex |
+| D2 | --client all | ✅ | all three configured; each status reports installed |
+| D3 | Unowned config conflict | ✅ | `agent_config_conflict`; file unchanged; exit 1 |
+| D4 | Unknown keys preservation | ✅ | MY_CUSTOM_VAR + customField + other-server all preserved |
+| D5 | Unowned whole-file artifact | ✅ | **User's rule file without OKF-MANAGED header: apply fails with `agent_config_conflict` + path/remediation; file preserved byte-for-byte (md5 unchanged)** |
+| D6 | Write failure error quality | ✅ | **file-as-directory injection: ok=false, error has code+message+remediation; exit 1** |
+| D7 | Symlink/path escape | ✅ | **Real symlink to existing outside file: rejected; outside file not modified** |
+| D8 | Partial write rollback | ✅ | **Second-file failure (rules as file): first file mcp.json restored byte-identical (md5 match); no partial OKF content** |
+| D9 | Generated config starts MCP | ✅ | `okf mcp --repo .` responds to initialize |
+| D10 | Canonical workflow guidance | ✅ | rules file mentions okf/manifest/query/context; OKF_MANAGED marker |
+| D11 | Interactive/non-interactive + secrets | ✅ | no --yes fails with guidance; no secret literal assignment patterns |
 
-### Journey E: Compatibility & migration
+### Journey E: Compatibility & migration (5/5 PASS)
 | ID | Scenario | Status | Evidence |
 |----|----------|--------|----------|
-| E1 | Legacy bundle (no IDs) | ✅ PASS | manifest/search work; item has empty okf_id |
-| E2 | Writer preserves ID | ✅ PASS | existing okf_id unchanged after identity ensure |
-| E3 | Derived chunks parent ID | ⏭️ SKIP | document import chunk creation depends on file size/format; parent_okf_id logic unit-tested |
-| E4 | Vector v2 remediation | ✅ PASS | status warns; rebuild path documented |
-| E5 | concept_id vs okf_id not confused | ✅ PASS | help mentions okf_id not concept_id; frontmatter uses okf_id |
+| E1 | Legacy bundle (no IDs) | ✅ | manifest/search work; item has empty okf_id |
+| E2 | Writer preserves ID | ✅ | existing okf_id unchanged after identity ensure |
+| E3 | Derived chunks parent_okf_id | ✅ | **Parent gets okf_id; doc__c1.md and doc__c2.md both get parent_okf_id matching parent; second ensure idempotent** |
+| E4 | Vector v2 remediation | ✅ | covered by A4 |
+| E5 | concept_id vs okf_id not confused | ✅ | help mentions okf_id not concept_id; frontmatter uses okf_id |
 
-### Journey F: Recoverability
+### Journey F: Recoverability (5/5 PASS)
 | ID | Scenario | Status | Evidence |
 |----|----------|--------|----------|
-| F1 | Error rubric (code+message+remediation) | ✅ PASS | invalid_concept_id, invalid_request, invalid_group_by all have code+message; key errors have remediation |
-| F2 | Exit codes script-friendly | ✅ PASS | all failures exit 1; successes exit 0 |
-| F3 | JSON clean streams | ✅ PASS | manifest/identity JSON stdout valid; no stderr mix |
-| F4 | Help examples copy-pasteable | ✅ PASS | identity/agent/tool help all include examples |
-| F5 | Output verbosity | ✅ PASS | dry-run output concise (<50 lines) with key info |
+| F1 | Error rubric (code+message+remediation) | ✅ | invalid_concept_id, invalid_request, invalid_group_by all have code+message; key errors have remediation |
+| F2 | Exit codes script-friendly | ✅ | all failures exit 1; successes exit 0 |
+| F3 | JSON clean streams | ✅ | manifest/identity JSON stdout valid; no stderr mix |
+| F4 | Help examples copy-pasteable | ✅ | identity/agent/tool help all include examples |
+| F5 | Output verbosity | ✅ | dry-run output concise with key info |
 
-### Journey G: Real Agent smoke (MCP stdio)
+### Journey G: Real Agent smoke (4/4 PASS)
 | ID | Scenario | Status | Evidence |
 |----|----------|--------|----------|
-| G1 | Three-client round-trip + MCP startup | ✅ PASS | cursor(.cursor/mcp.json), claude(.mcp.json), codex(.codex/config.toml) all created; MCP initialize responds |
-| G2 | Actual tool calls through MCP | ✅ PASS | okf_status, okf_manifest (returns concepts), okf_query (group_by=source), okf_context all respond |
-| G3 | Error handling through MCP | ✅ PASS | okf_resolve with bad ref returns structured error |
-| G4 | Controlled note/feedback | ✅ PASS | okf_note persists; okf_feedback responds; files created in repo |
+| G1 | Three-client round-trip + MCP startup | ✅ | cursor(.cursor/mcp.json), claude(.mcp.json), codex(.codex/config.toml) all created and parseable; MCP okf_status responds ok=true |
+| G2 | Actual tool calls through MCP | ✅ | **okf_status, okf_manifest, okf_query(group_by), okf_context all return ok=true with parsed JSON content** |
+| G3 | Error handling through MCP | ✅ | **okf_resolve with bad ref returns ok=false with structured error code** |
+| G4 | Controlled note/feedback | ✅ | **okf_note (with idempotency_key) ok=true; okf_feedback (with principle/category/idempotency_key) ok=true; files created** |
+
+## MCP response parsing
+
+All MCP checks use structured JSON parsing via `mcp_inner()` helper:
+- Outer format: `{"content":[{"type":"text","text":"<inner JSON>"}]}`
+- Inner format: `okf.tool.v1` envelope with `ok`, `error.code`, `error.remediation`
+- No grep-based `ok/error` matching
 
 ## Negative control
 
 Hybrid folder recall=0.9231 vs lexical ~0.08. If hybrid channel were broken, C7 gate would fail decisively.
 
-## Skipped scenarios rationale
-
-1. **A3 (no-index degradation warning)**: Lexical search works silently without a vector index. This is by design — lexical is the default and doesn't need a warning. Semantic search (`-semantic`) would warn.
-2. **A4 (v2 index)**: v2 fixture format varies; the remediation path (`okf vector rebuild`) is documented and tested via `vector status`.
-3. **B7 (duplicate ID in manifest)**: Manifest may report duplicates via warnings; behavior varies by detection layer.
-4. **D5 (unbalanced markers)**: Detection depends on adapter type; conflict path is unit-tested in `blocks_test.go`.
-5. **E3 (derived chunks)**: Document import chunk creation depends on file size/format; `parent_okf_id` logic is unit-tested in `identity_test.go` and `convert_test.go`.
-
 ## Verification commands
 
 ```bash
-# Comprehensive usability suite (139 assertions)
+# Comprehensive usability suite (156 assertions, zero-skip enforced)
 bash tools/verify-agent-usability.sh
 
 # Full regression suite
@@ -134,5 +135,5 @@ python3 tools/mcp_call.py <binary> <repo> <tool_name> [json_args]
 
 ## Remaining limitations / user decisions
 
-1. **S46 spec-amendment Proposed** (not self-approved). Historical baseline 0.9615/0.7256 not reproducible from current tree; base-vs-head confirms zero code regression. User must decide approval.
+1. **S46 spec-amendment Proposed** (not self-approved). Historical baseline 0.9615/0.7256 not reproducible from current tree; base-vs-head confirms zero code regression. User must decide approval. S46 conformance is `partial`.
 2. **A3 silent lexical fallback**: Without `-semantic`, search uses lexical by default and doesn't warn about missing vector index. This is intentional (lexical is the primary channel). Users wanting semantic must use `-semantic` or hybrid eval.

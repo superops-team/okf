@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"os"
@@ -216,7 +217,99 @@ func ensureWithEnv(root string, apply bool, env migrationEnv) (*EnsureReport, er
 		}
 		written = append(written, fileState{absPath: pe.absPath, rel: pe.relPath, original: original})
 	}
+
+	// 9. Propagate parent_okf_id to derived chunks (E3).
+	//    Derived chunks are named <parent>__cN.md. After IDs are assigned,
+	//    each chunk must carry parent_okf_id pointing to its parent concept
+	//    so concept-level grouping can trace chunks back. This is idempotent:
+	//    chunks that already have the correct parent_okf_id are untouched.
+	if err := propagateParentIDs(root, env, &written); err != nil {
+		return rollback(written, env, fmt.Errorf("propagate parent_okf_id: %w", err))
+	}
 	return report, nil
+}
+
+// derivedChunkBase returns the parent base name for a derived chunk filename,
+// or "" if the path is not a derived chunk. "doc__c1.md" -> "doc".
+func derivedChunkBase(rel string) string {
+	base := filepath.Base(rel)
+	if !strings.HasSuffix(base, ".md") {
+		return ""
+	}
+	name := strings.TrimSuffix(base, ".md")
+	idx := strings.LastIndex(name, "__c")
+	if idx < 0 {
+		return ""
+	}
+	suffix := name[idx+3:]
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	if len(suffix) == 0 {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(rel), name[:idx])
+}
+
+// propagateParentIDs sets parent_okf_id on every derived chunk by reading the
+// parent concept's okf_id. Chunks whose parent has no okf_id are skipped.
+func propagateParentIDs(root string, env migrationEnv, written *[]fileState) error {
+	// Build base-rel -> okf_id map for all concept files.
+	entries, err := collectConceptFiles(root, env)
+	if err != nil {
+		return err
+	}
+	idByBase := make(map[string]string, len(entries))
+	for _, e := range entries {
+		raw, perr := readExistingIDRaw(env, e.absPath)
+		if perr != nil || raw == "" {
+			continue
+		}
+		if _, err := Parse(raw); err != nil {
+			continue
+		}
+		idByBase[e.relPath] = raw
+	}
+
+	for _, e := range entries {
+		parentBase := derivedChunkBase(e.relPath)
+		if parentBase == "" {
+			continue
+		}
+		parentID, ok := idByBase[parentBase+".md"]
+		if !ok || parentID == "" {
+			continue
+		}
+		original, err := env.readFile(e.absPath)
+		if err != nil {
+			return err
+		}
+		pc, err := parser.ParseConceptBytes(e.relPath, original)
+		if err != nil {
+			continue // unparseable chunk: skip, don't fail the migration
+		}
+		if pc.CustomFields == nil {
+			pc.CustomFields = map[string]any{}
+		}
+		if existing, _ := pc.CustomFields[ParentField].(string); existing == parentID {
+			continue // already correct: idempotent
+		}
+		pc.CustomFields[ParentField] = parentID
+		updated, err := parser.SerializeConcept(pc, true)
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(original, updated) {
+			continue
+		}
+		if err := env.writeAtomic(e.absPath, updated); err != nil {
+			return err
+		}
+		*written = append(*written, fileState{absPath: e.absPath, rel: e.relPath, original: original})
+	}
+	return nil
 }
 
 // fileState records an in-memory original byte snapshot for rollback.

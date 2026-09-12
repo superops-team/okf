@@ -21,6 +21,26 @@ pass() { PASS=$((PASS+1)); log "PASS: $*"; }
 fail() { FAIL=$((FAIL+1)); log "FAIL: $*"; }
 skip() { SKIP=$((SKIP+1)); log "SKIP: $*"; }
 
+# mcp_inner extracts the inner tool JSON from an MCP response (content[0].text).
+# Usage: mcp_inner "$RESP" | python3 -c "..."
+mcp_inner() { printf '%s' "$1" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['content'][0]['text'])" 2>/dev/null; }
+
+# mcp_ok checks if MCP response is ok=true. Usage: mcp_ok "$RESP" && echo success
+mcp_ok() { mcp_inner "$1" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)" 2>/dev/null; }
+
+# mcp_err checks if MCP response is ok=false with error code. Usage: mcp_err "$RESP" code_name
+mcp_err() {
+  local want="${2:-}"
+  mcp_inner "$1" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+assert d.get('ok')==False, 'ok should be false'
+err=d.get('error',{})
+assert err.get('code'), 'error code must be present'
+if '$want': assert err.get('code')=='$want', f'code={err.get(\"code\")} want=$want'
+" 2>/dev/null
+}
+
 assert_exit() {
   local want="$1" desc="$2"; shift 2
   local got=0
@@ -90,11 +110,14 @@ title: A
 ---
 body alpha
 EOF
-A3_OUT="$("$BIN" search -path "$NOIDX/knowledge" -q "alpha" 2>&1 || true)"
-if printf '%s' "$A3_OUT" | grep -qi "warning\|semantic\|lexical\|fallback\|回退"; then pass "A3: no-index search has degradation warning"; else log "A3: no-index search output: $A3_OUT (informational)"; skip "A3: no explicit degradation warning (lexical works silently)"; fi
-assert_contains "A" "A3: no-index search still returns lexical results" "$BIN" search -path "$NOIDX/knowledge" -q "alpha"
+A3_LEX="$("$BIN" search -path "$NOIDX/knowledge" -q "alpha" 2>&1 || true)"
+if printf '%s' "$A3_LEX" | grep -qi "warning\|尚未构建\|回退"; then fail "A3: default lexical search should NOT show misleading warning (got: $A3_LEX)"; else pass "A3: default lexical search works without index, no misleading warning"; fi
+assert_contains "A" "A3: default lexical returns results without index" "$BIN" search -path "$NOIDX/knowledge" -q "alpha"
+A3_SEM="$("$BIN" search -path "$NOIDX/knowledge" -q "alpha" -semantic 2>&1 || true)"
+if printf '%s' "$A3_SEM" | grep -qi "尚未构建向量索引\|okf vector index\|回退"; then pass "A3: explicit -semantic without index shows warning + remediation"; else fail "A3: explicit -semantic without index missing warning (got: $A3_SEM)"; fi
+assert_contains "A" "A3: explicit -semantic falls back to lexical results" printf '%s' "$A3_SEM"
 
-# A4: Old v2 vector index — remediation
+# A4: Old v2 vector index — real fixture (build v3, downgrade meta to v2)
 V2REPO="$TMPDIR_BASE/v2repo"
 git_init_repo "$V2REPO"
 mkdir -p "$V2REPO/knowledge"
@@ -103,13 +126,26 @@ cat > "$V2REPO/knowledge/a.md" <<'EOF'
 type: concept
 title: A
 ---
-body
+body alpha
 EOF
-mkdir -p "$V2REPO/.okf/vector"
-printf 'v2-fake-index-data' > "$V2REPO/.okf/vector/index.bin"
-printf '{"dims":384,"model":"minilm-int8","okf_version":"0.6.0"}' > "$V2REPO/.okf/vector/meta.json"
+"$BIN" vector rebuild -path "$V2REPO" >/dev/null 2>&1 || true
+# Downgrade meta to v2 to simulate old index.
+python3 -c "
+import json
+p='$V2REPO/.okf/vector/index.meta.json'
+d=json.load(open(p))
+d['index_format_version']=2
+json.dump(d,open(p,'w'))
+" 2>/dev/null
 V2_STATUS="$("$BIN" vector status --path "$V2REPO" 2>&1 || true)"
-if printf '%s' "$V2_STATUS" | grep -qi "incompatible\|rebuild\|v2\|旧\|损坏"; then pass "A4: v2 vector status warns incompatibility"; else log "A4: v2 status: $V2_STATUS (informational)"; skip "A4: v2 status output varies"; fi
+if printf '%s' "$V2_STATUS" | grep -q "v2"; then pass "A4: vector status shows v2 format"; else fail "A4: vector status does not show v2 (got: $V2_STATUS)"; fi
+if printf '%s' "$V2_STATUS" | grep -qi "rebuild\|v3\|当前版本"; then pass "A4: vector status recommends rebuild"; else fail "A4: vector status missing rebuild recommendation"; fi
+V2_SEM="$("$BIN" search -path "$V2REPO/knowledge" -q "alpha" -semantic 2>&1 || true)"
+if printf '%s' "$V2_SEM" | grep -qi "尚未构建\|回退\|warning"; then pass "A4: semantic search on v2 index degrades with warning"; else log "A4: semantic search output: $V2_SEM"; fi
+# Rebuild should restore v3.
+"$BIN" vector rebuild -path "$V2REPO" >/dev/null 2>&1 || true
+V3_STATUS="$("$BIN" vector status --path "$V2REPO" 2>&1 || true)"
+if printf '%s' "$V3_STATUS" | grep -q "v3"; then pass "A4: rebuild restores v3 format"; else fail "A4: rebuild did not restore v3 (got: $V3_STATUS)"; fi
 
 # A5: First identity dry-run → apply → resolve
 IDREPO="$TMPDIR_BASE/idrepo"
@@ -338,12 +374,19 @@ okf_id: okf_0123456789abcdef0123456789abcdef
 body B
 EOF
 DUPMAN_JSON="$("$BIN" tool manifest --repo "$DUPMAN" --dir knowledge --json 2>&1 || true)"
-# Manifest should detect duplicate and report error or warning with both paths
-if printf '%s' "$DUPMAN_JSON" | grep -qi "duplicate"; then
-  pass "B7: duplicate ID in manifest detected"
+# Manifest must fail closed: ok=false, code=duplicate_concept_id, both paths in message
+if printf '%s' "$DUPMAN_JSON" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+assert d.get('ok')==False, 'ok should be false'
+err=d.get('error',{})
+assert err.get('code')=='duplicate_concept_id', f'code={err.get(\"code\")}'
+assert 'a.md' in err.get('message','') and 'b.md' in err.get('message',''), 'both paths must appear'
+assert err.get('remediation',''), 'remediation must be present'
+" 2>/dev/null; then
+  pass "B7: duplicate ID manifest fails closed with code+paths+remediation"
 else
-  log "B7: duplicate ID manifest output: $(printf '%s' "$DUPMAN_JSON" | head -c 300) (informational)"
-  skip "B7: duplicate ID detection behavior varies (may be in warnings)"
+  fail "B7: duplicate ID manifest did not fail closed (got: $(printf '%s' "$DUPMAN_JSON" | head -c 300))"
 fi
 
 # B8: No implicit index/model startup
@@ -412,9 +455,13 @@ assert_exit 1 "C4: invalid group_by exits 1" "$BIN" search -path "$IDREPO/knowle
 assert_contains "Valid group-by" "C4: invalid group_by lists valid values" "$BIN" search -path "$IDREPO/knowledge" -q x -group-by bogus
 # eval invalid group_by
 assert_exit 1 "C4: eval invalid group_by exits 1" "$BIN" eval -golden "$REPO_ROOT/pkg/eval/testdata/golden_semantic.json" -path "$REPO_ROOT/docs/knowledge" -group-by bogus
-# MCP invalid group_by
+# MCP invalid group_by — must return ok=false with error
 MCP_BAD_QUERY="$(python3 "$MCP_CALL" "$BIN" "$MCPREPO" okf_query '{"query":"test","group_by":"bogus"}' 2>&1 || true)"
-if printf '%s' "$MCP_BAD_QUERY" | grep -qi "invalid_group_by\|isError.*true\|error"; then pass "C4: MCP invalid group_by returns error"; else log "C4: MCP bad query: $(printf '%s' "$MCP_BAD_QUERY" | head -c 200)"; skip "C4: MCP error format varies"; fi
+if mcp_err "$MCP_BAD_QUERY"; then
+  pass "C4: MCP invalid group_by returns ok=false with error"
+else
+  fail "C4: MCP invalid group_by did not return error (got: $(printf '%s' "$MCP_BAD_QUERY" | head -c 200))"
+fi
 
 # C5: No semantic index — degradation warning for grouped search
 NOIDX3="$TMPDIR_BASE/noidx3"
@@ -436,7 +483,11 @@ CLI_GROUPED="$("$BIN" search -path "$MANREPO/knowledge" -q "body" -group-by sour
 MCP_QUERY="$(python3 "$MCP_CALL" "$BIN" "$MCPREPO" okf_query '{"query":"MCP","group_by":"source"}' 2>&1 || true)"
 # Both should produce grouped output (CLI has "Projected into", MCP has groups in JSON)
 if printf '%s' "$CLI_GROUPED" | grep -q "Projected into"; then pass "C6: CLI grouped query produces groups"; else fail "C6: CLI grouped query no groups"; fi
-if printf '%s' "$MCP_QUERY" | grep -q "group\|source"; then pass "C6: MCP grouped query produces groups"; else log "C6: MCP query output: $(printf '%s' "$MCP_QUERY" | head -c 200)"; skip "C6: MCP output format inspection"; fi
+if mcp_ok "$MCP_QUERY" && mcp_inner "$MCP_QUERY" | grep -q "group\|source"; then
+  pass "C6: MCP grouped query produces groups (JSON parsed)"
+else
+  fail "C6: MCP grouped query no groups (got: $(printf '%s' "$MCP_QUERY" | head -c 200))"
+fi
 
 # C7: Hybrid utility gate — all three projections >= raw hybrid recall
 "$BIN" vector rebuild -path "$REPO_ROOT/docs/knowledge" >/dev/null 2>&1 || true
@@ -514,15 +565,31 @@ else
 fi
 
 # D5: Unbalanced markers
+# D5: Unowned whole-file artifact (user's own rule without OKF-MANAGED header)
+# must conflict and be preserved byte-for-byte.
 UNBALREPO="$TMPDIR_BASE/unbalrepo"
 git_init_repo "$UNBALREPO"
 mkdir -p "$UNBALREPO/.cursor/rules"
-echo '<!-- OKF_MANAGED_BEGIN agentconfig-v1 -->' > "$UNBALREPO/.cursor/rules/okf.md"
-# Also need mcp.json for apply to attempt
-mkdir -p "$UNBALREPO/.cursor"
 echo '{"mcpServers":{}}' > "$UNBALREPO/.cursor/mcp.json"
+# User's own rule file — no OKF-MANAGED header, must NOT be overwritten.
+printf '# My custom rule\n# Do not overwrite\n' > "$UNBALREPO/.cursor/rules/okf.md"
+D5_BEFORE="$(md5sum "$UNBALREPO/.cursor/rules/okf.md" | awk '{print $1}')"
 UNBAL_OUT="$("$BIN" agent apply --client cursor --repo "$UNBALREPO" --yes --format json 2>&1 || true)"
-if printf '%s' "$UNBAL_OUT" | grep -qi "conflict\|marker\|unbalanced\|error"; then pass "D5: unbalanced markers detected"; else log "D5: unbalanced output: $(printf '%s' "$UNBAL_OUT" | head -c 300)"; skip "D5: unbalanced marker detection behavior"; fi
+if printf '%s' "$UNBAL_OUT" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+assert d.get('ok')==False, 'apply should fail'
+err=d.get('error',{})
+assert err.get('code')=='agent_config_conflict', f'code={err.get(\"code\")}'
+assert err.get('path',''), 'path must be present'
+assert err.get('remediation',''), 'remediation must be present'
+" 2>/dev/null; then
+  pass "D5: unowned rules file conflicts with code+path+remediation"
+else
+  fail "D5: unowned rules file did not conflict (got: $(printf '%s' "$UNBAL_OUT" | head -c 300))"
+fi
+D5_AFTER="$(md5sum "$UNBALREPO/.cursor/rules/okf.md" | awk '{print $1}')"
+if [ "$D5_BEFORE" = "$D5_AFTER" ]; then pass "D5: unowned rules file preserved byte-for-byte"; else fail "D5: unowned rules file was modified"; fi
 
 # D6: Read-only/permission failure (inject failure by making .cursor a regular
 # file instead of a directory — this prevents mcp.json creation even as root,
@@ -531,36 +598,71 @@ READONLYREPO="$TMPDIR_BASE/readonlyrepo"
 git_init_repo "$READONLYREPO"
 echo "not-a-directory" > "$READONLYREPO/.cursor"  # .cursor is a file, not a dir
 RO_OUT="$("$BIN" agent apply --client cursor --repo "$READONLYREPO" --yes --format json 2>&1 || true)"
-if printf '%s' "$RO_OUT" | grep -qi "error\|fail\|permission\|denied\|write\|cannot"; then pass "D6: unwritable target produces error"; else log "D6: readonly output: $(printf '%s' "$RO_OUT" | head -c 300)"; fail "D6: no error on write failure"; fi
+if printf '%s' "$RO_OUT" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+assert d.get('ok')==False, 'apply should fail'
+err=d.get('error',{})
+assert err.get('code'), 'error code must be present'
+assert err.get('message'), 'error message must be present'
+assert err.get('remediation'), 'remediation must be present'
+" 2>/dev/null; then
+  pass "D6: write failure returns code+message+remediation"
+else
+  fail "D6: write failure missing code/message/remediation (got: $(printf '%s' "$RO_OUT" | head -c 300))"
+fi
 assert_exit 1 "D6: write failure exits non-zero" "$BIN" agent apply --client cursor --repo "$READONLYREPO" --yes --format json 2>/dev/null
 rm -f "$READONLYREPO/.cursor" 2>/dev/null || true
 
-# D7: Symlink/path escape
+# D7: Symlink/path escape — symlink pointing outside repo must be rejected
 ESCAPEREPO="$TMPDIR_BASE/escaperepo"
 git_init_repo "$ESCAPEREPO"
 mkdir -p "$ESCAPEREPO/.cursor"
-# Symlink mcp.json to outside repo
-ln -s /tmp/escaped-target.json "$ESCAPEREPO/.cursor/mcp.json" 2>/dev/null || true
+# Create a real target file outside the repo, then symlink to it
+echo '{"mcpServers":{"evil":"outside"}}' > /tmp/escaped-target.json
+ln -sf /tmp/escaped-target.json "$ESCAPEREPO/.cursor/mcp.json" 2>/dev/null || true
 ESC_OUT="$("$BIN" agent apply --client cursor --repo "$ESCAPEREPO" --yes --format json 2>&1 || true)"
-if printf '%s' "$ESC_OUT" | grep -qi "error\|escape\|symlink\|outside\|path"; then pass "D7: symlink escape rejected"; else log "D7: symlink output: $(printf '%s' "$ESC_OUT" | head -c 300)"; skip "D7: symlink handling behavior"; fi
+if printf '%s' "$ESC_OUT" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+assert d.get('ok')==False, 'apply should fail on symlink escape'
+err=d.get('error',{})
+assert err.get('code'), 'error code must be present'
+" 2>/dev/null; then
+  pass "D7: symlink escape rejected with error"
+else
+  fail "D7: symlink escape not rejected (got: $(printf '%s' "$ESC_OUT" | head -c 300))"
+fi
+# Verify outside file was NOT modified
+if grep -q '"evil"' /tmp/escaped-target.json 2>/dev/null; then pass "D7: outside file not modified"; else fail "D7: outside file was modified"; fi
 rm -f /tmp/escaped-target.json 2>/dev/null || true
 
-# D8: Partial write failure → rollback (make rules dir read-only after mcp.json writable)
+# D8: Partial write failure → no partial state (first file must be byte-identical)
 ROLLBACKREPO="$TMPDIR_BASE/rollbackrepo"
 git_init_repo "$ROLLBACKREPO"
 mkdir -p "$ROLLBACKREPO/.cursor"
-echo '{"mcpServers":{}}' > "$ROLLBACKREPO/.cursor/mcp.json"
-mkdir -p "$ROLLBACKREPO/.cursor/rules"
-chmod 555 "$ROLLBACKREPO/.cursor/rules"  # rules dir read-only → second file write fails
+# mcp.json has user content — must survive failed apply unchanged
+printf '{"mcpServers":{"user":"original-value"}}\n' > "$ROLLBACKREPO/.cursor/mcp.json"
+D8_MD5_BEFORE="$(md5sum "$ROLLBACKREPO/.cursor/mcp.json" | awk '{print $1}')"
+# Make .cursor/rules a FILE (not dir) → writing rules/okf.md fails ("not a directory")
+echo "blocked" > "$ROLLBACKREPO/.cursor/rules"
 RB_OUT="$("$BIN" agent apply --client cursor --repo "$ROLLBACKREPO" --yes --format json 2>&1 || true)"
-chmod 755 "$ROLLBACKREPO/.cursor/rules" 2>/dev/null || true
-# After failure, mcp.json should be rolled back (not partially modified)
-if printf '%s' "$RB_OUT" | grep -qi "error\|fail\|rollback"; then
-  pass "D8: second-file failure produces error"
+rm -f "$ROLLBACKREPO/.cursor/rules" 2>/dev/null || true
+# Assert apply failed
+if printf '%s' "$RB_OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('ok')==False" 2>/dev/null; then
+  pass "D8: second-file failure causes apply to fail"
 else
-  log "D8: rollback output: $(printf '%s' "$RB_OUT" | head -c 300) (may be root)"
-  skip "D8: rollback may not fail as root"
+  fail "D8: apply did not fail on second-file error (got: $(printf '%s' "$RB_OUT" | head -c 200))"
 fi
+# Assert mcp.json is byte-identical to original (rollback or never-written)
+D8_MD5_AFTER="$(md5sum "$ROLLBACKREPO/.cursor/mcp.json" | awk '{print $1}')"
+if [ "$D8_MD5_BEFORE" = "$D8_MD5_AFTER" ]; then
+  pass "D8: first file restored to original bytes (no partial state)"
+else
+  fail "D8: first file was modified after failed apply"
+fi
+# Assert no partial OKF content in mcp.json
+if grep -q "OKF_MANAGED" "$ROLLBACKREPO/.cursor/mcp.json" 2>/dev/null; then fail "D8: mcp.json has partial OKF content"; else pass "D8: mcp.json has no partial OKF content"; fi
 
 # D9: Generated config actually starts MCP (tested in G1)
 # D10: Canonical workflow guidance
@@ -623,22 +725,69 @@ EOF
 PRESERVE_OUT="$("$BIN" identity ensure --repo "$PRESERVE" --apply --json 2>&1 || true)"
 if grep -q "okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "$PRESERVE/.okf/knowledge/original.md"; then pass "E2: existing okf_id preserved after ensure"; else fail "E2: okf_id overwritten"; fi
 
-# E3: Derived chunks parent_okf_id (test via document import creating chunks)
+# E3: Derived chunks (doc__cN.md) must receive parent_okf_id after identity ensure
 DERIVED="$TMPDIR_BASE/derived"
 git_init_repo "$DERIVED"
-# Create a large markdown file to import (should create derived chunks)
-BIG_DOC="$(python3 -c "print('# Big Doc\n\n' + '\n\n'.join(f'## Section {i}\n\nContent for section {i}.' for i in range(20)))")"
-echo "$BIG_DOC" > "$DERIVED/bigdoc.md"
-IMPORT_OUT="$("$BIN" add --repo "$DERIVED" --strategy overwrite "$DERIVED/bigdoc.md" 2>&1 || true)"
-# Check if derived chunks were created with parent_okf_id
-if find "$DERIVED" -name "*__c*" -o -name "*chunk*" 2>/dev/null | grep -q .; then
-  pass "E3: document import created derived chunks"
-  # Check parent_okf_id in chunks
-  if grep -rq "parent_okf_id" "$DERIVED" 2>/dev/null; then pass "E3: derived chunks carry parent_okf_id"; else log "E3: parent_okf_id format inspection"; pass "E3: chunks created"; fi
+mkdir -p "$DERIVED/knowledge"
+# Parent concept (no id yet)
+cat > "$DERIVED/knowledge/doc.md" <<'EOF'
+---
+type: concept
+title: Big Doc
+---
+Parent body.
+EOF
+# Two derived chunks (simulating okf add output, no ids yet)
+cat > "$DERIVED/knowledge/doc__c1.md" <<'EOF'
+---
+type: concept
+title: Big Doc — part 1
+derived: "true"
+---
+Chunk 1 body.
+EOF
+cat > "$DERIVED/knowledge/doc__c2.md" <<'EOF'
+---
+type: concept
+title: Big Doc — part 2
+derived: "true"
+---
+Chunk 2 body.
+EOF
+"$BIN" identity ensure --repo "$DERIVED" --dir knowledge --apply --json >/dev/null 2>&1 || true
+# Parent must have an okf_id
+PARENT_ID="$("$BIN" tool manifest --repo "$DERIVED" --dir knowledge --json 2>/dev/null | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for it in d['result']['items']:
+    if it['path'].endswith('doc.md'):
+        print(it.get('okf_id',''))
+        break
+" 2>/dev/null)"
+if [ -n "$PARENT_ID" ] && printf '%s' "$PARENT_ID" | grep -q "^okf_"; then
+  pass "E3: parent concept received okf_id"
 else
-  log "E3: import output: $(printf '%s' "$IMPORT_OUT" | head -c 200) (informational)"
-  skip "E3: derived chunk creation depends on import behavior"
+  fail "E3: parent concept did not receive okf_id (got: $PARENT_ID)"
 fi
+# Each derived chunk must have parent_okf_id == parent's okf_id
+for chunk in doc__c1.md doc__c2.md; do
+  CHUNK_PID="$(grep '^parent_okf_id:' "$DERIVED/knowledge/$chunk" 2>/dev/null | sed 's/^parent_okf_id:[[:space:]]*//;s/"//g' || true)"
+  if [ "$CHUNK_PID" = "$PARENT_ID" ]; then
+    pass "E3: $chunk parent_okf_id matches parent"
+  else
+    fail "E3: $chunk parent_okf_id=$CHUNK_PID, want $PARENT_ID"
+  fi
+done
+# Idempotent: second ensure must not change parent_okf_id
+"$BIN" identity ensure --repo "$DERIVED" --dir knowledge --apply --json >/dev/null 2>&1 || true
+for chunk in doc__c1.md doc__c2.md; do
+  CHUNK_PID2="$(grep '^parent_okf_id:' "$DERIVED/knowledge/$chunk" 2>/dev/null | sed 's/^parent_okf_id:[[:space:]]*//;s/"//g' || true)"
+  if [ "$CHUNK_PID2" = "$PARENT_ID" ]; then
+    pass "E3: $chunk parent_okf_id stable after second ensure"
+  else
+    fail "E3: $chunk parent_okf_id changed after second ensure"
+  fi
+done
 
 # E4: Vector v2 remediation (covered in A4)
 # E5: concept_id vs okf_id not confused
@@ -740,36 +889,48 @@ for spec in "cursor:.cursor/mcp.json:json" "claude-code:.mcp.json:json" "codex:.
     fail "G1: $client config missing ($fpath)"
   fi
 done
-# MCP startup
-INIT_RESP="$(python3 "$MCP_CALL" "$BIN" "$G1REPO" okf_bundle_stats '{}' 2>&1 || true)"
-if printf '%s' "$INIT_RESP" | grep -q "okf"; then pass "G1: MCP server starts and responds"; else fail "G1: MCP no response (got: $(printf '%s' "$INIT_RESP" | head -c 200))"; fi
+# MCP startup (use okf_status which doesn't require bundle load)
+INIT_RESP="$(python3 "$MCP_CALL" "$BIN" "$G1REPO" okf_status '{}' 2>&1 || true)"
+if mcp_ok "$INIT_RESP"; then pass "G1: MCP server starts and responds"; else fail "G1: MCP no response (got: $(printf '%s' "$INIT_RESP" | head -c 200))"; fi
 
 # G2: Actual tool calls through MCP (status → manifest → query → context)
 # okf_status
 STATUS_RESP="$(python3 "$MCP_CALL" "$BIN" "$G1REPO" okf_status '{}' 2>&1 || true)"
-if printf '%s' "$STATUS_RESP" | grep -q "ok"; then pass "G2: MCP okf_status responds"; else fail "G2: okf_status failed"; fi
+if mcp_ok "$STATUS_RESP"; then pass "G2: MCP okf_status responds"; else fail "G2: okf_status failed (got: $(printf '%s' "$STATUS_RESP" | head -c 200))"; fi
 # okf_manifest
 MANIFEST_RESP="$(python3 "$MCP_CALL" "$BIN" "$G1REPO" okf_manifest '{"limit":5}' 2>&1 || true)"
-if printf '%s' "$MANIFEST_RESP" | grep -q "G1 Concept"; then pass "G2: MCP okf_manifest returns concepts"; else fail "G2: okf_manifest failed (got: $(printf '%s' "$MANIFEST_RESP" | head -c 200))"; fi
+if mcp_ok "$MANIFEST_RESP" && mcp_inner "$MANIFEST_RESP" | grep -q "G1\|concept"; then pass "G2: MCP okf_manifest returns concepts"; else fail "G2: okf_manifest failed (got: $(printf '%s' "$MANIFEST_RESP" | head -c 200))"; fi
 # okf_query with group_by
 QUERY_RESP="$(python3 "$MCP_CALL" "$BIN" "$G1REPO" okf_query '{"query":"G1","group_by":"source"}' 2>&1 || true)"
-if printf '%s' "$QUERY_RESP" | grep -q "group\|source\|result"; then pass "G2: MCP okf_query with group_by responds"; else log "G2: query resp: $(printf '%s' "$QUERY_RESP" | head -c 300)"; pass "G2: okf_query responds"; fi
+if mcp_ok "$QUERY_RESP"; then pass "G2: MCP okf_query with group_by responds"; else fail "G2: okf_query failed (got: $(printf '%s' "$QUERY_RESP" | head -c 200))"; fi
 # okf_context
 CONTEXT_RESP="$(python3 "$MCP_CALL" "$BIN" "$G1REPO" okf_context '{"query":"G1","budget_tokens":500}' 2>&1 || true)"
-if printf '%s' "$CONTEXT_RESP" | grep -q "context\|result\|text"; then pass "G2: MCP okf_context responds"; else log "G2: context resp: $(printf '%s' "$CONTEXT_RESP" | head -c 300)"; pass "G2: okf_context responds"; fi
+if mcp_ok "$CONTEXT_RESP"; then pass "G2: MCP okf_context responds"; else fail "G2: okf_context failed (got: $(printf '%s' "$CONTEXT_RESP" | head -c 200))"; fi
 
-# G3: Error handling through MCP
+# G3: Error handling through MCP — must return ok=false with structured error
 BAD_REF_RESP="$(python3 "$MCP_CALL" "$BIN" "$G1REPO" okf_resolve '{"ref":"bad-id"}' 2>&1 || true)"
-if printf '%s' "$BAD_REF_RESP" | grep -qi "error\|invalid\|isError"; then pass "G3: MCP bad ref returns structured error"; else log "G3: bad ref resp: $(printf '%s' "$BAD_REF_RESP" | head -c 200)"; skip "G3: MCP error format inspection"; fi
+if mcp_err "$BAD_REF_RESP"; then
+  pass "G3: MCP bad ref returns ok=false with structured error"
+else
+  fail "G3: MCP bad ref did not return structured error (got: $(printf '%s' "$BAD_REF_RESP" | head -c 200))"
+fi
 
 # G4: Controlled note/feedback through MCP
-NOTE_RESP="$(python3 "$MCP_CALL" "$BIN" "$G1REPO" okf_note '{"content":"Usability test note","tags":["test"]}' 2>&1 || true)"
-if printf '%s' "$NOTE_RESP" | grep -q "ok"; then pass "G4: MCP okf_note persists"; else log "G4: note resp: $(printf '%s' "$NOTE_RESP" | head -c 300)"; skip "G4: note tool behavior"; fi
+NOTE_RESP="$(python3 "$MCP_CALL" "$BIN" "$G1REPO" okf_note '{"content":"Usability test note","idempotency_key":"ux-test-note-1"}' 2>&1 || true)"
+if mcp_ok "$NOTE_RESP"; then
+  pass "G4: MCP okf_note succeeds"
+else
+  fail "G4: MCP okf_note failed (got: $(printf '%s' "$NOTE_RESP" | head -c 200))"
+fi
 # Verify note file was written
 if find "$G1REPO" -name "*.md" -newer "$G1REPO/.okf/knowledge/concept1.md" 2>/dev/null | grep -q .; then pass "G4: note created file in repo"; else log "G4: note file check (informational)"; pass "G4: note tool invoked"; fi
-# Feedback
-FEEDBACK_RESP="$(python3 "$MCP_CALL" "$BIN" "$G1REPO" okf_feedback '{"content":"test feedback","rating":5}' 2>&1 || true)"
-if printf '%s' "$FEEDBACK_RESP" | grep -q "ok"; then pass "G4: MCP okf_feedback responds"; else log "G4: feedback resp: $(printf '%s' "$FEEDBACK_RESP" | head -c 200)"; skip "G4: feedback tool behavior"; fi
+# Feedback (requires principle, category, idempotency_key)
+FEEDBACK_RESP="$(python3 "$MCP_CALL" "$BIN" "$G1REPO" okf_feedback '{"principle":"Test principle","category":"usability","idempotency_key":"ux-test-fb-1"}' 2>&1 || true)"
+if mcp_ok "$FEEDBACK_RESP"; then
+  pass "G4: MCP okf_feedback succeeds"
+else
+  fail "G4: MCP okf_feedback failed (got: $(printf '%s' "$FEEDBACK_RESP" | head -c 200))"
+fi
 
 # ============================================================================
 # Negative control
@@ -791,6 +952,11 @@ echo "========================================="
 echo "Usability verification: $PASS passed, $FAIL failed, $SKIP skipped"
 echo "========================================="
 if [ "$FAIL" -gt 0 ]; then
+  echo "FAILED: $FAIL assertion(s) failed"
+  exit 1
+fi
+if [ "$SKIP" -gt 0 ]; then
+  echo "FAILED: $SKIP planned case(s) skipped — zero skip required"
   exit 1
 fi
 exit 0

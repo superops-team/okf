@@ -204,7 +204,19 @@ func (s *Service) Remove(client string, yes bool) error {
 }
 
 // commit applies ops in order with rollback. No-op ops are skipped.
+// Conflicted ops (StatusConflict) fail the entire apply before any write,
+// so unowned user files are never overwritten or truncated.
 func (s *Service) commit(a adapter, ops []fileOp) error {
+	for _, op := range ops {
+		if op.status == StatusConflict {
+			return &AgentConfigError{
+				Code:        ErrAgentConfigConflict,
+				Message:     fmt.Sprintf("cannot apply %s: %s is conflicted (unowned or malformed)", a.name(), op.rel),
+				Remediation: "Resolve or remove the unowned/ambiguous file manually; OKF never overwrites it.",
+				Path:        op.rel,
+			}
+		}
+	}
 	var restored []restorePoint
 	for _, op := range ops {
 		changed := op.action == ActionRemove || !byteEqual(op.current, op.proposed)
