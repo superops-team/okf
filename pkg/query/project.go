@@ -74,6 +74,11 @@ type HitRef struct {
 
 // GroupedHit is one projected group. The representative is the first raw member
 // by input rank; HitCount/ConceptCount/SourceCount use unique normalized keys.
+// CoveredSources is the deduplicated, sorted set of all source/concept
+// identifiers this group contains (from every member, not just the
+// representative). It is always populated (even when includeMembers=false) so
+// that grouped-utility metrics (S47 relevant-source recall) can compute
+// coverage over the full group membership.
 type GroupedHit struct {
 	GroupBy        GroupBy   `json:"group_by"`
 	GroupKey       string    `json:"group_key"`
@@ -82,6 +87,7 @@ type GroupedHit struct {
 	HitCount       int       `json:"hit_count"`
 	ConceptCount   int       `json:"concept_count"`
 	SourceCount    int       `json:"source_count"`
+	CoveredSources []string  `json:"covered_sources,omitempty"`
 	Members        []HitRef  `json:"members,omitempty"`
 }
 
@@ -107,10 +113,11 @@ func Project(hits []ResultHit, groupBy GroupBy, includeMembers bool, limit int) 
 		acc, ok := accs[key]
 		if !ok {
 			acc = &groupAcc{
-				key:      key,
-				rep:      h,
-				concepts: map[string]struct{}{},
-				sources:  map[string]struct{}{},
+				key:          key,
+				rep:          h,
+				concepts:     map[string]struct{}{},
+				sources:      map[string]struct{}{},
+				coveredPaths: map[string]struct{}{},
 			}
 			accs[key] = acc
 			order = append(order, key)
@@ -120,12 +127,31 @@ func Project(hits []ResultHit, groupBy GroupBy, includeMembers bool, limit int) 
 		if src := normalizedSourceForKey(h); src != "" {
 			acc.sources[src] = struct{}{}
 		}
+		// CoveredPaths: plain normalized source or concept path (no prefix),
+		// used by S47 relevant-source recall to match against golden expected
+		// docs. Source path takes precedence; concept path is the fallback.
+		if src, ok := normalizedSource(h); ok {
+			acc.coveredPaths[src] = struct{}{}
+		} else if cp, ok := normalizeRelPath(h.ConceptPath); ok {
+			acc.coveredPaths[cp] = struct{}{}
+		}
 	}
 
 	groups := make([]GroupedHit, 0, len(order))
 	for _, key := range order {
 		acc := accs[key]
 		rep := acc.rep
+		// CoveredSources: deduplicated, sorted set of all plain source/concept
+		// paths this group contains (from every member, not just the
+		// representative). Always populated (even when includeMembers=false) so
+		// S47 relevant-source recall can compute coverage over the full group
+		// membership. These are plain normalized paths (no src:/concept: prefix)
+		// so they match golden expected_docs identifiers.
+		covered := make([]string, 0, len(acc.coveredPaths))
+		for s := range acc.coveredPaths {
+			covered = append(covered, s)
+		}
+		sort.Strings(covered)
 		g := GroupedHit{
 			GroupBy:        groupBy,
 			GroupKey:       key,
@@ -134,6 +160,7 @@ func Project(hits []ResultHit, groupBy GroupBy, includeMembers bool, limit int) 
 			HitCount:       len(acc.hits),
 			ConceptCount:   len(acc.concepts),
 			SourceCount:    len(acc.sources),
+			CoveredSources: covered,
 		}
 		if includeMembers {
 			g.Members = make([]HitRef, len(acc.hits))
@@ -159,11 +186,12 @@ func Project(hits []ResultHit, groupBy GroupBy, includeMembers bool, limit int) 
 }
 
 type groupAcc struct {
-	key      string
-	rep      ResultHit
-	hits     []ResultHit
-	concepts map[string]struct{}
-	sources  map[string]struct{}
+	key          string
+	rep          ResultHit
+	hits         []ResultHit
+	concepts     map[string]struct{}
+	sources      map[string]struct{} // prefixed keys (src:/concept:) for SourceCount
+	coveredPaths map[string]struct{} // plain normalized paths for CoveredSources
 }
 
 func isKnownGroupBy(g GroupBy) bool {

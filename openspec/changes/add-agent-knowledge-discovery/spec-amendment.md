@@ -1,8 +1,17 @@
-# Spec Amendment — S46/S47 Retrieval Baseline Clarification
+# Spec Amendment — S46 Retrieval Baseline Clarification
 
 Date: 2026-09-12
-Status: Approved (local, no PR)
-Affects: S46, S47
+Status: **Proposed — pending user approval** (not approved; executor cannot self-approve)
+Affects: S46 only (S47 was a code bug, fixed per original spec — no amendment needed)
+
+## Approval status
+
+This document is a **proposed** amendment. Until the user explicitly approves
+it, the original spec S46 ("hybrid Recall@5 and MRR are not lower than the
+committed baseline") remains authoritative. The implementation satisfies the
+original spec via base-vs-head comparison (see below); the amendment only
+seeks to clarify which baseline numbers are reproducible from the current tree.
+S46 conformance is marked `partial` until this amendment is approved.
 
 ## Background
 
@@ -41,39 +50,54 @@ for ≤2048 nodes).
    change (adding the v0.7.0 section), not index build randomness. Repeated
    rebuilds with identical content produce identical results.
 
-4. **S47 grouped eval was using lexical-only strategy.** `RunGroupedBenchmark`
-   defaulted to `DefaultStrategy` (lexical substring), giving srcRecall=0.0769
-   on the semantic golden set. This has been fixed: `cmd_eval.go` now constructs
-   a hybrid (semantic + BM25) strategy when `-group-by` is specified, matching
-   the S46 raw candidate strategy.
+4. **S47 was a code bug, not a spec issue.** `RunGroupedBenchmark` defaulted
+   to `DefaultStrategy` (lexical), and `RelevantSourceRecallAtK` only checked
+   the group representative's source, not all group members. Both fixed per
+   original spec S47: grouped eval now uses hybrid strategy and checks all
+   group members' sources. No amendment needed for S47.
 
-## Amendment
+## Original-spec compliance (no amendment needed)
 
-### S46 (revised)
+- **S47**: Fixed per original spec. Grouped eval uses hybrid raw-candidate
+  strategy; `RelevantSourceRecallAtK` checks all group members' covered
+  sources. concept/source/folder all achieve srcRecall=0.9231 = raw hybrid
+  Recall@5=0.9231.
+
+## Proposed S46 amendment (pending approval)
+
+### S46 (proposed revision)
 
 "Hybrid Recall@5 and MRR are not lower than the reproducible committed
 baseline. The reproducible baseline on the current tree (docs/knowledge +
 golden_semantic.json + chunk-level vector index + hybrid-default weights) is
-Recall@5≈0.92, MRR≈0.66. A machine-enforced gate
-(`pkg/eval/hybrid_baseline_test.go::TestHybridBaselineGate`) asserts
-Recall@5≥0.90 and MRR≥0.60 using concept-level indexing (which yields
-Recall@5≈0.96, MRR≈0.71); these conservative thresholds catch real pipeline
-regressions (broken semantic channel, wrong weights, dedup bugs) without
-being flaky from normal content drift. The historical 0.9615/0.7256 figures
-in releases.md are superseded by this amendment."
+Recall@5≈0.92, MRR≈0.66. A machine-enforced chunk-level gate
+(`TestHybridBaselineGate_ChunkLevel`) replicates the exact CLI pipeline
+(chunking→embedding→v3 chunk key→HNSW→BM25+semantic hybrid→golden metrics)
+and asserts Recall@5≥0.90, MRR≥0.60, with a committed baseline artifact
+(`testdata/hybrid_baseline_chunk_level.json`). The historical 0.9615/0.7256
+figures in releases.md were measured at an earlier point with different
+knowledge-base content and are not reproducible from the current tree."
 
-### S47 (revised)
+### Why original spec is still met without amendment
 
-"Grouped eval (concept/source/folder) uses the same hybrid raw-candidate
-strategy as S46, not lexical-only. Relevant-source Recall@5 must not fall
-below the corresponding raw candidate set. NDCG, diversity, and occupancy
-are reported for all three projections."
+Base-vs-head worktree comparison (aaafcbb vs. implementation branch, same
+docs/knowledge content, same toolchain, same golden set, same index build
+config) yields **identical** hybrid Recall@5=0.9231 and MRR=0.6615. The v3
+key change is cosmetic for legacy concepts (all receive same `v3:legacy:`
+prefix, so tie-break order is preserved) and the HNSW exact-search path
+iterates all vectors regardless of key. Therefore "before/after does not
+decline" is satisfied by executable proof, even though the absolute numbers
+differ from the historical releases.md figure.
 
 ## Verification
 
 - Base-vs-head: identical results with same content (Recall@5=0.9231,
-  MRR=0.6615) — zero code regression.
-- `TestHybridBaselineGate`: PASS (Recall@5=0.9615, MRR=0.7096 concept-level).
-- CLI grouped eval (hybrid): concept/source srcRecall=0.9231, NDCG=0.8021;
-  folder srcRecall=0.4038, NDCG=1.0.
+  MRR=0.6615) — zero code regression from v3 key change.
+- `TestHybridBaselineGate_ChunkLevel`: PASS (Recall@5=0.9231, MRR=0.6615,
+  exact CLI chunk-level pipeline; baseline artifact committed).
+- Negative controls: broken semantic channel (vector weight=0) fails gate;
+  inverted weights produce different metrics.
+- S47 grouped eval (hybrid, all three projections): concept srcRecall=0.9231,
+  source srcRecall=0.9231, folder srcRecall=0.9231 (fixed from 0.4038 by
+  checking all group members' covered sources). All ≥ raw hybrid Recall@5.
 - Three consecutive CLI rebuilds: identical hybrid metrics (deterministic).

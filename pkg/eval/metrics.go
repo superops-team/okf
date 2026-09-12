@@ -131,30 +131,51 @@ func normalizedEvalPath(p string) string {
 	return filepath.ToSlash(filepath.Clean(p))
 }
 
-// groupCoveredSource returns the normalized source/document identifier a group
-// represents. The group representative's source_path is authoritative; when a
-// concept has no source_path (e.g. the lexical benchmark bundle) the concept
-// path (the generated document file) is used so it can be matched against
-// FilePath-based golden expected docs.
-func groupCoveredSource(g query.GroupedHit) string {
-	if s := normalizedEvalPath(g.Representative.SourcePath); s != "" {
-		return s
+// groupCoveredSources returns the deduplicated set of source/concept
+// identifiers a group contains. It uses GroupedHit.CoveredSources (populated
+// by query.Project from every group member, not just the representative). When
+// CoveredSources is empty (e.g. a hand-built test fixture without it), it falls
+// back to the representative's source/concept path.
+func groupCoveredSources(g query.GroupedHit) []string {
+	if len(g.CoveredSources) > 0 {
+		return g.CoveredSources
 	}
-	return normalizedEvalPath(g.Representative.ConceptPath)
+	if s := normalizedEvalPath(g.Representative.SourcePath); s != "" {
+		return []string{s}
+	}
+	if s := normalizedEvalPath(g.Representative.ConceptPath); s != "" {
+		return []string{s}
+	}
+	return nil
+}
+
+// groupCoveredSource returns the first covered source (for backward compat with
+// callers that only need one identifier). Prefer groupCoveredSources for
+// multi-source groups like folder projections.
+func groupCoveredSource(g query.GroupedHit) string {
+	srcs := groupCoveredSources(g)
+	if len(srcs) > 0 {
+		return srcs[0]
+	}
+	return ""
 }
 
 // RelevantSourceRecallAtK is the fraction of relevant sources that are covered
-// by at least one representative among the top-k groups. A source is covered when
-// the normalized identifier of a top-k group equals it. If relevantSources is
-// empty it returns 1.0 (no relevant sources to miss).
+// by at least one group among the top-k groups. A source is covered when it
+// appears in ANY member of ANY top-k group (via GroupedHit.CoveredSources),
+// not just the group representative. This is critical for folder projections
+// where one folder group can contain multiple relevant sources. If
+// relevantSources is empty it returns 1.0 (no relevant sources to miss).
 func RelevantSourceRecallAtK(groups []query.GroupedHit, relevantSources []string, k int) float64 {
 	if len(relevantSources) == 0 {
 		return 1.0
 	}
 	covered := make(map[string]struct{})
 	for _, g := range topNGroups(groups, k) {
-		if src := groupCoveredSource(g); src != "" {
-			covered[src] = struct{}{}
+		for _, src := range groupCoveredSources(g) {
+			if src != "" {
+				covered[src] = struct{}{}
+			}
 		}
 	}
 	hits := 0

@@ -9,12 +9,19 @@ import (
 
 // gh builds a minimal GroupedHit for metric tests. hitCount is the group size;
 // source is written into the representative's SourcePath (and, when empty, the
-// concept path is used via groupCoveredSource).
-func gh(key string, hitCount int, source string, rank int) query.GroupedHit {
+// concept path is used via groupCoveredSource). coveredSources is the full set
+// of source/concept identifiers the group contains (for multi-source groups
+// like folder projections); when nil it defaults to {source}.
+func gh(key string, hitCount int, source string, rank int, coveredSources ...string) query.GroupedHit {
+	cs := coveredSources
+	if len(cs) == 0 {
+		cs = []string{source}
+	}
 	return query.GroupedHit{
-		GroupKey:     key,
-		HitCount:     hitCount,
-		ConceptCount: hitCount,
+		GroupKey:       key,
+		HitCount:       hitCount,
+		ConceptCount:   hitCount,
+		CoveredSources: cs,
 		Representative: query.ResultHit{
 			Rank:        rank,
 			SourcePath:  source,
@@ -88,6 +95,29 @@ func TestRelevantSourceRecallAtK_Table(t *testing.T) {
 			approx(t, got, tc.want, "RelevantSourceRecallAtK")
 		})
 	}
+}
+
+// TestRelevantSourceRecallAtK_MultiSourceFolder is the S47 regression test: a
+// folder group contains multiple sources; the representative is one source but
+// the relevant source is another member of the same folder. Recall must count
+// the group as covering ALL its member sources, not just the representative.
+func TestRelevantSourceRecallAtK_MultiSourceFolder(t *testing.T) {
+	t.Parallel()
+	// One folder group "folder:src" contains two concepts: a.md (representative,
+	// rank 1) and b.md (member, rank 2). The relevant source is b.md.
+	groups := []query.GroupedHit{
+		gh("folder:src", 2, "src/a.md", 1, "src/a.md", "src/b.md"),
+	}
+	got := RelevantSourceRecallAtK(groups, []string{"src/b.md"}, 5)
+	approx(t, got, 1.0, "folder group must cover all member sources, not just representative")
+
+	// Two relevant sources in the same folder → both covered by one group.
+	got = RelevantSourceRecallAtK(groups, []string{"src/a.md", "src/b.md"}, 5)
+	approx(t, got, 1.0, "folder group covers both member sources")
+
+	// Relevant source NOT in the folder → not covered.
+	got = RelevantSourceRecallAtK(groups, []string{"src/c.md"}, 5)
+	approx(t, got, 0.0, "source outside folder is not covered")
 }
 
 // --- GroupNDCG ---

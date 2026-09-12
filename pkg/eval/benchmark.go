@@ -258,8 +258,14 @@ func RunGroupedBenchmarkWith(bundle *query.KnowledgeBundle, cases []EvalCase, k 
 		relevant := toSet(c.ExpectedDocs)
 		relMap := make(map[string]float64, len(groups))
 		for _, g := range groups {
-			if _, ok := relevant[groupCoveredSource(g)]; ok {
-				relMap[g.GroupKey] = 1.0
+			// A group is relevant if ANY of its covered sources matches an
+			// expected doc (not just the representative — folder groups can
+			// contain multiple relevant sources).
+			for _, src := range groupCoveredSources(g) {
+				if _, ok := relevant[src]; ok {
+					relMap[g.GroupKey] = 1.0
+					break
+				}
 			}
 		}
 		cr := GroupedCaseResult{

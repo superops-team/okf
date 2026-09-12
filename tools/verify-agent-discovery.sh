@@ -213,7 +213,14 @@ for g in concept source folder; do
   G_O="$(echo "$G_OUT" | grep -E 'Aggregate' | awk '{print $5}')"
   GROUPED_METRICS="${GROUPED_METRICS}
 - ${g}: srcRecall=${G_R} ndcg=${G_N} diversity=${G_D} occupancy=${G_O}"
+  # S47 gate: grouped relevant-source recall must NOT be below the raw hybrid
+  # candidate recall. A group covers all its member sources (not just the
+  # representative), so projection cannot lose source coverage.
+  if awk "BEGIN {exit !($G_R < $EVAL_HYBRID_RECALL - 0.001)}"; then
+    fail "S47 REGRESSION: ${g} grouped srcRecall=${G_R} < raw hybrid Recall@5=${EVAL_HYBRID_RECALL}"
+  fi
 done
+echo "S47 gate: concept/source/folder grouped srcRecall >= raw hybrid Recall@5 (${EVAL_HYBRID_RECALL}): PASS"
 
 # ---------------------------------------------------------------------------
 say "S48 1,000-file Manifest bytes-read benchmark"
