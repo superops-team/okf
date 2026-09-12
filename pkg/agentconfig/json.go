@@ -50,6 +50,29 @@ func inspectJSONMCP(current []byte, cmd []string) (proposed []byte, st FileStatu
 				errConflict(fmt.Sprintf("mcpServers.%s exists without the %s ownership marker", serverName, OwnedMarkerKey))
 		}
 		owned = true
+		// Merge: preserve user-added keys inside the OKF-managed entry.
+		// Known managed keys (command, args, env) are overwritten with the
+		// desired values; any other keys the user added are preserved.
+		// Custom env vars are merged (OKF_MANAGED is always set correctly).
+		for k, v := range entry {
+			if k == "command" || k == "args" || k == "env" {
+				continue // managed by OKF
+			}
+			if _, exists := desired[k]; !exists {
+				desired[k] = v
+			}
+		}
+		// Merge env: preserve custom env vars
+		if desiredEnv, ok := desired["env"].(map[string]any); ok {
+			for k, v := range env {
+				if k == OwnedMarkerKey {
+					continue // always managed
+				}
+				if _, exists := desiredEnv[k]; !exists {
+					desiredEnv[k] = v
+				}
+			}
+		}
 	}
 	servers[serverName] = desired
 

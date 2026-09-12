@@ -74,6 +74,17 @@ func cmdEval(args []string) int {
 	}
 
 	if *groupBy != "" {
+		// Validate group_by before running the benchmark. An invalid value
+		// would be silently ignored by RunGroupedBenchmarkWith (producing
+		// all-zero results), which is a UX defect. Fail loudly instead.
+		switch query.GroupBy(*groupBy) {
+		case query.GroupChunk, query.GroupConcept, query.GroupSource, query.GroupFolder:
+			// valid
+		default:
+			fmt.Fprintf(os.Stderr, "Error: invalid_group_by: %s\n", *groupBy)
+			fmt.Fprintln(os.Stderr, "Valid group-by values: chunk, concept, source, folder")
+			return 1
+		}
 		// S47: grouped eval must use the same hybrid raw-candidate strategy as
 		// S46, not the lexical-only DefaultStrategy. Build semantic+BM25 backends
 		// and fall back to lexical with a clear warning if the vector index is
