@@ -22,6 +22,7 @@
 - [工作原理](#工作原理)
 - [安装方式 · 30 秒上手](#安装方式--30-秒上手)
 - [使用示例](#使用示例)
+- [稳定身份、Manifest 与 Agent 发现](#稳定身份manifest-与-agent-发现)
 - [文档](#文档)
 - [项目结构](#项目结构)
 - [模块说明](#模块说明)
@@ -141,7 +142,7 @@ okf mcp --repo /your/repo --dir .okf/knowledge
 
 ### Agent-facing MCP 工具
 
-MCP server 通过 `okf_status`、`okf_init`、`okf_refresh`、`okf_query`、`okf_context` 暴露仓库知识服务；通过 `okf_note`、`okf_log`、`okf_feedback` 持久化显式提交的知识，并由 `okf_ask` 仅查询 note/event/feedback。原有 bundle/list/get/search/lint/document-import 工具保持可用。
+MCP server 通过 `okf_status`、`okf_init`、`okf_refresh`、`okf_query`、`okf_context` 暴露仓库知识服务；通过 `okf_note`、`okf_log`、`okf_feedback` 持久化显式提交的知识，并由 `okf_ask` 仅查询 note/event/feedback。稳定引用解析与元数据发现通过 `okf_resolve`、`okf_manifest` 暴露（见[稳定身份、Manifest 与 Agent 发现](#稳定身份manifest-与-agent-发现)）。原有 bundle/list/get/search/lint/document-import 工具保持可用。
 
 写工具要求稳定的 `idempotency_key`，使用确定性 identity，拒绝未知字段和错误字段类型，并对路径逃逸、symlink root、大小超限和 credential-like metadata 采取 fail-closed。Server 只持久化调用方显式提交的 feedback，不读取宿主应用的私有事件总线。详见 [`docs/knowledge/mcp-server.md`](docs/knowledge/mcp-server.md) 和 [`docs/knowledge/durable-capture.md`](docs/knowledge/durable-capture.md)。
 
@@ -187,11 +188,76 @@ okf eval -golden pkg/eval/testdata/golden_semantic.json -path docs/knowledge -co
 - **混合检索**：语义通道（分块向量的 HNSW 检索）与 BM25 通道经加权 RRF 融合（`k=60`，默认等权）。可用 `-lexical-weight` 调节，设为 `0` 即关闭词法通道。BM25 会把标识符拆成子词（`okf_semantic_search` → `okf`/`semantic`/`search`），中文切为重叠 bigram，不依赖词典。
 - **可复现性**：块数低于 2048 的索引走全量精确扫描，而非 HNSW 的近似遍历——近似路径即使请求全部节点也不会全部返回，且遗漏项随重建而变。配合固定随机种子与确定性 tie-break，检索结果在多次重建之间完全一致；该性质通过反复重建本知识库、确认评测指标不发生变化来验证。
 - **索引成本（实测，7 概念 → 97 块）**：分块使索引体积增大约 20 倍（14.5 KB → 287 KB），构建耗时增加约 6 倍（128 ms → 800 ms）。两者随内容量增长，而非随概念数增长。
-- **索引格式 v2 不向下兼容**：分块级 key 与旧的概念级 key 不同。`okf vector status` 会显示格式版本；加载旧索引时会明确报错并提示执行 `okf vector rebuild`（此期间检索回退到词法），而不是静默返回错误结果。
+- **索引格式不向下兼容**：跨代际的分块级 key 各不相同。`okf vector status` 会显示格式版本；加载 v3 之前（v2）的旧索引会报 `index_rebuild_required` 并提示执行 `okf vector rebuild`（此期间检索回退到词法），而不是静默返回错误结果。身份感知的 **v3** key：稳定概念为 `v3:id:<okf_id>`，遗留概念回退到确定性的 `v3:legacy:<fingerprint>`。通过 `okf identity ensure --apply` 分配 ID 时也会报告 `vector_rebuild_required=true`。
 - **内嵌资源**：ONNX Runtime CPU 库（按 OS，约 10–15 MB）、pure-tokenizers 原生库（约 5–6 MB）、量化 MiniLM 模型（约 23 MB）和 `tokenizer.json` 均通过 `go:embed` 内嵌进二进制，首次使用时解包到用户缓存目录（带 SHA256 校验）。每个平台构建只内嵌该平台资源（`scripts/fetch-ort.sh`、`scripts/fetch-tokenizers.sh`、`scripts/fetch-model.sh` 在构建期获取，运行时零联网）。
 - **动态加载（如实声明）**：ONNX Runtime 与 pure-tokenizers 动态库在运行时通过 `dlopen` 从缓存目录加载——二进制自包含但并非静态链接。缓存位置：`os.UserCacheDir()/okf/`（可用 `OKF_ORT_DIR` 覆盖）。
 - **限制**：MiniLM 以英文语义为主。分块与 BM25 的中文 bigram 提升了中文检索效果，但纯中文 query 检索英文内容时仍只能依赖语义通道。`Embedder` 是接口，为后续更强模型（如 BGE-M3）或远程 API 预留替换点。
 - **许可**：pure-onnx（MIT）、coder/hnsw（CC0-1.0）、ONNX Runtime（MIT）、MiniLM-L6-v2 模型（Apache-2.0）。
+
+## 稳定身份、Manifest 与 Agent 发现
+
+本次发布新增可选的稳定概念身份、只读元数据 Manifest、分层分组检索，以及项目级 AI agent 集成。所有能力均为增量：不带 `okf_id` 的遗留概念继续原样可用，省略 `group-by` 时既有无分组检索输出保持完全一致。
+
+### 可选稳定身份（`okf_id`）与显式迁移
+
+概念可携带可选字段 `okf_id`，形如 `^okf_[0-9a-f]{32}$`（规范 URI 为 `okf://concept/<okf_id>`）。不带该字段的概念保持 `legacy-unstable` 且完全合法——OKF v0.2 的必填字段集不变。ID 只能通过显式迁移添加，不会在导入时静默随机分配。
+
+```bash
+# 干跑（默认）：列出计划新增项，不打印任何随机 ID，文件字节不变，且多次运行输出逐字节一致（确定性）。
+okf identity ensure --json
+# 应用：写前先整体校验计划，逐文件原子替换，幂等（第二次运行报告 0 变更）。
+okf identity ensure --apply
+# 用稳定引用解析当前库路径（改名/移动后仍可定位）。
+okf identity resolve --ref okf://concept/okf_... --json
+```
+
+重复或非法 ID 在触碰任何文件/索引之前即 fail-closed（`duplicate_concept_id` / `invalid_concept_id`）；跨文件写入失败会回滚已替换的文件。MCP 通过 `okf_resolve` 暴露同一解析能力。
+
+### 向量索引 v3 需显式重建
+
+稳定概念使用 key `v3:id:<okf_id>`；遗留概念回退到确定性的 `v3:legacy:<fingerprint>`。v2 或更早的索引**绝不**与 v3 查询混用：`okf vector status` 报 `incompatible`，search/status 返回 `index_rebuild_required` 并指明 `okf vector rebuild`。用 `okf identity ensure --apply` 分配 ID 会报告 `vector_rebuild_required=true`。
+
+### 只读元数据 Manifest（`okf tool manifest`）
+
+`okf tool manifest` 仅读取有界的 **frontmatter 与文件元数据**——绝不读取 Markdown 正文、不加载 embedding、不构建/触碰向量索引。即便正文有数 MB，读取量也被限制在 frontmatter 字节数加一次 4 KiB 预取缓冲。
+
+```bash
+# 默认：至多 100 条，offset 0，按归一化路径再按 ID 排序。
+okf tool manifest --json
+# 分页 + 过滤（limit 1..500；同一维度内 OR，跨维度 AND）。
+okf tool manifest --offset 100 --limit 50 --types source,note --tags go --json
+```
+
+每条目包含 identity/ref、路径、标题/描述、类型、标签、有效状态、信任层级、stale 数据、最近一次有效生成/校验时间、来源数（至多 3 条来源串），以及 `estimated_tokens = ceil(文件字节数/4)` 的标注。frontmatter 损坏只会以稳定 warning code（`manifest_frontmatter_missing|too_large|invalid`）跳过该文件，扫描继续。MCP 通过 `okf_manifest` 暴露完全一致的契约。
+
+### 分层分组检索（`-group-by`）
+
+在 `okf search`（以及 `okf eval`）后追加 `-group-by chunk|concept|source|folder`，即可在最终去重/TopK 裁剪**之前**把已融合打分的候选投影为分组。省略该标志时，既有无分组输出与分数逐字节不变。
+
+```bash
+# 每个来源一个代表（消除单一来源垄断），并给出 hit/concept/source 计数。
+okf search -q "retrieval" -group-by source
+# 派生分块归入其父概念；folder key 使用库内相对 "/" 路径，根目录为 "."。
+okf search -q "vector index" -group-by concept
+```
+
+代表始终是首条原始成员（其分数保持不变，绝不再聚合成求和值）。folder 投影拒绝绝对路径与 `..` 逃逸，遇非法路径回退到概念分组并给出 warning，而不会生成不安全的 key。四个分组值之外的任何取值都会报 `invalid_group_by`（不静默回退）。
+
+### 项目级 agent 集成（`okf agent`）
+
+`okf agent plan|apply|status|remove` 为 **Cursor**、**Claude Code**、**Codex** 安装确定性的项目级配置，不触碰用户全局设置，也不存储任何凭据。
+
+```bash
+# plan 只读：列出每个拟写路径/动作/脱敏哈希，不落任何文件。
+okf agent plan --client cursor --format json
+# apply 在非交互模式需显式确认；幂等（apply 两次 → 零 diff），并保留所有无关/他有配置项与注释。
+okf agent apply --client cursor --yes
+okf agent apply --client cursor --yes   # 第二次：零 diff
+okf agent status --client cursor
+okf agent remove --client cursor --yes
+```
+
+所有权用非秘密的 `OKF_MANAGED=agentconfig-v1` 标记。对已存在但格式错误、无所有权标记或标记不平衡的条目，状态报 `conflict` 且文件字节不变——没有 `--force`。Cursor 使用 `.cursor/mcp.json` + `.cursor/rules/okf.md`；Claude Code 使用 `.mcp.json` + `.claude/skills/okf/SKILL.md`；Codex 使用 `.codex/config.toml` + 受管 `AGENTS.md` 块。`--client all`（默认）即同时处理三者。
 
 ## 文档
 

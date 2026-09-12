@@ -3,8 +3,9 @@
 # the first broken one (old-coder / GAUNTLET). All numbers in EVIDENCE come
 # from this command; rerun the whole report with `tools/gauntlet.sh`.
 #
-# Layers: build → vet → staticcheck → tests → tests(-race) → coverage(threshold)
-#         → suite health(shuffle) → mutation → real execution(CLI smoke)
+# Layers: build → vet → gofmt → staticcheck → tests → tests(-race) → coverage(threshold)
+#         → suite health(shuffle) → property tests → secret scan → supply chain
+#         → mutation(convert/...) → mutation(agent discovery) → real execution(CLI smoke)
 #
 # Usage: tools/gauntlet.sh   (run from repo root)
 
@@ -61,8 +62,74 @@ fi
 step "L5 suite health: go test -shuffle=on ./..."
 "$GO" test -shuffle=on ./...
 
+# ---- New in agent-knowledge-discovery (P4) -------------------------------
+# Explicitly assert the three new packages are real, buildable, and exercised by
+# the suite. The ./... globs above already include them; this gate fails loudly
+# if one is ever deleted or reduced to a package with no tests (no skipped layer
+# reported as passed, S49).
+step "L6a new-package coverage: pkg/identity, pkg/manifest, pkg/agentconfig"
+for pkg in ./pkg/identity/ ./pkg/manifest/ ./pkg/agentconfig/; do
+	if ! "$GO" list -e "$pkg" >/dev/null; then
+		echo "GATE-FAILED: new package $pkg is missing"
+		exit 1
+	fi
+done
+# -count=1 forces a fresh run (no cached PASS hiding a removed test).
+"$GO" test -count=1 ./pkg/identity/ ./pkg/manifest/ ./pkg/agentconfig/
+
+# Property layer: every pure-function invariant test must actually execute. We
+# count the RUN lines matching Property|Properties and require a non-trivial
+# number, so a rename that silently disables all property tests cannot pass.
+step "L6b property tests: go test -run Property|Properties (must execute)"
+PROP_OUT="$("$GO" test -count=1 -v -run 'Property|Properties' ./pkg/... 2>&1)" || {
+	echo "GATE-FAILED: property test run failed:"
+	echo "$PROP_OUT"
+	exit 1
+}
+PROP_RUN="$(printf '%s\n' "$PROP_OUT" | grep -cE '^=== RUN .*[Pp]ropert')"
+echo "property tests executed: $PROP_RUN"
+if [ "$PROP_RUN" -lt 10 ]; then
+	echo "GATE-FAILED: only $PROP_RUN property tests ran (expected >=10)"
+	exit 1
+fi
+
+# Secret scan: production source and committed fixtures must not contain a
+# literal secret VALUE next to a secret-like KEY. Environment-variable references
+# (os.Getenv, $VAR, ${VAR}) and deliberate redaction-probe *_test.go files are
+# allowed; *_test.go files hold the probes that PROVE redaction works. The
+# generated ONNX/tokenizer asset files embed library SHA256 checksums (not
+# credentials) and are excluded. The key must be a standalone token
+# ("token": / token: / token =), so budget_tokens, tokenizerLibSHA256 and
+# json:"..." struct tags are not false positives.
+step "L7 secret scan: no literal token/password/secret/api_key/private_key values"
+scan_out="$(
+	git grep -nI -i -E '(^|[{,"[:space:]])(token|password|passwd|secret|api[_-]?key|private[_-]?key)[[:space:]]*[:=][[:space:]]*"[^"$][^"]{3,}"' -- \
+		'*.go' '*.json' '*.yaml' '*.yml' '*.toml' 2>/dev/null \
+		| grep -v '_test\.go:' \
+		| grep -vE 'internal/embeddings/assets/' \
+		|| true
+)"
+if [ -n "$scan_out" ]; then
+	echo "GATE-FAILED: literal secret values found in production source/fixtures:"
+	echo "$scan_out"
+	exit 1
+fi
+echo "secret scan: clean (no literal secret values in production code/fixtures)"
+
+# Supply chain: verify the module cache hashes against go.sum. No new third-party
+# dependency was added by this change (go.mod is reviewed and tracked); we assert
+# go mod verify passes and go.sum covers every requirement. Read-only: we never
+# mutate go.mod/go.sum here.
+step "L8 supply chain: go mod verify"
+"$GO" mod verify
+# Fail if go.sum is missing entries that the build resolves (detects drift).
+"$GO" mod graph >/dev/null
+
 step "L9 mutation: tools/mutants.sh"
 bash tools/mutants.sh
+
+step "L9b mutation (agent discovery): tools/mutants-agent-discovery.sh"
+bash tools/mutants-agent-discovery.sh
 
 step "L10 real execution: CLI import + search smoke"
 BIN="$WORK/okf"
@@ -98,4 +165,4 @@ if ! grep -q "source=" "$WORK/out_semantic.txt"; then
 fi
 
 echo
-echo "GAUNTLET PASS: build/vet/staticcheck/tests/tests(-race)/coverage(${COV}%)/shuffle/mutation/real-exec"
+echo "GAUNTLET PASS: build/vet/staticcheck/tests/tests(-race)/coverage(${COV}%)/shuffle/new-package/property(${PROP_RUN})/secret-scan/mod-verify/mutation/agent-mutation/real-exec"
