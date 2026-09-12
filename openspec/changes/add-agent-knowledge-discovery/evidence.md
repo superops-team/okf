@@ -1,7 +1,7 @@
 # Evidence — add-agent-knowledge-discovery (fresh run)
 
-- Source commit: `018996c6fc0d53211c7b123a2480fda7cacf5aa6`
-- Verification timestamp (UTC): 2026-09-12T04:22:39Z
+- Source commit: `33c33e1bb553d49ecd8a3f388f6c8c34ff6ad4c9`
+- Verification timestamp (UTC): 2026-09-12T05:01:48Z
 - Toolchain: go version go1.26.7 linux/amd64
 - Go/tool versions: go1.26.7 / toolchain auto
 - One-command entry point: `tools/verify-agent-discovery.sh`
@@ -46,7 +46,7 @@
 - S47 grouped eval (hybrid strategy, all three projections):
 - concept: srcRecall=0.9231 ndcg=0.8021 diversity=1.0000 occupancy=0.2250
 - source: srcRecall=0.9231 ndcg=0.8021 diversity=1.0000 occupancy=0.2250
-- folder: srcRecall=0.4038 ndcg=1.0000 diversity=0.2250 occupancy=1.0000
+- folder: srcRecall=0.9231 ndcg=1.0000 diversity=0.2250 occupancy=1.0000
 
 ## S48 resource bounds (1,000 files)
 ```

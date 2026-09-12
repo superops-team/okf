@@ -10,9 +10,10 @@
 - Implementation commits (branch `spec/agent-knowledge-discovery`, on top of `f771d6d`):
   - `070decd` — P0–P3 implementation + tests (identity, manifest, projection, agentconfig, wiring)
   - `47ec717` — P4 docs, version 0.7.0, quality-gate scripts (gauntlet, verify, mutants)
-  - `018996c` — S46/S47 fixes: grouped eval uses hybrid strategy, `TestHybridBaselineGate` machine gate, spec-amendment.md
-- Evidence commit: this `conformance.md` and `evidence.md` are committed separately after the final fresh run. Two-SHA split avoids circular claim: evidence numbers were produced from the implementation at `018996c`, then recorded here.
-- Verification timestamp (UTC): 2026-09-12T04:22:39Z (verify run); gauntlet run immediately after (EXIT=0).
+  - `018996c` — S47 grouped eval hybrid strategy fix + first spec-amendment draft
+  - `33c33e1` — S47 folder relevant-source recall fix (CoveredSources), chunk-level S46 gate `TestHybridBaselineGate_ChunkLevel` + baseline artifact, spec-amendment status → Proposed/pending, verify S47 gate assertion
+- Evidence commit: this `conformance.md` and `evidence.md` are committed separately after the final fresh run. Two-SHA split avoids circular claim: evidence numbers were produced from the implementation at `33c33e1`, then recorded here.
+- Verification timestamp (UTC): 2026-09-12T05:01:48Z (verify run); gauntlet run immediately after (EXIT=0).
 - Go/tool versions: `go version go1.26.7 linux/amd64`; no new third-party dependency.
 - One-command entry point: `tools/verify-agent-discovery.sh` (fresh run); gate: `tools/gauntlet.sh` (L1–L10 + L6a/b/L7/L8/L9b).
 - Reproduce: `go build ./... && go vet ./... && go test ./... && tools/mutants-agent-discovery.sh && tools/verify-agent-discovery.sh && tools/gauntlet.sh`.
@@ -89,4 +90,4 @@ Alignment legend: `fully` = exact behavior implemented and verified by a fresh r
 - [x] Results come from the final source state after the last edit (fresh `tools/verify-agent-discovery.sh` run).
 - [x] No `gap` remains. S46 is `partial` because spec-amendment.md is Proposed (pending user approval); the original-spec "before/after no decline" is satisfied by base-vs-head executable proof, and the chunk-level machine gate enforces non-regression. S47 is `fully` (code bug fixed per original spec).
 - [x] Retrieval metrics, Manifest bytes-read, client fixture results and mutation kills use actual numbers (see `evidence.md`).
-- [x] Implementation commits `070decd`/`47ec717`/`018996c` and evidence commit (this file) are all on branch `spec/agent-knowledge-discovery`; all commands are reproducible from the repository.
+- [x] Implementation commits `070decd`/`47ec717`/`018996c`/`33c33e1` and evidence commit (this file) are all on branch `spec/agent-knowledge-discovery`; all commands are reproducible from the repository.
