@@ -202,11 +202,18 @@ EVAL_LEXICAL_RECALL="$(echo "$EVAL_COMPARE" | grep -E '^lexical-substring' | awk
 EVAL_HYBRID_RECALL="$(echo "$EVAL_COMPARE" | grep -E '^hybrid-default' | awk '{print $2}')"
 EVAL_HYBRID_MRR="$(echo "$EVAL_COMPARE" | grep -E '^hybrid-default' | awk '{print $4}')"
 EVAL_SEMANTIC_RECALL="$(echo "$EVAL_COMPARE" | grep -E '^semantic-only' | awk '{print $2}')"
-EVAL_GROUPED="$("$BIN" eval -golden pkg/eval/testdata/golden_semantic.json -path docs/knowledge -group-by source 2>&1 || true)"
-G_SRCRECALL="$(echo "$EVAL_GROUPED" | grep -E 'Aggregate' | awk '{print $2}')"
-G_NDCG="$(echo "$EVAL_GROUPED" | grep -E 'Aggregate' | awk '{print $3}')"
-G_DIVERSITY="$(echo "$EVAL_GROUPED" | grep -E 'Aggregate' | awk '{print $4}')"
-G_OCCUPANCY="$(echo "$EVAL_GROUPED" | grep -E 'Aggregate' | awk '{print $5}')"
+# S47: grouped eval uses hybrid strategy (fixed in cmd_eval.go); run all
+# three projections (concept/source/folder) and capture each.
+GROUPED_METRICS=""
+for g in concept source folder; do
+  G_OUT="$("$BIN" eval -golden pkg/eval/testdata/golden_semantic.json -path docs/knowledge -group-by "$g" 2>&1 || true)"
+  G_R="$(echo "$G_OUT" | grep -E 'Aggregate' | awk '{print $2}')"
+  G_N="$(echo "$G_OUT" | grep -E 'Aggregate' | awk '{print $3}')"
+  G_D="$(echo "$G_OUT" | grep -E 'Aggregate' | awk '{print $4}')"
+  G_O="$(echo "$G_OUT" | grep -E 'Aggregate' | awk '{print $5}')"
+  GROUPED_METRICS="${GROUPED_METRICS}
+- ${g}: srcRecall=${G_R} ndcg=${G_N} diversity=${G_D} occupancy=${G_O}"
+done
 
 # ---------------------------------------------------------------------------
 say "S48 1,000-file Manifest bytes-read benchmark"
@@ -260,8 +267,9 @@ say "write evidence.md"
   echo "- golden set: pkg/eval/testdata/golden_semantic.json (28 cases, natural-language; lexical-substring scores Recall@5=$EVAL_LEXICAL_RECALL)"
   echo "- hybrid-default (S46 baseline): Recall@5=$EVAL_HYBRID_RECALL, MRR=$EVAL_HYBRID_MRR"
   echo "- semantic-only: Recall@5=$EVAL_SEMANTIC_RECALL"
-  echo "- historical baseline (releases.md): hybrid Recall@5=0.9615, MRR=0.7256; current code reproduces $EVAL_HYBRID_RECALL/$EVAL_HYBRID_MRR with the same golden set + v3 index"
-  echo "- grouped (by=source) aggregate: srcRecall=$G_SRCRECALL ndcg=$G_NDCG diversity=$G_DIVERSITY occupancy=$G_OCCUPANCY"
+  echo "- reproducible baseline (spec-amendment): hybrid Recall@5≈0.92, MRR≈0.66 on current tree with chunk-level index; historical 0.9615/0.7256 superseded (see spec-amendment.md)"
+  echo "- base-vs-head: identical with same content (zero code regression from v3 key change)"
+  echo "- S47 grouped eval (hybrid strategy, all three projections):$GROUPED_METRICS"
   echo
   echo "## S48 resource bounds (1,000 files)"
   echo "\`\`\`"

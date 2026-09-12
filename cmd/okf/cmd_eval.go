@@ -74,7 +74,26 @@ func cmdEval(args []string) int {
 	}
 
 	if *groupBy != "" {
-		gReport := eval.RunGroupedBenchmark(qb, cases, cutoff, query.GroupBy(*groupBy))
+		// S47: grouped eval must use the same hybrid raw-candidate strategy as
+		// S46, not the lexical-only DefaultStrategy. Build semantic+BM25 backends
+		// and fall back to lexical with a clear warning if the vector index is
+		// unavailable.
+		groupedStrategy := eval.DefaultStrategy
+		if emb, err := embeddings.NewMiniLM(); err == nil {
+			defer emb.Close()
+			idx := vectorindex.NewHNSW(emb.Dimension())
+			if _, lerr := idx.Load(vectorIndexDir(*path)); lerr == nil {
+				sem := &semanticBackend{emb: emb, idx: idx}
+				lex := query.BuildLexicalBackend(qb)
+				groupedStrategy = makeEvalStrategy(sem, lex, cutoff,
+					query.DefaultVectorWeight, query.DefaultLexicalWeight)
+			} else {
+				fmt.Printf("Warning: 向量索引不可用 (%v)，grouped eval 回退到 lexical 策略\n\n", lerr)
+			}
+		} else {
+			fmt.Printf("Warning: 向量模型不可用 (%v)，grouped eval 回退到 lexical 策略\n\n", err)
+		}
+		gReport := eval.RunGroupedBenchmarkWith(qb, cases, cutoff, query.GroupBy(*groupBy), groupedStrategy)
 		fmt.Print(gReport.String())
 		if *verbose {
 			for _, c := range gReport.Cases {
