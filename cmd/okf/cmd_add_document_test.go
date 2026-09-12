@@ -292,7 +292,7 @@ func TestCmdAddDocumentsSearchable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadBundle: %v", err)
 	}
-	qb := toQueryBundle(bundle)
+	qb := query.BundleFromOKF(bundle)
 	cases := []struct {
 		kw   string
 		want string // expected product file

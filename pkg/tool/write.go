@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/superops-team/okf/pkg/identity"
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/parser"
 )
@@ -101,6 +102,12 @@ func (s *Service) WriteKnowledge(ctx stdctx.Context, req WriteKnowledgeRequest) 
 	}
 
 	concept := buildKnowledgeConcept(payload, strings.TrimSpace(req.IdempotencyKey), conceptID, relPath, payloadHash)
+	// Additive stable ref: durable capture keeps its deterministic concept_id as
+	// the idempotency/path handle, and additionally receives a stable okf_id.
+	// The two are never substituted for one another.
+	if _, err := identity.EnsureFinalID(concept, fullPath); err != nil {
+		return failure(OperationWrite, resolved.repoRoot, resolved.knowledgeDir, readFreshness(resolved), err)
+	}
 	data, err := serializeKnowledgeConcept(concept)
 	if err != nil {
 		return failure(OperationWrite, resolved.repoRoot, resolved.knowledgeDir, readFreshness(resolved), err)

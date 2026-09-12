@@ -233,7 +233,7 @@ func TestSemanticDeepTailChunkedVsUnchunked(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		qb := toQueryBundle(bundle)
+		qb := query.BundleFromOKF(bundle)
 		emb, err := embeddings.NewMiniLM()
 		if err != nil {
 			t.Fatal(err)
@@ -303,7 +303,7 @@ func TestSemanticSearchChunkedOneSlot(t *testing.T) {
 	}
 	defer emb.Close()
 	idx := vectorindex.NewHNSW(emb.Dimension())
-	qb := toQueryBundle(bundle)
+	qb := query.BundleFromOKF(bundle)
 	for _, c := range qb.Concepts {
 		for _, ch := range query.ConceptChunks(c) {
 			vec, err := emb.EmbedQuery(ch.Text())

@@ -33,7 +33,7 @@ func loadKnowledgeBundle(path string) (*query.KnowledgeBundle, *okf.KnowledgeBun
 	if err != nil {
 		return nil, nil, err
 	}
-	return toQueryBundle(bundle), bundle, nil
+	return query.BundleFromOKF(bundle), bundle, nil
 }
 
 // conceptChunkSource 返回参与分块的正文。

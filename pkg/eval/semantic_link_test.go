@@ -141,12 +141,12 @@ func buildChunkedBundleOnDisk(t *testing.T, words int) *query.KnowledgeBundle {
 	sb.WriteString(tail)
 	md := sb.String()
 	// whole concept
-	whole := convert.WrapConcept("doc", "doc.txt", "txt", "source", md)
+	whole := convert.WrapConcept("doc", "doc.txt", "txt", "source", md, "")
 	// chunks
 	chunks := convert.Split(md, nil)
 	for i, ck := range chunks {
 		title := "doc — part " + string(rune('0'+i+1))
-		chunkMD := convert.WrapChunkConcept(title, "doc.txt", "txt", "doc.txt", i, len(chunks), ck.HeadingPath, ck.Text)
+		chunkMD := convert.WrapChunkConcept(title, "doc.txt", "txt", "doc.txt", i, len(chunks), ck.HeadingPath, ck.Text, "")
 		name := "doc.txt__c" + string(rune('0'+i+1)) + ".md"
 		if err := os.WriteFile(filepath.Join(kb, name), []byte(chunkMD), 0o644); err != nil {
 			t.Fatal(err)
@@ -252,7 +252,7 @@ func sqrt64(x float64) float64 {
 // TestChunkedParseOnDisk: chunk files produced by WrapChunkConcept parse back
 // with derived metadata (guards the on-disk fixture shape used above).
 func TestChunkedParseOnDisk(t *testing.T) {
-	md := convert.WrapChunkConcept("doc — part 2", "doc.txt", "txt", "doc.txt", 1, 3, "", "body")
+	md := convert.WrapChunkConcept("doc — part 2", "doc.txt", "txt", "doc.txt", 1, 3, "", "body", "")
 	c, err := parser.ParseConceptBytes("doc.txt__c2.md", []byte(md))
 	if err != nil {
 		t.Fatal(err)

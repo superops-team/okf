@@ -13,6 +13,7 @@ import (
 
 	"github.com/superops-team/okf/pkg/convert"
 	"github.com/superops-team/okf/pkg/embeddings"
+	"github.com/superops-team/okf/pkg/identity"
 	"github.com/superops-team/okf/pkg/lint"
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/parser"
@@ -328,18 +329,20 @@ func (r *ToolRegistry) registerAgentTools() {
 		return serviceEnvelopeResult(r.service.Refresh(context.Background(), toolsvc.RefreshRequest{Mode: mode}))
 	})
 	queryProperties := map[string]interface{}{
-		"query":           stringProperty("Non-empty repository knowledge query"),
-		"limit":           integerProperty("Maximum results"),
-		"type":            stringProperty("Concept type filter"),
-		"tag":             stringProperty("Tag filter"),
-		"file_path":       stringProperty("Source file path filter"),
-		"language":        stringProperty("Language filter"),
-		"symbol_kind":     stringProperty("Symbol kind filter"),
-		"qualified_name":  stringProperty("Qualified symbol name filter"),
-		"relation_kind":   stringProperty("Relation kind filter"),
-		"relation_source": stringProperty("Relation source filter"),
-		"relation_target": stringProperty("Relation target filter"),
-		"include_trace":   booleanProperty("Include deterministic query trace"),
+		"query":                 stringProperty("Non-empty repository knowledge query"),
+		"limit":                 integerProperty("Maximum results"),
+		"type":                  stringProperty("Concept type filter"),
+		"tag":                   stringProperty("Tag filter"),
+		"file_path":             stringProperty("Source file path filter"),
+		"language":              stringProperty("Language filter"),
+		"symbol_kind":           stringProperty("Symbol kind filter"),
+		"qualified_name":        stringProperty("Qualified symbol name filter"),
+		"relation_kind":         stringProperty("Relation kind filter"),
+		"relation_source":       stringProperty("Relation source filter"),
+		"relation_target":       stringProperty("Relation target filter"),
+		"include_trace":         booleanProperty("Include deterministic query trace"),
+		"group_by":              stringProperty("Optional projection grouping: chunk, concept, source, or folder"),
+		"include_group_members": booleanProperty("When grouping, include each group's member list"),
 	}
 	r.Register(readOnlyAgentTool(
 		"okf_query",
@@ -365,6 +368,32 @@ func (r *ToolRegistry) registerAgentTools() {
 			IncludeRelations: boolArg(args, "include_relations"),
 			IncludeTrace:     boolArg(args, "include_trace"),
 		}))
+	})
+	r.Register(readOnlyAgentTool(
+		"okf_resolve",
+		"Resolve a stable okf://concept/<okf_id> ref to its current bundle-relative path",
+		objectSchema(map[string]interface{}{
+			"ref": stringProperty("Stable ref: okf://concept/<okf_id> or bare okf_ id"),
+		}, "ref"),
+	), func(args map[string]interface{}) (*ToolCallResult, error) {
+		ref, _ := args["ref"].(string)
+		return serviceEnvelopeResult(r.service.Resolve(context.Background(), toolsvc.ResolveRequest{Ref: ref}))
+	})
+	r.Register(readOnlyAgentTool(
+		"okf_manifest",
+		"List bounded concept metadata (frontmatter and file metadata only; never returns Markdown bodies)",
+		objectSchema(map[string]interface{}{
+			"offset":        integerProperty("Pagination offset (default 0)"),
+			"limit":         integerProperty("Maximum items (1..500); omitted defaults to 100"),
+			"types":         arrayProperty("Filter by concept type (OR within list)"),
+			"tags":          arrayProperty("Filter by tag (OR within list)"),
+			"statuses":      arrayProperty("Filter by effective status (OR within list)"),
+			"stale":         booleanProperty("Filter by staleness"),
+			"folder_prefix": stringProperty("Bundle-relative folder prefix filter"),
+			"include_trace": booleanProperty("Include deterministic scan trace"),
+		}),
+	), func(args map[string]interface{}) (*ToolCallResult, error) {
+		return serviceEnvelopeResult(r.service.Manifest(context.Background(), manifestRequestFromArgs(args)))
 	})
 	writeProperties := map[string]interface{}{
 		"content":         stringProperty("Knowledge content to persist"),
@@ -450,6 +479,32 @@ func (r *ToolRegistry) registerAgentTools() {
 	})
 }
 
+// manifestRequestFromArgs builds a toolsvc.ManifestRequest, preserving the
+// omitted-vs-explicit presence of limit (nil → 100) and stale (nil → match all).
+func manifestRequestFromArgs(args map[string]interface{}) toolsvc.ManifestRequest {
+	req := toolsvc.ManifestRequest{
+		Offset:       intArg(args, "offset"),
+		Types:        stringSliceArg(args, "types"),
+		Tags:         stringSliceArg(args, "tags"),
+		Statuses:     stringSliceArg(args, "statuses"),
+		FolderPrefix: stringArg(args, "folder_prefix"),
+		IncludeTrace: boolArg(args, "include_trace"),
+	}
+	if _, ok := args["limit"]; ok {
+		l := intArg(args, "limit")
+		req.Limit = &l
+	}
+	if v, ok := args["stale"].(bool); ok {
+		req.Stale = &v
+	}
+	return req
+}
+
+func stringArg(args map[string]interface{}, key string) string {
+	v, _ := args[key].(string)
+	return v
+}
+
 func queryRequestFromArgs(args map[string]interface{}) toolsvc.QueryRequest {
 	query, _ := args["query"].(string)
 	typeFilter, _ := args["type"].(string)
@@ -463,19 +518,21 @@ func queryRequestFromArgs(args map[string]interface{}) toolsvc.QueryRequest {
 	relationSource, _ := args["relation_source"].(string)
 	relationTarget, _ := args["relation_target"].(string)
 	return toolsvc.QueryRequest{
-		Query:          query,
-		Limit:          intArg(args, "limit"),
-		Type:           typeFilter,
-		Project:        project,
-		Tag:            tag,
-		FilePath:       filePath,
-		Language:       language,
-		SymbolKind:     symbolKind,
-		QualifiedName:  qualifiedName,
-		RelationKind:   relationKind,
-		RelationSource: relationSource,
-		RelationTarget: relationTarget,
-		IncludeTrace:   boolArg(args, "include_trace"),
+		Query:               query,
+		Limit:               intArg(args, "limit"),
+		Type:                typeFilter,
+		Project:             project,
+		Tag:                 tag,
+		FilePath:            filePath,
+		Language:            language,
+		SymbolKind:          symbolKind,
+		QualifiedName:       qualifiedName,
+		RelationKind:        relationKind,
+		RelationSource:      relationSource,
+		RelationTarget:      relationTarget,
+		IncludeTrace:        boolArg(args, "include_trace"),
+		GroupBy:             stringArg(args, "group_by"),
+		IncludeGroupMembers: boolArg(args, "include_group_members"),
 	}
 }
 
@@ -847,7 +904,7 @@ func (r *ToolRegistry) handleSemanticSearch(args map[string]interface{}) (*ToolC
 	}
 
 	backend := &mcpSemanticBackend{emb: emb, idx: idx}
-	qb := mcpToQueryBundle(bundle)
+	qb := query.BundleFromOKF(bundle)
 	// 必须与 CLI 走同一条融合路径：不接词法后端时，SemanticSearch 会退化为
 	// 内置子串匹配通道（实测 Recall@5 仅 0.0769），使 MCP 消费方拿到明显更差的结果。
 	opts := query.SearchOptions{TopK: limit, Lexical: query.BuildLexicalBackend(qb)}
@@ -897,23 +954,6 @@ func (b *mcpSemanticBackend) Search(vec []float32, k int) []query.SemanticHit {
 		out[i] = query.SemanticHit{Key: m.Key, Score: m.Score}
 	}
 	return out
-}
-
-// mcpToQueryBundle 将 okf bundle 转换为 query bundle（与 CLI toQueryBundle 逻辑一致）。
-func mcpToQueryBundle(bundle *okf.KnowledgeBundle) *query.KnowledgeBundle {
-	concepts := make([]*query.Concept, 0, len(bundle.Concepts))
-	for _, c := range bundle.Concepts {
-		concepts = append(concepts, &query.Concept{
-			Type:        c.Type,
-			Title:       c.Title,
-			Description: c.Description,
-			Resource:    c.Resource,
-			Tags:        c.Tags,
-			Content:     c.Content,
-			FilePath:    c.FilePath,
-		})
-	}
-	return &query.KnowledgeBundle{Concepts: concepts}
 }
 
 func (r *ToolRegistry) handleLintBundle(args map[string]interface{}) (*ToolCallResult, error) {
@@ -1038,12 +1078,19 @@ func (r *ToolRegistry) handleImportDocument(args map[string]interface{}) (*ToolC
 	if typeOverride != "" {
 		ctype = typeOverride
 	}
-	body := convert.WrapConcept(title, filepath.Base(path), convert.DocumentType(path), ctype, res.Markdown)
 	out := filepath.Join(bundlePath, filepath.Base(path)+".md")
+	// Final-destination identity: MCP import writes directly to the bundle, so
+	// preserve an existing valid okf_id on re-import or mint a fresh one.
+	parentID, err := identity.EnsureFinalID(&okf.Concept{FilePath: out}, out)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to assign stable id: %v", err)), nil
+	}
+	body := convert.WrapConcept(title, filepath.Base(path), convert.DocumentType(path), ctype, res.Markdown, parentID)
 	files := []targetFile{{path: out, data: []byte(body)}}
 
 	// Chunk large documents (same threshold and naming as cmd_add): whole
 	// concept plus <original>__cN.md chunk concepts, written failure-atomically.
+	// Derived chunks record the parent's stable id under parent_okf_id.
 	if convert.Words(res.Markdown) > convert.ChunkThreshold {
 		chunks := convert.Split(res.Markdown, nil)
 		for i, ck := range chunks {
@@ -1052,7 +1099,7 @@ func (r *ToolRegistry) handleImportDocument(args map[string]interface{}) (*ToolC
 				chunkTitle = ck.HeadingPath // heading-derived title
 			}
 			chunkFile := strings.TrimSuffix(out, ".md") + "__c" + strconv.Itoa(i+1) + ".md"
-			cbody := convert.WrapChunkConcept(chunkTitle, filepath.Base(path), convert.DocumentType(path), filepath.Base(path), i, len(chunks), ck.HeadingPath, ck.Text)
+			cbody := convert.WrapChunkConcept(chunkTitle, filepath.Base(path), convert.DocumentType(path), filepath.Base(path), i, len(chunks), ck.HeadingPath, ck.Text, parentID)
 			files = append(files, targetFile{path: chunkFile, data: []byte(cbody)})
 		}
 	}

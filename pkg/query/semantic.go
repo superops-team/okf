@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/superops-team/okf/pkg/identity"
 )
 
 // SemanticHit 是语义召回通道返回的单条命中（key 为概念指纹）。
@@ -25,8 +27,26 @@ type SemanticBackend interface {
 // 与向量索引的 key 一致（CLI 构建索引与检索需使用同一函数）。
 // 注意：FilePath 是相对 bundle 根的路径，这里刻意不做 filepath.Abs——
 // 避免指纹依赖进程工作目录（CLI 与 MCP 进程 cwd 不同会导致 key 不一致）。
+//
+// Fingerprint 仍是 legacy 概念的回退指纹与确定性 tie-break 键；
+// 索引 key 的构建统一走 ConceptKey（见下文），不要直接用 Fingerprint 建索引。
 func Fingerprint(c *Concept) string {
 	return strings.ToLower(c.Type) + ":" + strings.ToLower(c.Title) + ":" + filepath.ToSlash(filepath.Clean(c.FilePath))
+}
+
+// ConceptKey 构建 identity-aware 的向量/词法索引 key。
+//
+// 携带合法 okf_id 的概念使用稳定 key "v3:id:<okf_id>"，重命名/移动文件后
+// key 不变（S14/S11）；无 okf_id 或 okf_id 非法的 legacy 概念回退到确定性
+// 指纹 "v3:legacy:<指纹>"。这是字符串级纯函数，读取 CustomFields[identity.Field]
+// 但不依赖概念模型之外的任何状态。
+func ConceptKey(c *Concept) string {
+	legacy := Fingerprint(c)
+	if c == nil || c.CustomFields == nil {
+		return identity.Key("", legacy)
+	}
+	okfID, _ := c.CustomFields[identity.Field].(string)
+	return identity.Key(okfID, legacy)
 }
 
 // chunkKeySep 分隔概念指纹与块序号。
@@ -34,9 +54,11 @@ func Fingerprint(c *Concept) string {
 // 不会包含 '#'；title 若含 '#' 也不影响解析，因为 ChunkKeyConcept 从右侧截取。
 const chunkKeySep = "#"
 
-// ChunkKey 生成分块级索引 key：<概念指纹>#<块序号>。
+// ChunkKey 生成分块级索引 key：<conceptKey>#<块序号>。
+// conceptKey 由 ConceptKey 决定（v3:id 或 v3:legacy 前缀），保证重命名/移动后
+// 同一概念的 chunk key 仍然稳定。
 func ChunkKey(c *Concept, ordinal int) string {
-	return Fingerprint(c) + chunkKeySep + strconv.Itoa(ordinal)
+	return ConceptKey(c) + chunkKeySep + strconv.Itoa(ordinal)
 }
 
 // ChunkKeyConcept 从分块 key 反解出概念指纹；无分隔符时原样返回（兼容概念级 key）。
@@ -186,10 +208,11 @@ func SemanticSearch(bundle *KnowledgeBundle, text string, backend SemanticBacken
 		opts.LexicalWeight = 0
 	}
 
-	// 指纹 → 概念 映射
-	byFingerprint := make(map[string]*Concept, len(bundle.Concepts))
+	// conceptKey → 概念 映射（v3:id 或 v3:legacy 前缀）。
+	// 命中经 ChunkKeyConcept 剥离块序号后在此回溯到父概念。
+	byConceptKey := make(map[string]*Concept, len(bundle.Concepts))
 	for _, c := range bundle.Concepts {
-		byFingerprint[Fingerprint(c)] = c
+		byConceptKey[ConceptKey(c)] = c
 	}
 
 	// 语义通道：索引以 chunk 为单位，需放大召回后回溯父概念。
@@ -211,7 +234,7 @@ func SemanticSearch(bundle *KnowledgeBundle, text string, backend SemanticBacken
 		want := opts.TopK * opts.CandidateFactor
 		rank := 0
 		for _, hit := range backend.Search(vec, want) {
-			c, ok := byFingerprint[ChunkKeyConcept(hit.Key)]
+			c, ok := byConceptKey[ChunkKeyConcept(hit.Key)]
 			if !ok {
 				continue
 			}
@@ -232,7 +255,7 @@ func SemanticSearch(bundle *KnowledgeBundle, text string, backend SemanticBacken
 			want := opts.TopK * opts.CandidateFactor
 			rank := 0
 			for _, hit := range opts.Lexical.Search(text, want) {
-				c, ok := byFingerprint[ChunkKeyConcept(hit.Key)]
+				c, ok := byConceptKey[ChunkKeyConcept(hit.Key)]
 				if !ok {
 					continue
 				}

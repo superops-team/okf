@@ -47,7 +47,7 @@ func TestLongDocumentTailIsRetrievable(t *testing.T) {
 	bundle := &KnowledgeBundle{Concepts: []*Concept{long, other}}
 
 	// 改动前：概念级索引，尾部内容不在索引中 → 只有 other 能被召回
-	before := &chunkAwareBackend{hits: []string{Fingerprint(other)}}
+	before := &chunkAwareBackend{hits: []string{ConceptKey(other)}}
 	got, err := SemanticSearch(bundle, "tail marker phrase", before,
 		SearchOptions{TopK: 5}.WithLexicalWeight(0))
 	if err != nil {
@@ -58,7 +58,7 @@ func TestLongDocumentTailIsRetrievable(t *testing.T) {
 	}
 
 	// 改动后：尾部小节自成一块（#1）并进入索引 → 必须能召回到父概念
-	after := &chunkAwareBackend{hits: []string{ChunkKey(long, 1), Fingerprint(other)}}
+	after := &chunkAwareBackend{hits: []string{ChunkKey(long, 1), ConceptKey(other)}}
 	got, err = SemanticSearch(bundle, "tail marker phrase", after,
 		SearchOptions{TopK: 5}.WithLexicalWeight(0))
 	if err != nil {

@@ -19,7 +19,7 @@ func TestPropertyWrapConceptRoundTrip(t *testing.T) {
 		if strings.ContainsRune(title, '\x00') || !utf8.ValidString(title) {
 			return true
 		}
-		doc := WrapConcept(title, "p.pdf", "pdf", "source", body)
+		doc := WrapConcept(title, "p.pdf", "pdf", "source", body, "")
 		c, err := parser.ParseConceptBytes("p.pdf.md", []byte(doc))
 		if err != nil {
 			return false

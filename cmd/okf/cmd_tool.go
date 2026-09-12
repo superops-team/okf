@@ -14,7 +14,7 @@ import (
 
 func cmdTool(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: okf tool <status|init|refresh|query|context> [options]")
+		fmt.Fprintln(os.Stderr, "Usage: okf tool <status|init|refresh|query|context|manifest> [options]")
 		return 1
 	}
 
@@ -30,6 +30,8 @@ func cmdTool(args []string) int {
 		return cmdToolQuery(args[1:])
 	case "context":
 		return cmdToolContext(args[1:])
+	case "manifest":
+		return cmdToolManifest(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown tool subcommand: %s\n", subcommand)
 		return 1
@@ -79,6 +81,8 @@ func cmdToolQuery(args []string) int {
 	relationSource := flags.String("relation-source", "", "Relation source filter")
 	relationTarget := flags.String("relation-target", "", "Relation target filter")
 	includeTrace := flags.Bool("include-trace", false, "Include compact retrieval trace")
+	groupBy := flags.String("group-by", "", "Project results into chunk|concept|source|folder groups (omit keeps ungrouped output)")
+	includeGroupMembers := flags.Bool("include-group-members", false, "Include per-member hit lists inside each projected group")
 	if err := parseToolFlags(flags, args); err != nil {
 		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationQuery, toolsvc.ErrInvalidRequest, sanitizeFlagParseError(err), "Fix the invalid flag values and try again."), *jsonOut || hasJSONFlag(args))
 	}
@@ -89,18 +93,20 @@ func cmdToolQuery(args []string) int {
 		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationQuery, toolsvc.ErrInvalidRequest, "limit must be non-negative", "Pass --limit 0 or a positive integer."), *jsonOut)
 	}
 	return emitToolEnvelope(toolService(*repoPath, *knowledgeDir).Query(context.Background(), toolsvc.QueryRequest{
-		Query:          *query,
-		Limit:          *limit,
-		Type:           *typeFilter,
-		Tag:            *tag,
-		FilePath:       *filePath,
-		Language:       *language,
-		SymbolKind:     *symbolKind,
-		QualifiedName:  *qualifiedName,
-		RelationKind:   *relationKind,
-		RelationSource: *relationSource,
-		RelationTarget: *relationTarget,
-		IncludeTrace:   *includeTrace,
+		Query:               *query,
+		Limit:               *limit,
+		Type:                *typeFilter,
+		Tag:                 *tag,
+		FilePath:            *filePath,
+		Language:            *language,
+		SymbolKind:          *symbolKind,
+		QualifiedName:       *qualifiedName,
+		RelationKind:        *relationKind,
+		RelationSource:      *relationSource,
+		RelationTarget:      *relationTarget,
+		IncludeTrace:        *includeTrace,
+		GroupBy:             *groupBy,
+		IncludeGroupMembers: *includeGroupMembers,
 	}), *jsonOut)
 }
 
@@ -126,6 +132,68 @@ func cmdToolContext(args []string) int {
 		IncludeRelations: *includeRelations,
 		IncludeTrace:     *includeTrace,
 	}), *jsonOut)
+}
+
+func cmdToolManifest(args []string) int {
+	flags := newToolFlagSet("tool manifest")
+	repoPath, knowledgeDir, jsonOut := addToolCommonFlags(flags)
+	offset := flags.Int("offset", 0, "Pagination offset")
+	limit := flags.Int("limit", 0, "Maximum items (1..500); omitted defaults to 100")
+	types := flags.String("types", "", "Comma-separated type filter (OR within)")
+	tags := flags.String("tags", "", "Comma-separated tag filter (OR within)")
+	statuses := flags.String("statuses", "", "Comma-separated status filter (OR within)")
+	stale := flags.Bool("stale", false, "Filter by staleness (omit to match all)")
+	folderPrefix := flags.String("folder-prefix", "", "Bundle-relative folder prefix filter")
+	includeTrace := flags.Bool("include-trace", false, "Include deterministic scan trace")
+	if err := parseToolFlags(flags, args); err != nil {
+		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationManifest, toolsvc.ErrInvalidRequest, sanitizeFlagParseError(err), "Fix the invalid flag values and try again."), *jsonOut || hasJSONFlag(args))
+	}
+
+	req := toolsvc.ManifestRequest{
+		Offset:       *offset,
+		Types:        splitListFlag(*types),
+		Tags:         splitListFlag(*tags),
+		Statuses:     splitListFlag(*statuses),
+		FolderPrefix: *folderPrefix,
+		IncludeTrace: *includeTrace,
+	}
+	// Preserve omitted-vs-explicit presence: a limit flag that was not provided
+	// stays nil (→100); an explicit value is pointer-backed and range-validated.
+	if flagSetOnCLI(flags, "limit") {
+		l := *limit
+		req.Limit = &l
+	}
+	if flagSetOnCLI(flags, "stale") {
+		s := *stale
+		req.Stale = &s
+	}
+	return emitToolEnvelope(toolService(*repoPath, *knowledgeDir).Manifest(context.Background(), req), *jsonOut)
+}
+
+// flagSetOnCLI reports whether a flag was explicitly provided on the command
+// line (as opposed to left at its default value).
+func flagSetOnCLI(flags *flag.FlagSet, name string) bool {
+	set := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
+}
+
+func splitListFlag(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func newToolFlagSet(name string) *flag.FlagSet {

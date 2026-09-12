@@ -42,6 +42,34 @@ type Aggregate struct {
 	NDCG      float64
 }
 
+// GroupedCaseResult holds the grouped-projection utility metrics for one case
+// (S47). The raw Recall@k comparison stays on the ungrouped CaseResult fields.
+type GroupedCaseResult struct {
+	Query                string
+	Groups               int
+	RelevantSourceRecall float64
+	GroupNDCG            float64
+	Diversity            float64
+	SameSourceOccupancy  float64
+}
+
+// GroupedAggregate holds mean grouped scores over a set of cases.
+type GroupedAggregate struct {
+	RelevantSourceRecall float64
+	GroupNDCG            float64
+	Diversity            float64
+	SameSourceOccupancy  float64
+}
+
+// GroupedEvalReport is the report for one projected run (S47).
+type GroupedEvalReport struct {
+	Mode      string
+	GroupBy   query.GroupBy
+	K         int
+	Cases     []GroupedCaseResult
+	Aggregate GroupedAggregate
+}
+
 // EvalReport is the full benchmark output: per-case results + aggregates.
 type EvalReport struct {
 	// Mode 标识本次评测的检索路径：lexical / semantic-rrf / semantic-rerank。
@@ -172,6 +200,104 @@ func CompareStrategies(bundle *query.KnowledgeBundle, cases []EvalCase, k int, s
 		out[name] = RunBenchmarkWith(bundle, cases, k, strategy)
 	}
 	return out
+}
+
+// conceptsToResultHits adapts the already-ordered, fused candidate pool into the
+// entry-point-agnostic projection input. It mirrors the Service and CLI adapters
+// so the shared query.Project engine sees identical identity/source signals.
+func conceptsToResultHits(concepts []*query.Concept) []query.ResultHit {
+	hits := make([]query.ResultHit, 0, len(concepts))
+	for i, c := range concepts {
+		if c == nil {
+			continue
+		}
+		okfID, _ := c.CustomFields["okf_id"].(string)
+		parentID, _ := c.CustomFields["parent_okf_id"].(string)
+		sourcePath, _ := c.CustomFields["source_path"].(string)
+		hits = append(hits, query.ResultHit{
+			OKFID:             okfID,
+			ParentOKFID:       parentID,
+			LegacyFingerprint: query.Fingerprint(c),
+			Ref:               docIDOf(c),
+			ConceptPath:       c.FilePath,
+			SourcePath:        sourcePath,
+			Rank:              i + 1,
+			Score:             float64(len(concepts) - i), // representative rank governs ordering; score is informational
+			Provenance:        "lexical",
+		})
+	}
+	return hits
+}
+
+// RunGroupedBenchmark projects the raw candidate pool into groups and scores the
+// grouped-utility metrics (S47). It runs the existing ungrouped strategy to get
+// the candidate pool, projects it through the shared query.Project engine with
+// groupBy, and computes relevant-source recall, group NDCG, diversity and
+// same-source occupancy. It never changes channel candidates or scores.
+func RunGroupedBenchmark(bundle *query.KnowledgeBundle, cases []EvalCase, k int, groupBy query.GroupBy) *GroupedEvalReport {
+	return RunGroupedBenchmarkWith(bundle, cases, k, groupBy, DefaultStrategy)
+}
+
+// RunGroupedBenchmarkWith is the strategy-injected variant of RunGroupedBenchmark.
+func RunGroupedBenchmarkWith(bundle *query.KnowledgeBundle, cases []EvalCase, k int, groupBy query.GroupBy, strategy SearchStrategy) *GroupedEvalReport {
+	if strategy == nil {
+		strategy = DefaultStrategy
+	}
+	report := &GroupedEvalReport{GroupBy: groupBy, K: k, Cases: make([]GroupedCaseResult, 0, len(cases))}
+	var sums GroupedAggregate
+	positive := 0
+	for _, c := range cases {
+		results := strategy(bundle, c.Query)
+		pool := conceptsToResultHits(results)
+		groups, _, err := query.Project(pool, groupBy, false, k)
+		if err != nil {
+			// A bad groupBy at this point would be a wiring bug; surface an
+			// all-zero case rather than panic the whole run.
+			groups = nil
+		}
+		relevant := toSet(c.ExpectedDocs)
+		relMap := make(map[string]float64, len(groups))
+		for _, g := range groups {
+			if _, ok := relevant[groupCoveredSource(g)]; ok {
+				relMap[g.GroupKey] = 1.0
+			}
+		}
+		cr := GroupedCaseResult{
+			Query:                c.Query,
+			Groups:               len(groups),
+			RelevantSourceRecall: RelevantSourceRecallAtK(groups, c.ExpectedDocs, k),
+			GroupNDCG:            GroupNDCG(groups, relMap, k),
+			Diversity:            Diversity(groups),
+			SameSourceOccupancy:  SameSourceOccupancy(groups),
+		}
+		report.Cases = append(report.Cases, cr)
+		if len(c.ExpectedDocs) > 0 {
+			sums.RelevantSourceRecall += cr.RelevantSourceRecall
+			sums.GroupNDCG += cr.GroupNDCG
+			sums.Diversity += cr.Diversity
+			sums.SameSourceOccupancy += cr.SameSourceOccupancy
+			positive++
+		}
+	}
+	if positive > 0 {
+		n := float64(positive)
+		sums.RelevantSourceRecall /= n
+		sums.GroupNDCG /= n
+		sums.Diversity /= n
+		sums.SameSourceOccupancy /= n
+	}
+	report.Aggregate = sums
+	return report
+}
+
+// String renders a human-readable grouped-projection report.
+func (r *GroupedEvalReport) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "=== Grouped IR Eval (by=%s, K=%d, %d positive cases) ===\n", r.GroupBy, r.K, len(r.Cases))
+	fmt.Fprintf(&b, "%-22s %10s %10s %10s %10s\n", "Metric", "SrcRecall", "NDCG", "Diversity", "Occupancy")
+	fmt.Fprintf(&b, "%-22s %10.4f %10.4f %10.4f %10.4f\n", "Aggregate",
+		r.Aggregate.RelevantSourceRecall, r.Aggregate.GroupNDCG, r.Aggregate.Diversity, r.Aggregate.SameSourceOccupancy)
+	return b.String()
 }
 
 // FormatComparison renders reports in deterministic strategy-name order.

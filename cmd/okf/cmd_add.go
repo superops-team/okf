@@ -415,7 +415,7 @@ func convertAndStageDocuments(srcPath string) (stagingDir string, convertedCount
 					chunkTitle = ck.HeadingPath // heading-derived title
 				}
 				chunkFile := strings.TrimSuffix(out, ".md") + "__c" + strconv.Itoa(i+1) + ".md"
-				cbody := convert.WrapChunkConcept(chunkTitle, filepath.Base(doc), convert.DocumentType(doc), rel, i, len(chunks), ck.HeadingPath, ck.Text)
+				cbody := convert.WrapChunkConcept(chunkTitle, filepath.Base(doc), convert.DocumentType(doc), rel, i, len(chunks), ck.HeadingPath, ck.Text, "")
 				if werr := os.WriteFile(chunkFile, []byte(cbody), 0o644); werr != nil {
 					return "", 0, 0, cleanup, werr
 				}
@@ -620,5 +620,8 @@ func relativePath(root, path string, rootIsDir bool) string {
 // Delegates to convert.WrapConcept so cmd_add and the MCP tool share one
 // frontmatter format.
 func wrapFrontmatter(title, filename, format, body string) string {
-	return convert.WrapConcept(title, filename, format, "source", body)
+	// cmd_add writes to a conversion staging directory first; staging must not
+	// receive a random okf_id (design §3.3). The explicit `okf identity ensure`
+	// migration adds ids at the final destination later.
+	return convert.WrapConcept(title, filename, format, "source", body, "")
 }

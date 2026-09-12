@@ -16,7 +16,7 @@ import (
 	"github.com/superops-team/okf/pkg/query"
 )
 
-const Version = "0.6.0"
+const Version = "0.7.0"
 
 const usage = `okf - Open Knowledge Format CLI
 
@@ -37,6 +37,8 @@ Commands:
   eval        Run the IR evaluation benchmark against a golden query set
   config      Manage configuration
   tool        Agent-facing JSON tool operations (status|init|refresh|query|context)
+  identity    Stable concept identity migration and resolution (ensure|resolve)
+  agent       Project-scoped agent integration (plan|apply|status|remove)
   mcp         Start MCP (Model Context Protocol) server for AI agent integration
   hook        Install git hook for automatic updates
   version     Show version information
@@ -89,6 +91,10 @@ func main() {
 		os.Exit(cmdConfig(os.Args[2:]))
 	case "tool":
 		os.Exit(cmdTool(os.Args[2:]))
+	case "identity":
+		os.Exit(cmdIdentity(os.Args[2:]))
+	case "agent":
+		os.Exit(CmdAgent(os.Args[2:]))
 	case "mcp":
 		cmdMCP(os.Args[2:])
 	case "hook":
@@ -357,6 +363,8 @@ func cmdSearch(args []string) {
 	k := fs.Int("k", 10, "Number of results for semantic search")
 	lexicalWeight := fs.Float64("lexical-weight", -1,
 		"Weight of the BM25 lexical channel in hybrid search (default 0.5; 0 disables it for pure semantic search)")
+	groupBy := fs.String("group-by", "", "Optional projection grouping: chunk|concept|source|folder")
+	includeGroupMembers := fs.Bool("include-group-members", false, "When grouping, print each group's members")
 	fs.Parse(args)
 
 	if *path == "" {
@@ -384,7 +392,7 @@ func cmdSearch(args []string) {
 		os.Exit(1)
 	}
 
-	queryBundle := toQueryBundle(bundle)
+	queryBundle := query.BundleFromOKF(bundle)
 
 	var searchResults []query.SearchResult
 	semanticUsed := false
@@ -401,6 +409,14 @@ func cmdSearch(args []string) {
 		searchResults = executeSearch(queryBundle, *queryStr, *cType, *tag, *codeLanguage, *codePath, *codeSymbolKind, *codeQualifiedName, *codeRelationKind)
 	}
 	results := filterSearchResults(searchResults, *cType, *tag)
+
+	// Optional hierarchical projection (S34). Omitted group-by keeps the existing
+	// text output byte-for-byte; when set, results are projected through the
+	// shared engine and printed as groups.
+	if *groupBy != "" {
+		printGroupedSearch(results, *groupBy, *includeGroupMembers)
+		return
+	}
 
 	if len(results) == 0 {
 		fmt.Println("No results found.")
@@ -433,6 +449,46 @@ func cmdSearch(args []string) {
 	}
 }
 
+func printGroupedSearch(results []query.SearchResult, groupBy string, includeMembers bool) {
+	hits := make([]query.ResultHit, len(results))
+	for i, r := range results {
+		c := r.Concept
+		okfID, _ := c.CustomFields["okf_id"].(string)
+		parentID, _ := c.CustomFields["parent_okf_id"].(string)
+		sourcePath, _ := c.CustomFields["source_path"].(string)
+		hits[i] = query.ResultHit{
+			OKFID:             okfID,
+			ParentOKFID:       parentID,
+			LegacyFingerprint: query.Fingerprint(c),
+			ConceptPath:       c.FilePath,
+			SourcePath:        sourcePath,
+			Rank:              i + 1,
+			Score:             float64(r.SemanticScore),
+			Provenance:        r.Source,
+		}
+	}
+	groups, warns, err := query.Project(hits, query.GroupBy(groupBy), includeMembers, 0)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	fmt.Printf("Projected into %d groups (by %s):\n\n", len(groups), groupBy)
+	for i, g := range groups {
+		rep := g.Representative
+		c := results[rep.Rank-1].Concept
+		fmt.Printf("%d. [%s] %s (key=%s, hits=%d concepts=%d sources=%d)\n",
+			i+1, c.Type, c.Title, g.GroupKey, g.HitCount, g.ConceptCount, g.SourceCount)
+		if includeMembers {
+			for _, m := range g.Members {
+				fmt.Printf("     - rank=%d %s\n", m.Rank, m.ConceptPath)
+			}
+		}
+	}
+	for _, w := range warns {
+		fmt.Printf("warning: %s\n", w)
+	}
+}
+
 func executeSearch(bundle *query.KnowledgeBundle, text, conceptType, tag, codeLanguage, codePath, codeSymbolKind, codeQualifiedName, codeRelationKind string) []query.SearchResult {
 	if text == "" && hasCodeFilter(codeLanguage, codePath, codeSymbolKind, codeQualifiedName, codeRelationKind) {
 		builder := query.New().
@@ -460,22 +516,6 @@ func executeSearch(bundle *query.KnowledgeBundle, text, conceptType, tag, codeLa
 
 func hasCodeFilter(codeLanguage, codePath, codeSymbolKind, codeQualifiedName, codeRelationKind string) bool {
 	return codeLanguage != "" || codePath != "" || codeSymbolKind != "" || codeQualifiedName != "" || codeRelationKind != ""
-}
-
-func toQueryBundle(bundle *okf.KnowledgeBundle) *query.KnowledgeBundle {
-	concepts := make([]*query.Concept, 0, len(bundle.Concepts))
-	for _, concept := range bundle.Concepts {
-		concepts = append(concepts, &query.Concept{
-			Type:        concept.Type,
-			Title:       concept.Title,
-			Description: concept.Description,
-			Resource:    concept.Resource,
-			Tags:        concept.Tags,
-			Content:     concept.Content,
-			FilePath:    concept.FilePath,
-		})
-	}
-	return &query.KnowledgeBundle{Concepts: concepts}
 }
 
 func filterSearchResults(results []query.SearchResult, conceptType, tag string) []query.SearchResult {

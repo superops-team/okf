@@ -38,8 +38,8 @@ func TestSemanticSearchRRFAndSource(t *testing.T) {
 	c1, c2 := b.Concepts[0], b.Concepts[1]
 	// 语义召回：Beta(最相关) + Alpha；词法 "apple" 命中 Alpha、Gamma
 	fb := &fakeBackend{hits: []SemanticHit{
-		{Key: Fingerprint(c2), Score: 0.9},
-		{Key: Fingerprint(c1), Score: 0.8},
+		{Key: ConceptKey(c2), Score: 0.9},
+		{Key: ConceptKey(c1), Score: 0.8},
 	}}
 
 	res, err := SemanticSearch(b, "apple", fb, SearchOptions{TopK: 3})
@@ -103,9 +103,9 @@ func TestSemanticSearchEmbedError(t *testing.T) {
 func TestSemanticSearchTopK(t *testing.T) {
 	b := newTestBundle()
 	fb := &fakeBackend{hits: []SemanticHit{
-		{Key: Fingerprint(b.Concepts[0]), Score: 0.9},
-		{Key: Fingerprint(b.Concepts[1]), Score: 0.8},
-		{Key: Fingerprint(b.Concepts[2]), Score: 0.7},
+		{Key: ConceptKey(b.Concepts[0]), Score: 0.9},
+		{Key: ConceptKey(b.Concepts[1]), Score: 0.8},
+		{Key: ConceptKey(b.Concepts[2]), Score: 0.7},
 	}}
 	res, err := SemanticSearch(b, "apple", fb, SearchOptions{TopK: 2})
 	if err != nil {

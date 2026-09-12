@@ -13,20 +13,34 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/superops-team/okf/pkg/git"
+	"github.com/superops-team/okf/pkg/identity"
+	"github.com/superops-team/okf/pkg/manifest"
 	"github.com/superops-team/okf/pkg/okf"
 	querypkg "github.com/superops-team/okf/pkg/query"
 )
 
 const SchemaVersion = "okf.tool.v1"
 
+// Manifest request/result are the shared contract used by the Service, CLI and
+// MCP wiring (design §4.2). They are aliased here so all three entry points
+// depend on a single type rather than re-declaring it.
+type (
+	ManifestRequest = manifest.ManifestRequest
+	ManifestItem    = manifest.ManifestItem
+	ManifestResult  = manifest.ManifestResult
+)
+
 const (
-	OperationInit    = "init"
-	OperationRefresh = "refresh"
-	OperationStatus  = "status"
-	OperationQuery   = "query"
-	OperationContext = "context"
+	OperationInit     = "init"
+	OperationRefresh  = "refresh"
+	OperationStatus   = "status"
+	OperationQuery    = "query"
+	OperationContext  = "context"
+	OperationResolve  = "resolve"
+	OperationManifest = "manifest"
 )
 
 const (
@@ -34,6 +48,19 @@ const (
 	ErrNotGitRepository        = "not_git_repository"
 	ErrInvalidRequest          = "invalid_request"
 	ErrInvalidQuery            = "invalid_query"
+
+	// Stable concept-identity error codes (mirrored from pkg/identity).
+	ErrInvalidConceptID         = "invalid_concept_id"
+	ErrDuplicateConceptID       = "duplicate_concept_id"
+	ErrConceptRefNotFound       = "concept_ref_not_found"
+	ErrIndexRebuildRequired     = "index_rebuild_required"
+	ErrIdentityMigrationPartial = "identity_migration_partial"
+
+	// Manifest / projection error codes (spec S23, S33).
+	ErrManifestFrontmatterMissing  = "manifest_frontmatter_missing"
+	ErrManifestFrontmatterTooLarge = "manifest_frontmatter_too_large"
+	ErrManifestFrontmatterInvalid  = "manifest_frontmatter_invalid"
+	ErrInvalidGroupBy              = "invalid_group_by"
 )
 
 const (
@@ -119,6 +146,11 @@ type QueryRequest struct {
 	RelationSource string   `json:"relation_source,omitempty"`
 	RelationTarget string   `json:"relation_target,omitempty"`
 	IncludeTrace   bool     `json:"include_trace,omitempty"`
+	// GroupBy optionally projects the fused, scored candidates into
+	// chunk|concept|source|folder groups. Empty (omitted) keeps the existing
+	// ungrouped output byte-for-byte (S27).
+	GroupBy             string `json:"group_by,omitempty"`
+	IncludeGroupMembers bool   `json:"include_group_members,omitempty"`
 }
 
 type ContextRequest struct {
@@ -126,6 +158,20 @@ type ContextRequest struct {
 	BudgetTokens     int    `json:"budget_tokens,omitempty"`
 	IncludeRelations bool   `json:"include_relations,omitempty"`
 	IncludeTrace     bool   `json:"include_trace,omitempty"`
+}
+
+// ResolveRequest resolves a stable okf://concept/<id> ref to its current path.
+type ResolveRequest struct {
+	Ref string `json:"ref"`
+}
+
+// ResolveResult reports the current bundle-relative path for a stable ref.
+type ResolveResult struct {
+	Ref   string `json:"ref"`
+	OKFID string `json:"okf_id"`
+	Path  string `json:"path"`
+	Title string `json:"title,omitempty"`
+	Type  string `json:"type,omitempty"`
 }
 
 type StatusResult struct {
@@ -153,6 +199,9 @@ type QueryResult struct {
 	Query   string      `json:"query"`
 	Results []QueryHit  `json:"results"`
 	Trace   []TraceStep `json:"trace,omitempty"`
+	// Groups is populated only when grouping was explicitly requested (S34).
+	// Results then holds the group representatives for backward-friendly clients.
+	Groups []querypkg.GroupedHit `json:"groups,omitempty"`
 }
 
 type ContextResult struct {
@@ -246,6 +295,11 @@ type QueryHit struct {
 	exactness           int
 	sourceRank          int
 	typeRank            int
+	// identity fields populated at ranking time so a later projection can build
+	// ResultHit without re-reading the concept or re-running retrieval.
+	okfID             string
+	parentOKFID       string
+	legacyFingerprint string
 }
 
 // Status reports repository knowledge readiness without mutating files.
@@ -454,6 +508,38 @@ func (s *Service) Query(ctx stdctx.Context, req QueryRequest) ToolEnvelope {
 			Counts:     map[string]int{"matches": len(hits)},
 			ScoreDelta: topHitScore(hits),
 		})
+	}
+	// Grouping is an opt-in, pure post-scoring projection (S27/S34). It runs on
+	// the full scored pool BEFORE the ungrouped TopK truncation; when group_by is
+	// omitted the existing truncation and output shaping are untouched.
+	if req.GroupBy != "" {
+		groups, representatives, gwarns, gerr := groupQueryHits(hits, req)
+		if gerr != nil {
+			return failure(OperationQuery, resolved.repoRoot, resolved.knowledgeDir, freshness, gerr)
+		}
+		if req.IncludeTrace {
+			trace = append(trace, TraceStep{
+				Type:    "projection",
+				Message: "projected fused candidates into groups",
+				Counts:  map[string]int{"groups": len(groups), "candidates": len(hits)},
+			})
+		}
+		return ToolEnvelope{
+			SchemaVersion: SchemaVersion,
+			Operation:     OperationQuery,
+			OK:            true,
+			Mutating:      isMutatingOperation(OperationQuery),
+			RepoRoot:      resolved.repoRoot,
+			KnowledgeDir:  resolved.knowledgeDir,
+			Freshness:     freshness,
+			Warnings:      append(append(staleWarnings(freshness), loadMeta.Warnings...), gwarns...),
+			Result: QueryResult{
+				Query:   req.Query,
+				Results: representatives,
+				Groups:  groups,
+				Trace:   trace,
+			},
+		}
 	}
 	if req.Limit > 0 && len(hits) > req.Limit {
 		hits = hits[:req.Limit]
@@ -704,6 +790,145 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 			Items:        items,
 			Trace:        trace,
 		},
+	}
+}
+
+// Resolve resolves a stable okf://concept/<id> ref against the current bundle
+// and returns the concept's current bundle-relative path.
+func (s *Service) Resolve(ctx stdctx.Context, req ResolveRequest) ToolEnvelope {
+	resolved, err := s.resolve()
+	if err != nil {
+		return failure(OperationResolve, "", "", nil, err)
+	}
+	freshness := readFreshness(resolved)
+	if !okf.Exists(resolved.knowledgeDir) {
+		return failure(
+			OperationResolve,
+			resolved.repoRoot,
+			resolved.knowledgeDir,
+			freshness,
+			knowledgeNotInitialized(resolved.repoRoot),
+		)
+	}
+	if strings.TrimSpace(req.Ref) == "" {
+		return failure(OperationResolve, resolved.repoRoot, resolved.knowledgeDir, freshness, toolError{
+			code:        ErrInvalidRequest,
+			message:     "ref must not be empty",
+			remediation: "Pass an okf://concept/<okf_id> ref.",
+		})
+	}
+	if err := checkContext(ctx); err != nil {
+		return failure(OperationResolve, resolved.repoRoot, resolved.knowledgeDir, freshness, err)
+	}
+
+	bundle, loadMeta, err := loadKnowledgeBundle(resolved)
+	if err != nil {
+		return failure(OperationResolve, resolved.repoRoot, resolved.knowledgeDir, freshness, err)
+	}
+	concept, err := identity.Resolve(bundle.Concepts, req.Ref)
+	if err != nil {
+		return failure(OperationResolve, resolved.repoRoot, resolved.knowledgeDir, freshness, errToTool(err))
+	}
+	return ToolEnvelope{
+		SchemaVersion: SchemaVersion,
+		Operation:     OperationResolve,
+		OK:            true,
+		Mutating:      false,
+		RepoRoot:      resolved.repoRoot,
+		KnowledgeDir:  resolved.knowledgeDir,
+		Freshness:     freshness,
+		Warnings:      loadMeta.Warnings,
+		Result: ResolveResult{
+			Ref:   identity.CanonicalURI(identity.FromConcept(concept).ID),
+			OKFID: identity.FromConcept(concept).ID,
+			Path:  concept.FilePath,
+			Title: concept.Title,
+			Type:  concept.Type,
+		},
+	}
+}
+
+// errToTool maps an identity.Error to a toolError preserving its stable code.
+func errToTool(err error) error {
+	var identErr *identity.Error
+	if errors.As(err, &identErr) {
+		remediation := ""
+		switch identErr.Code {
+		case identity.CodeIndexRebuildRequired:
+			remediation = "Run `okf vector rebuild`."
+		case identity.CodeConceptRefNotFound:
+			remediation = "Verify the ref, or run `okf identity ensure` to mint ids."
+		}
+		return toolError{code: string(identErr.Code), message: identErr.Error(), remediation: remediation}
+	}
+	return err
+}
+
+// manifestErrToTool maps a manifest.Error to a toolError preserving its stable
+// code (invalid_request / invalid_concept_id / duplicate_concept_id).
+func manifestErrToTool(err error) error {
+	var merr *manifest.Error
+	if errors.As(err, &merr) {
+		remediation := ""
+		switch merr.Code {
+		case ErrInvalidRequest:
+			remediation = "Adjust the request parameters to match the manifest contract."
+		case ErrDuplicateConceptID:
+			remediation = "Remove the duplicate okf_id so refs are unambiguous."
+		case ErrInvalidConceptID:
+			remediation = "Use a canonical okf_id matching ^okf_[0-9a-f]{32}$."
+		}
+		return toolError{code: merr.Code, message: merr.Message, remediation: remediation}
+	}
+	return err
+}
+
+// Manifest returns a metadata-only listing of the knowledge bundle. It reads
+// bounded frontmatter and file metadata only: it never returns Markdown bodies,
+// never loads embeddings/HNSW, and never writes the index (S17–S26).
+func (s *Service) Manifest(ctx stdctx.Context, req manifest.ManifestRequest) ToolEnvelope {
+	resolved, err := s.resolve()
+	if err != nil {
+		return failure(OperationManifest, "", "", nil, err)
+	}
+	freshness := readFreshness(resolved)
+	if !okf.Exists(resolved.knowledgeDir) {
+		return failure(
+			OperationManifest,
+			resolved.repoRoot,
+			resolved.knowledgeDir,
+			freshness,
+			knowledgeNotInitialized(resolved.repoRoot),
+		)
+	}
+	if err := checkContext(ctx); err != nil {
+		return failure(OperationManifest, resolved.repoRoot, resolved.knowledgeDir, freshness, err)
+	}
+
+	vectorDir := filepath.Join(filepath.Dir(resolved.knowledgeDir), "vector")
+	result, err := manifest.Build(
+		ctx,
+		resolved.knowledgeDir,
+		vectorDir,
+		req,
+		manifest.OSFileReader(),
+		time.Now().UTC(),
+		freshness.Stale,
+	)
+	if err != nil {
+		return failure(OperationManifest, resolved.repoRoot, resolved.knowledgeDir, freshness, manifestErrToTool(err))
+	}
+
+	return ToolEnvelope{
+		SchemaVersion: SchemaVersion,
+		Operation:     OperationManifest,
+		OK:            true,
+		Mutating:      false,
+		RepoRoot:      resolved.repoRoot,
+		KnowledgeDir:  resolved.knowledgeDir,
+		Freshness:     freshness,
+		Warnings:      staleWarnings(freshness),
+		Result:        result,
 	}
 }
 
@@ -1403,6 +1628,9 @@ func rankConcepts(concepts []*okf.Concept, query string, filters queryFilters) [
 			exactness:           exactness,
 			sourceRank:          sourceRank,
 			typeRank:            sourcePreference(concept),
+			okfID:               stringCustomFieldOrEmpty(concept.CustomFields, identity.Field),
+			parentOKFID:         stringCustomFieldOrEmpty(concept.CustomFields, identity.ParentField),
+			legacyFingerprint:   querypkg.Fingerprint(&querypkg.Concept{Type: concept.Type, Title: concept.Title, FilePath: concept.FilePath}),
 		})
 	}
 	sort.SliceStable(hits, func(i, j int) bool {
@@ -1435,6 +1663,46 @@ func rankConcepts(concepts []*okf.Concept, query string, filters queryFilters) [
 	return hits
 }
 
+// groupQueryHits projects the already-fused, scored hits through the shared
+// projection engine. It returns the groups, the representative hits (for the
+// backward-compatible results field) and any path-fallback warnings.
+func groupQueryHits(hits []QueryHit, req QueryRequest) ([]querypkg.GroupedHit, []QueryHit, []string, error) {
+	pool := make([]querypkg.ResultHit, len(hits))
+	for i := range hits {
+		h := &hits[i]
+		pool[i] = querypkg.ResultHit{
+			OKFID:             h.okfID,
+			ParentOKFID:       h.parentOKFID,
+			LegacyFingerprint: h.legacyFingerprint,
+			Ref:               h.Location,
+			ConceptPath:       h.ConceptPath,
+			SourcePath:        h.SourcePath,
+			StartLine:         h.StartLine,
+			EndLine:           h.EndLine,
+			Rank:              i + 1,
+			Score:             float64(h.Score),
+			Provenance:        h.Provenance,
+		}
+	}
+	groups, warns, err := querypkg.Project(pool, querypkg.GroupBy(req.GroupBy), req.IncludeGroupMembers, req.Limit)
+	if err != nil {
+		var ge *querypkg.GroupError
+		if errors.As(err, &ge) {
+			return nil, nil, nil, toolError{
+				code:        ErrInvalidGroupBy,
+				message:     ge.Error(),
+				remediation: "Use group_by of chunk|concept|source|folder.",
+			}
+		}
+		return nil, nil, nil, err
+	}
+	reps := make([]QueryHit, len(groups))
+	for i, g := range groups {
+		reps[i] = hits[g.Representative.Rank-1]
+	}
+	return groups, reps, warns, nil
+}
+
 func filteredConceptsForQuery(concepts []*okf.Concept, filters queryFilters) []*okf.Concept {
 	if activeQueryFilterCount(filters) == 0 {
 		return concepts
@@ -1445,16 +1713,7 @@ func filteredConceptsForQuery(concepts []*okf.Concept, filters queryFilters) []*
 		if concept == nil {
 			continue
 		}
-		queryConcept := &querypkg.Concept{
-			Type:         concept.Type,
-			Title:        concept.Title,
-			Description:  concept.Description,
-			Resource:     concept.Resource,
-			Tags:         concept.Tags,
-			Content:      concept.Content,
-			FilePath:     concept.FilePath,
-			CustomFields: concept.CustomFields,
-		}
+		queryConcept := querypkg.ConceptFromOKF(concept)
 		bundle.Concepts = append(bundle.Concepts, queryConcept)
 		byQueryConcept[queryConcept] = concept
 	}

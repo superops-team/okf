@@ -18,7 +18,7 @@ func TestWords_Exported(t *testing.T) {
 }
 
 func TestWrapChunkConcept_AllFields(t *testing.T) {
-	md := WrapChunkConcept("Deep Dive — part 2", "doc.pdf", "pdf", "sub/doc.pdf", 1, 3, "Intro > Results", "chunk body")
+	md := WrapChunkConcept("Deep Dive — part 2", "doc.pdf", "pdf", "sub/doc.pdf", 1, 3, "Intro > Results", "chunk body", "")
 	for _, want := range []string{
 		"type: source",
 		`title: "Deep Dive — part 2"`,
@@ -35,14 +35,14 @@ func TestWrapChunkConcept_AllFields(t *testing.T) {
 }
 
 func TestWrapChunkConcept_NoHeadingPath(t *testing.T) {
-	md := WrapChunkConcept("Doc — part 1", "a.pdf", "pdf", "a.pdf", 0, 2, "", "body")
+	md := WrapChunkConcept("Doc — part 1", "a.pdf", "pdf", "a.pdf", 0, 2, "", "body", "")
 	if strings.Contains(md, "heading_path") {
 		t.Fatalf("heading_path present without headings:\n%s", md)
 	}
 }
 
 func TestWrapChunkConcept_ParserRoundTrip(t *testing.T) {
-	md := WrapChunkConcept("Doc — part 3", "doc.pdf", "pdf", "sub/doc.pdf", 2, 3, "H1 > H2", "tail body")
+	md := WrapChunkConcept("Doc — part 3", "doc.pdf", "pdf", "sub/doc.pdf", 2, 3, "H1 > H2", "tail body", "")
 	concept, err := parser.ParseConceptBytes("sub/doc.pdf__c3.md", []byte(md))
 	if err != nil {
 		t.Fatal(err)

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/superops-team/okf/pkg/parser"
-	"github.com/superops-team/okf/pkg/query"
 )
 
 // LoadBundle reads a knowledge bundle from a directory.
@@ -259,9 +258,4 @@ func Exists(path string) bool {
 func IsDirectory(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
-}
-
-// NewQuery creates a new query builder.
-func NewQuery() *query.Builder {
-	return query.New()
 }
