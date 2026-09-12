@@ -858,6 +858,8 @@ func errToTool(err error) error {
 			remediation = "Run `okf vector rebuild`."
 		case identity.CodeConceptRefNotFound:
 			remediation = "Verify the ref, or run `okf identity ensure` to mint ids."
+		case identity.CodeInvalidConceptID:
+			remediation = "Use a canonical okf_id matching ^okf_[0-9a-f]{32}$ (e.g. okf_0123456789abcdef0123456789abcdef), or a full okf://concept/<id> URI."
 		}
 		return toolError{code: string(identErr.Code), message: identErr.Error(), remediation: remediation}
 	}

@@ -9,13 +9,29 @@ import (
 	"os"
 	"strings"
 
+	"github.com/superops-team/okf/pkg/manifest"
 	toolsvc "github.com/superops-team/okf/pkg/tool"
 )
 
 func cmdTool(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: okf tool <status|init|refresh|query|context|manifest> [options]")
-		return 1
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Println("Usage: okf tool <status|init|refresh|query|context|manifest> [options]")
+		fmt.Println()
+		fmt.Println("Agent-facing JSON tool operations. All commands accept --json for")
+		fmt.Println("machine-parseable output and --repo/--dir for knowledge base location.")
+		fmt.Println()
+		fmt.Println("Subcommands:")
+		fmt.Println("  status    Show knowledge bundle status and freshness")
+		fmt.Println("  init      Initialize a knowledge bundle")
+		fmt.Println("  refresh   Refresh the knowledge bundle index")
+		fmt.Println("  query     Semantic/hybrid search with optional grouping")
+		fmt.Println("  context   Build context for a query")
+		fmt.Println("  manifest  Metadata-only listing (no body, no index side effects)")
+		fmt.Println()
+		fmt.Println("Examples:")
+		fmt.Println("  okf tool manifest --repo . --dir knowledge")
+		fmt.Println("  okf tool query --repo . --dir knowledge -q \"search terms\" --group-by source")
+		return 0
 	}
 
 	subcommand := args[0]
@@ -34,6 +50,8 @@ func cmdTool(args []string) int {
 		return cmdToolManifest(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown tool subcommand: %s\n", subcommand)
+		fmt.Fprintln(os.Stderr, "Valid subcommands: status, init, refresh, query, context, manifest")
+		fmt.Fprintln(os.Stderr, "Run 'okf tool --help' for usage.")
 		return 1
 	}
 }
@@ -232,9 +250,16 @@ func emitToolEnvelope(envelope toolsvc.ToolEnvelope, jsonOut bool) int {
 		}
 		fmt.Println(string(data))
 	} else if envelope.OK {
-		fmt.Printf("%s ok\n", envelope.Operation)
+		if envelope.Operation == toolsvc.OperationManifest {
+			printManifestText(envelope)
+		} else {
+			fmt.Printf("%s ok\n", envelope.Operation)
+		}
 	} else if envelope.Error != nil {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", envelope.Error.Message)
+		if envelope.Error.Remediation != "" {
+			fmt.Fprintf(os.Stderr, "  → %s\n", envelope.Error.Remediation)
+		}
 	} else {
 		fmt.Fprintln(os.Stderr, "Error: operation failed")
 	}
@@ -242,6 +267,53 @@ func emitToolEnvelope(envelope toolsvc.ToolEnvelope, jsonOut bool) int {
 		return 1
 	}
 	return 0
+}
+
+// printManifestText renders a manifest envelope as a human-readable listing.
+// It shows total/offset/limit, then each item with path, title, type, tags,
+// identity state, and estimated tokens. Warnings are listed separately.
+func printManifestText(envelope toolsvc.ToolEnvelope) {
+	var result manifest.ManifestResult
+	switch r := envelope.Result.(type) {
+	case manifest.ManifestResult:
+		result = r
+	case *manifest.ManifestResult:
+		if r != nil {
+			result = *r
+		}
+	default:
+		fmt.Printf("%s ok\n", envelope.Operation)
+		return
+	}
+	fmt.Printf("Manifest: %d concept(s) (offset=%d, limit=%d)\n", result.Total, result.Offset, result.Limit)
+	if len(result.Items) == 0 {
+		fmt.Println("  (no items)")
+	}
+	for i, item := range result.Items {
+		idTag := ""
+		if item.OKFID != "" {
+			idTag = " id=" + item.OKFID[:12] + "…"
+		}
+		tags := ""
+		if len(item.Tags) > 0 {
+			tags = " [" + strings.Join(item.Tags, ",") + "]"
+		}
+		stale := ""
+		if item.Stale {
+			stale = " [stale]"
+		}
+		fmt.Printf("  %d. %s (%s)%s%s%s — ~%d tokens\n",
+			i+1, item.Path, item.Type, idTag, tags, stale, item.EstimatedTokens)
+		if item.Title != "" {
+			fmt.Printf("     %s\n", item.Title)
+		}
+	}
+	if len(result.Warnings) > 0 {
+		fmt.Printf("\nWarnings (%d):\n", len(result.Warnings))
+		for _, w := range result.Warnings {
+			fmt.Printf("  - %s: %s\n", w.Code, w.Path)
+		}
+	}
 }
 
 func toolInvalidEnvelope(operation, code, message, remediation string) toolsvc.ToolEnvelope {

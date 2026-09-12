@@ -29,15 +29,38 @@ type agentErrBody struct {
 // CmdAgent is the entry point for `okf agent ...`. It returns a process exit
 // code. It does not touch global CLI wiring; main.go dispatches to it.
 func CmdAgent(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: okf agent <plan|apply|status|remove> [--client X] [--format json] [--yes]")
-		return 1
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Println("Usage: okf agent <plan|apply|status|remove> [--client X] [--format json] [--yes]")
+		fmt.Println()
+		fmt.Println("Project-scoped agent client integration (Cursor, Claude Code, Codex).")
+		fmt.Println("Generates MCP server config and canonical workflow rules with self-describing")
+		fmt.Println("ownership markers. Never overwrites unowned or malformed client config.")
+		fmt.Println()
+		fmt.Println("Subcommands:")
+		fmt.Println("  plan     Preview what will change (no writes)")
+		fmt.Println("  apply    Write client config (requires --yes in non-interactive mode)")
+		fmt.Println("  status   Show installed state per client")
+		fmt.Println("  remove   Remove OKF-managed config (requires --yes)")
+		fmt.Println()
+		fmt.Println("Options:")
+		fmt.Println("  --client   cursor|claude-code|codex|all (default: all)")
+		fmt.Println("  --repo     Repository root (default: current directory)")
+		fmt.Println("  --format   text|json")
+		fmt.Println("  --yes      Confirm mutating operation")
+		fmt.Println()
+		fmt.Println("Examples:")
+		fmt.Println("  okf agent plan --client cursor")
+		fmt.Println("  okf agent apply --client all --yes")
+		fmt.Println("  okf agent status --client cursor")
+		return 0
 	}
 	sub := args[0]
 	switch sub {
 	case "plan", "apply", "status", "remove":
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown agent subcommand: %s\n", sub)
+		fmt.Fprintln(os.Stderr, "Valid subcommands: plan, apply, status, remove")
+		fmt.Fprintln(os.Stderr, "Run 'okf agent --help' for usage.")
 		return 1
 	}
 

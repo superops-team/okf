@@ -55,10 +55,11 @@ ParityToken body beta.
 	if !strings.Contains(grouped, "Projected into 2 groups (by source)") {
 		t.Fatalf("grouped search missing projection header:\n%s", grouped)
 	}
-	if !strings.Contains(grouped, "key=src:src/doc1.md") || !strings.Contains(grouped, "hits=2") {
+	// Human-readable label: representative concept path (not internal v3:id key).
+	if !strings.Contains(grouped, "one.md") || !strings.Contains(grouped, "hits=2") {
 		t.Fatalf("grouped search missing doc1 merged group:\n%s", grouped)
 	}
-	if !strings.Contains(grouped, "key=src:src/doc2.md") || !strings.Contains(grouped, "hits=1") {
+	if !strings.Contains(grouped, "three.md") || !strings.Contains(grouped, "hits=1") {
 		t.Fatalf("grouped search missing doc2 group:\n%s", grouped)
 	}
 	// Members are printed when requested.
@@ -68,14 +69,17 @@ ParityToken body beta.
 }
 
 // TestCLISearchInvalidGroupBy: an unknown group_by value must print an error
-// instead of silently falling back (S33 at the CLI layer).
+// to stderr and exit non-zero (S33 at the CLI layer).
 func TestCLISearchInvalidGroupBy(t *testing.T) {
 	bin := buildOKF(t)
 	repo := initCLIRepo(t)
 	kb := filepath.Join(repo, ".okf", "knowledge", "concepts")
 	mustWriteCLIFile(t, filepath.Join(kb, "one.md"), "---\ntype: concept\ntitle: Any\n---\nbody token.\n")
-	out := runOKF(t, bin, "search", "-path", repo, "-q", "token", "-group-by", "document")
+	out, _ := runOKFExpectExit(t, bin, 1, "search", "-path", repo, "-q", "token", "-group-by", "document")
 	if !strings.Contains(out, "invalid_group_by") {
 		t.Fatalf("expected invalid_group_by error, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Valid group-by values") {
+		t.Fatalf("expected remediation listing valid values, got:\n%s", out)
 	}
 }

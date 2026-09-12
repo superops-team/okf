@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/superops-team/okf/pkg/identity"
@@ -66,6 +67,35 @@ func TestCmdIdentityResolveAfterMove(t *testing.T) {
 	errObj, _ := env["error"].(map[string]any)
 	if codeVal, _ := errObj["code"].(string); codeVal != "concept_ref_not_found" {
 		t.Fatalf("unknown ref error code = %v, want concept_ref_not_found", errObj)
+	}
+}
+
+// TestCmdIdentityResolveMalformedRefRemediation proves that a malformed ref
+// (not matching okf_[0-9a-f]{32}) returns invalid_concept_id with a
+// remediation telling the user the valid format (usability: user who doesn't
+// understand the URI format gets actionable guidance).
+func TestCmdIdentityResolveMalformedRefRemediation(t *testing.T) {
+	repo := initIdentityCLITestRepo(t)
+	writeIdentityKBConcept(t, repo, "concepts/alpha.md", "Alpha", "okf_0123456789abcdef0123456789abcdef")
+
+	var code int
+	var parsed map[string]any
+	out := captureStdout(t, func() {
+		code = cmdIdentity([]string{"resolve", "--ref", "my-id", "--repo", repo, "--json"})
+	})
+	if code == 0 {
+		t.Fatalf("malformed ref should exit non-zero, output = %s", out)
+	}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	errObj, _ := parsed["error"].(map[string]any)
+	if codeVal, _ := errObj["code"].(string); codeVal != "invalid_concept_id" {
+		t.Fatalf("error code = %v, want invalid_concept_id", errObj)
+	}
+	remediation, _ := errObj["remediation"].(string)
+	if remediation == "" || !strings.Contains(remediation, "okf_") {
+		t.Fatalf("remediation missing or doesn't show valid format: %q", remediation)
 	}
 }
 

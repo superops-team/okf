@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -82,5 +83,34 @@ func writeCLIKBConcept(t *testing.T, repo, relPath, title string) {
 	body := "---\ntype: concept\ntitle: " + title + "\n---\nbody\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestToolManifestTextOutput proves the human-readable (non-JSON) manifest
+// lists concepts with path/type/tokens, not just "manifest ok" (usability:
+// users running `okf tool manifest` without --json need to see the contents).
+func TestToolManifestTextOutput(t *testing.T) {
+	repo := initIdentityCLITestRepo(t)
+	writeCLIKBConcept(t, repo, "concepts/alpha.md", "Alpha Concept")
+	writeCLIKBConcept(t, repo, "concepts/beta.md", "Beta Concept")
+
+	var code int
+	out := captureStdout(t, func() {
+		code = cmdTool([]string{"manifest", "--repo", repo})
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, output = %s", code, out)
+	}
+	if !strings.Contains(out, "Manifest:") {
+		t.Fatalf("text output missing header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "alpha.md") || !strings.Contains(out, "beta.md") {
+		t.Fatalf("text output missing concept paths, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Alpha Concept") {
+		t.Fatalf("text output missing concept title, got:\n%s", out)
+	}
+	if strings.Contains(out, "body\n") {
+		t.Fatalf("text output leaked body content, got:\n%s", out)
 	}
 }

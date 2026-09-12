@@ -14,9 +14,20 @@ import (
 )
 
 func cmdIdentity(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: okf identity <ensure|resolve> [options]")
-		return 1
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Println("Usage: okf identity <ensure|resolve> [options]")
+		fmt.Println()
+		fmt.Println("Stable concept identity (okf_id) migration and resolution.")
+		fmt.Println()
+		fmt.Println("Subcommands:")
+		fmt.Println("  ensure   Migrate concepts to stable okf_id (dry-run by default; --apply writes)")
+		fmt.Println("  resolve  Resolve a stable ref (okf://concept/<id>) to its current file path")
+		fmt.Println()
+		fmt.Println("Examples:")
+		fmt.Println("  okf identity ensure --repo . --dir knowledge           # dry-run")
+		fmt.Println("  okf identity ensure --repo . --dir knowledge --apply   # write ids")
+		fmt.Println("  okf identity resolve --repo . --dir knowledge --ref okf://concept/<id>")
+		return 0
 	}
 	switch args[0] {
 	case "ensure":
@@ -25,6 +36,8 @@ func cmdIdentity(args []string) int {
 		return cmdIdentityResolve(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown identity subcommand: %s\n", args[0])
+		fmt.Fprintln(os.Stderr, "Valid subcommands: ensure, resolve")
+		fmt.Fprintln(os.Stderr, "Run 'okf identity --help' for usage.")
 		return 1
 	}
 }

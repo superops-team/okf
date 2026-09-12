@@ -414,8 +414,7 @@ func cmdSearch(args []string) {
 	// text output byte-for-byte; when set, results are projected through the
 	// shared engine and printed as groups.
 	if *groupBy != "" {
-		printGroupedSearch(results, *groupBy, *includeGroupMembers)
-		return
+		os.Exit(printGroupedSearch(results, *groupBy, *includeGroupMembers))
 	}
 
 	if len(results) == 0 {
@@ -449,7 +448,7 @@ func cmdSearch(args []string) {
 	}
 }
 
-func printGroupedSearch(results []query.SearchResult, groupBy string, includeMembers bool) {
+func printGroupedSearch(results []query.SearchResult, groupBy string, includeMembers bool) int {
 	hits := make([]query.ResultHit, len(results))
 	for i, r := range results {
 		c := r.Concept
@@ -469,15 +468,27 @@ func printGroupedSearch(results []query.SearchResult, groupBy string, includeMem
 	}
 	groups, warns, err := query.Project(hits, query.GroupBy(groupBy), includeMembers, 0)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Valid group-by values: chunk, concept, source, folder")
+		return 1
 	}
 	fmt.Printf("Projected into %d groups (by %s):\n\n", len(groups), groupBy)
 	for i, g := range groups {
 		rep := g.Representative
 		c := results[rep.Rank-1].Concept
-		fmt.Printf("%d. [%s] %s (key=%s, hits=%d concepts=%d sources=%d)\n",
-			i+1, c.Type, c.Title, g.GroupKey, g.HitCount, g.ConceptCount, g.SourceCount)
+		// Human-readable group label: representative path for concept/source
+		// grouping, folder name for folder grouping. The raw GroupKey
+		// (v3:id / v3:legacy internal format) remains available in JSON output.
+		label := rep.ConceptPath
+		if groupBy == "folder" {
+			if dir := filepath.Dir(rep.ConceptPath); dir != "." {
+				label = dir
+			} else {
+				label = "(root)"
+			}
+		}
+		fmt.Printf("%d. [%s] %s (%s, hits=%d concepts=%d sources=%d)\n",
+			i+1, c.Type, c.Title, label, g.HitCount, g.ConceptCount, g.SourceCount)
 		if includeMembers {
 			for _, m := range g.Members {
 				fmt.Printf("     - rank=%d %s\n", m.Rank, m.ConceptPath)
@@ -487,6 +498,7 @@ func printGroupedSearch(results []query.SearchResult, groupBy string, includeMem
 	for _, w := range warns {
 		fmt.Printf("warning: %s\n", w)
 	}
+	return 0
 }
 
 func executeSearch(bundle *query.KnowledgeBundle, text, conceptType, tag, codeLanguage, codePath, codeSymbolKind, codeQualifiedName, codeRelationKind string) []query.SearchResult {
