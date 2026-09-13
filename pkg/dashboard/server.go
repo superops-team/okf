@@ -36,6 +36,7 @@ type Server struct {
 	handler *APIHandler
 	httpSrv *http.Server
 	logger  *log.Logger
+	loader  func() (*okf.KnowledgeBundle, error)
 }
 
 // NewServer creates a new dashboard server with the given configuration.
@@ -48,13 +49,31 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	bundlePath := cfg.BundlePath
-	loader := func() (*okf.KnowledgeBundle, error) {
-		// Support both a bare directory and a .okf/knowledge subdirectory.
+
+	// Cached bundle loader: reloads from disk at most once per cacheTTL.
+	// This avoids re-parsing the entire knowledge bundle on every API call
+	// (which can be slow for large bundles) while keeping data fresh enough
+	// for interactive use. Users can restart the dashboard to force a reload.
+	const cacheTTL = 5 * time.Second
+	var (
+		cachedBundle *okf.KnowledgeBundle
+		cachedErr    error
+		cachedAt     time.Time
+	)
+	loadBundle := func() (*okf.KnowledgeBundle, error) {
 		okfDir := filepath.Join(bundlePath, ".okf", "knowledge")
 		if okf.Exists(okfDir) {
 			return okf.LoadBundle(okfDir, okf.DefaultLoadOptions())
 		}
 		return okf.LoadBundle(bundlePath, okf.DefaultLoadOptions())
+	}
+	loader := func() (*okf.KnowledgeBundle, error) {
+		if cachedBundle != nil && time.Since(cachedAt) < cacheTTL {
+			return cachedBundle, cachedErr
+		}
+		cachedBundle, cachedErr = loadBundle()
+		cachedAt = time.Now()
+		return cachedBundle, cachedErr
 	}
 
 	handler := NewAPIHandler(bundlePath, loader)
@@ -92,6 +111,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		handler: handler,
 		httpSrv: httpSrv,
 		logger:  cfg.Logger,
+		loader:  loader,
 	}, nil
 }
 
@@ -103,6 +123,16 @@ func (s *Server) Start() error {
 	s.logger.Printf("  Bundle: %s", s.cfg.BundlePath)
 	s.logger.Printf("  API:    %s/api/v1/", url)
 	s.logger.Printf("  Press Ctrl+C to stop")
+
+	// Pre-warm the bundle cache in the background so the first API call
+	// (triggered by page load) hits the cache instead of cold-loading.
+	go func() {
+		if _, err := s.loader(); err != nil {
+			s.logger.Printf("  Warning: preload bundle failed: %v", err)
+		} else {
+			s.logger.Printf("  Bundle preloaded and cached")
+		}
+	}()
 
 	if s.cfg.OpenBrowser {
 		go openBrowser(url)
