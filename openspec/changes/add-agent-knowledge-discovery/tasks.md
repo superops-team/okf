@@ -204,13 +204,13 @@ P0-P4 are dependency order only. This change is complete only when all four prod
 
 ## Merge checklist
 
-- [ ] S01–S50 all mapped and green.
-- [ ] No new third-party dependency, or spec revised and explicitly approved before addition.
-- [ ] Existing no-group query output compatibility proven.
-- [ ] Current hybrid baseline does not regress.
-- [ ] `tools/gauntlet.sh` and new targeted mutants pass.
-- [ ] Real CLI and MCP stdio flows pass.
-- [ ] Cursor/Claude/Codex fixture apply→apply→status→remove passes.
-- [ ] Secret scan passes and no credential is present in fixtures/state/output.
-- [ ] `review.md` has no unresolved critical/high issue.
-- [ ] `conformance.md` has no unexplained partial/gap.
+- [x] S01–S50 all mapped and green.
+- [x] No new third-party dependency, or spec revised and explicitly approved before addition.
+- [x] Existing no-group query output compatibility proven.
+- [x] Current hybrid baseline does not regress (base-vs-head zero regression; S46 amendment user-approved 2026-09-13).
+- [x] `tools/gauntlet.sh` and new targeted mutants pass.
+- [x] Real CLI and MCP stdio flows pass.
+- [x] Cursor/Claude/Codex fixture apply→apply→status→remove passes.
+- [x] Secret scan passes and no credential is present in fixtures/state/output.
+- [x] `review.md` has no unresolved critical/high issue.
+- [x] `conformance.md` has no unexplained partial/gap (S46 fully after user-approved amendment).

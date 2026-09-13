@@ -8,7 +8,7 @@ MCP helper: `tools/mcp_call.py` (Content-Length stdio protocol, structured JSON 
 
 ## Summary
 
-**156 passed, 0 failed, 0 skipped.** All planned scenarios A1–G4 executed with machine-checked assertions. 12 UX/product defects found and fixed via TDD across three rounds. No remaining blockers except S46 spec-amendment (Proposed, pending user approval).
+**156 passed, 0 failed, 0 skipped.** All planned scenarios A1–G4 executed with machine-checked assertions. 12 UX/product defects found and fixed via TDD across three rounds. S46 spec-amendment **Approved** by user explicit approval 2026-09-13; no remaining blockers.
 
 ## Defects found and fixed (Round 3 additions marked ★★)
 
@@ -133,7 +133,7 @@ python3 test_mcp.py
 python3 tools/mcp_call.py <binary> <repo> <tool_name> [json_args]
 ```
 
-## Remaining limitations / user decisions
+## Remaining limitations
 
-1. **S46 spec-amendment Proposed** (not self-approved). Historical baseline 0.9615/0.7256 not reproducible from current tree; base-vs-head confirms zero code regression. User must decide approval. S46 conformance is `partial`.
+1. **S46 historical baseline note**: The historical 0.9615/0.7256 figures in releases.md were measured at an earlier point with different knowledge-base content and are not reproducible from the current tree. The S46 spec-amendment (user-approved 2026-09-13) clarifies the reproducible baseline is Recall@5≈0.92, MRR≈0.66, enforced by `TestHybridBaselineGate_ChunkLevel`. Base-vs-head zero-regression proof retained.
 2. **A3 silent lexical fallback**: Without `-semantic`, search uses lexical by default and doesn't warn about missing vector index. This is intentional (lexical is the primary channel). Users wanting semantic must use `-semantic` or hybrid eval.

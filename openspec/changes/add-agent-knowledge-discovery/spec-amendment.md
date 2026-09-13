@@ -1,17 +1,18 @@
 # Spec Amendment — S46 Retrieval Baseline Clarification
 
-Date: 2026-09-12
-Status: **Proposed — pending user approval** (not approved; executor cannot self-approve)
+Date: 2026-09-12 (proposed); 2026-09-13 (approved)
+Status: **Approved — user explicit approval** (approval source: user explicit approval in conversation, 2026-09-13)
 Affects: S46 only (S47 was a code bug, fixed per original spec — no amendment needed)
 
 ## Approval status
 
-This document is a **proposed** amendment. Until the user explicitly approves
-it, the original spec S46 ("hybrid Recall@5 and MRR are not lower than the
-committed baseline") remains authoritative. The implementation satisfies the
-original spec via base-vs-head comparison (see below); the amendment only
-seeks to clarify which baseline numbers are reproducible from the current tree.
-S46 conformance is marked `partial` until this amendment is approved.
+This amendment was **approved by the user via explicit approval** on 2026-09-13.
+The approved S46 revision (below) supersedes the original S46 baseline clause
+that cited the historical 0.9615/0.7256 figures as the committed baseline.
+The original-spec "before/after no decline" requirement remains satisfied by
+the base-vs-head executable proof documented below; the amendment clarifies
+which baseline numbers are reproducible from the current tree and establishes
+a machine-enforced chunk-level gate. S46 conformance is now `fully`.
 
 ## Background
 
@@ -63,9 +64,9 @@ for ≤2048 nodes).
   sources. concept/source/folder all achieve srcRecall=0.9231 = raw hybrid
   Recall@5=0.9231.
 
-## Proposed S46 amendment (pending approval)
+## Approved S46 amendment (user-approved 2026-09-13)
 
-### S46 (proposed revision)
+### S46 (approved revision)
 
 "Hybrid Recall@5 and MRR are not lower than the reproducible committed
 baseline. The reproducible baseline on the current tree (docs/knowledge +
