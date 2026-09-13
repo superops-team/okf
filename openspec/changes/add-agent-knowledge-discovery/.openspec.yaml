@@ -1,0 +1,27 @@
+id: add-agent-knowledge-discovery
+name: Agent Knowledge Discovery and Integration
+description: Add stable concept identity, metadata-only manifest discovery, hierarchical retrieval projection, and managed multi-agent integration without replacing the OKF v0.2 model or retrieval engine
+author: okf-team
+version: 1.0.0
+status: proposed
+created_at: "2026-09-12"
+updated_at: "2026-09-12"
+related_changes:
+  - add-retrieval-quality-closed-loop
+  - add-durable-mcp-knowledge
+  - add-agent-native-dynamic-knowledge-tool
+  - okf-mcp-server
+specs:
+  - specs/agent-knowledge-discovery/spec.md
+requires:
+  - okf >= 0.6.0
+  - go >= 1.26.0
+impacts:
+  - pkg/identity: optional stable concept IDs and URI resolution
+  - pkg/manifest: frontmatter-only metadata discovery
+  - pkg/query: identity-aware index keys and shared result projection
+  - pkg/tool: manifest operation and grouped query projection
+  - pkg/mcp: okf_manifest plus optional grouping on okf_query
+  - cmd/okf: identity, manifest, grouped search, and agent integration commands
+  - pkg/agentconfig: managed project-scoped agent configuration adapters
+  - tests: unit, property, integration, CLI, MCP, eval, migration, and gauntlet coverage

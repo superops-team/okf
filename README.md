@@ -22,6 +22,7 @@
 - [How it works](#how-it-works)
 - [Installation — Quick Start (30 seconds)](#installation--quick-start-30-seconds)
 - [Usage](#usage)
+- [Stable Identity, Manifest & Agent Discovery](#stable-identity-manifest--agent-discovery)
 - [Documentation](#documentation)
 - [Project Structure](#project-structure)
 - [Module Reference](#module-reference)
@@ -143,7 +144,7 @@ okf mcp --repo /your/repo --dir .okf/knowledge
 
 ### Agent-facing MCP tools
 
-The MCP server exposes the repository knowledge service through `okf_status`, `okf_init`, `okf_refresh`, `okf_query`, and `okf_context`. Durable knowledge capture is available through `okf_note`, `okf_log`, and `okf_feedback`; `okf_ask` queries only those durable note/event/feedback concepts. Existing bundle/list/get/search/lint/document-import tools remain available.
+The MCP server exposes the repository knowledge service through `okf_status`, `okf_init`, `okf_refresh`, `okf_query`, and `okf_context`. Durable knowledge capture is available through `okf_note`, `okf_log`, and `okf_feedback`; `okf_ask` queries only those durable note/event/feedback concepts. Stable-ref resolution and metadata discovery are available through `okf_resolve` and `okf_manifest` (see [Stable Identity, Manifest & Agent Discovery](#stable-identity-manifest--agent-discovery)). Existing bundle/list/get/search/lint/document-import tools remain available.
 
 Writes require a stable `idempotency_key`, use deterministic identities, reject unknown or incorrectly typed fields, and fail closed for path escape, symlink-root, size-limit, and credential-like metadata violations. The server persists only feedback explicitly submitted by the caller; it does not inspect a host application's private event bus. See [`docs/knowledge/mcp-server.md`](docs/knowledge/mcp-server.md) and [`docs/knowledge/durable-capture.md`](docs/knowledge/durable-capture.md).
 
@@ -189,12 +190,80 @@ Measured on this repository's own knowledge base (28 queries, 26 positive, K=5):
 - **Hybrid retrieval**: the semantic channel (HNSW over chunk vectors) and the BM25 channel are fused with weighted RRF (`k=60`, equal weights by default). Tune with `-lexical-weight`; `0` disables the lexical channel. BM25 tokenizes identifiers into subwords (`okf_semantic_search` → `okf`/`semantic`/`search`) and CJK text into overlapping bigrams, with no dictionary dependency.
 - **Reproducibility**: indexes below 2048 chunks are searched by exact scan rather than HNSW's approximate traversal, because the approximate path does not return every node even when asked for all of them, and which nodes it misses shifts between rebuilds. Combined with a fixed RNG seed and deterministic tie-breaks, this makes results identical across rebuilds — verified by rebuilding this knowledge base repeatedly and confirming the evaluation metrics do not move.
 - **Index cost (measured, 7 concepts → 97 chunks)**: chunking increases index size ~20x (14.5 KB → 287 KB) and build time ~6x (128 ms → 800 ms). Both scale with content volume, not concept count.
-- **Index format v2 is not backward compatible**: chunk-level keys differ from the old concept-level keys. `okf vector status` reports the format version, and loading an older index fails with an explicit prompt to run `okf vector rebuild` (search falls back to lexical meanwhile) rather than silently returning wrong results.
+- **Index format is not backward compatible**: chunk-level keys differ across index format generations. `okf vector status` reports the format version; loading a pre-v3 (v2) index fails with `index_rebuild_required` and names `okf vector rebuild` (search falls back to lexical meanwhile) rather than silently returning wrong results. The identity-aware **v3** keys are `v3:id:<okf_id>` for stable concepts and `v3:legacy:<fingerprint>` for legacy concepts; assigning stable IDs via `okf identity ensure --apply` also reports `vector_rebuild_required=true`.
 - **Embedded resources**: the ONNX Runtime CPU library (per-OS, ~10–15 MB), the pure-tokenizers native library (~5–6 MB), a quantized MiniLM model (~23 MB), and `tokenizer.json` are embedded into the binary via `go:embed` and extracted to the user cache directory on first use (checksum-verified). Building for each platform only embeds that platform's resources (`scripts/fetch-ort.sh`, `scripts/fetch-tokenizers.sh`, and `scripts/fetch-model.sh` fetch them at build time; the runtime never goes online).
 - **Dynamic loading (transparency)**: the ONNX Runtime and pure-tokenizers shared libraries are loaded at runtime via `dlopen` from the extracted cache — the binary is self-contained but not statically linked. Cache location: `os.UserCacheDir()/okf/` (override with `OKF_ORT_DIR`).
 - **Large-document lifecycle**: document imports over 2000 words additionally persist source-tracked `__cN` concepts with heading context and `derived: true`. Semantic results are deduplicated by source document and report the hidden count as `dup=N`; this lets `okf sync -prune` remove generated whole/chunk files safely without touching author-owned files.
 - **Limits**: MiniLM embeddings are English-centric. Persisted document chunks and BM25's CJK bigrams improve Chinese retrieval, but a purely Chinese query against English content still relies on the semantic channel alone. `Embedder` is an interface, leaving room for stronger models (e.g. BGE-M3) or remote APIs later.
 - **Licenses**: pure-onnx (MIT), coder/hnsw (CC0-1.0), ONNX Runtime (MIT), MiniLM-L6-v2 model (Apache-2.0).
+
+## Stable Identity, Manifest & Agent Discovery
+
+This release adds optional stable concept identity, a metadata-only Manifest, hierarchical grouped retrieval, and project-scoped AI-agent integration. All additions are additive: legacy concepts without `okf_id` keep working unchanged, and omitting `group-by` preserves the existing ungrouped search output exactly.
+
+### Optional stable identity (`okf_id`) and explicit migration
+
+Concepts may carry an optional `okf_id` field matching `^okf_[0-9a-f]{32}$` (canonical URI `okf://concept/<okf_id>`). Concepts without it remain `legacy-unstable` and are fully valid — nothing about the required OKF v0.2 field set changes. IDs are only added through an explicit migration; there is no silent random assignment.
+
+```bash
+# Dry-run (default): lists planned additions, prints NO random IDs, leaves files byte-identical,
+# and repeats deterministically (byte-identical JSON).
+okf identity ensure --json
+# Apply: validates the whole plan before writing, atomically replaces each file, and is idempotent
+# (a second run reports zero changes).
+okf identity ensure --apply
+# Resolve a stable ref against the current bundle path (survives renames/moves).
+okf identity resolve --ref okf://concept/okf_... --json
+```
+
+Duplicate or invalid IDs fail closed with `duplicate_concept_id` / `invalid_concept_id` before any file or index is touched; a cross-file write failure rolls back already-replaced files. MCP exposes the same resolution as `okf_resolve`.
+
+### Vector index v3 requires an explicit rebuild
+
+Stable concepts are keyed `v3:id:<okf_id>`; legacy concepts fall back to deterministic `v3:legacy:<fingerprint>`. A pre-v2 or v2 index is **never** mixed with v3 lookups: `okf vector status` reports `incompatible`, search/status returns `index_rebuild_required` and names `okf vector rebuild`. Assigning IDs with `okf identity ensure --apply` reports `vector_rebuild_required=true`.
+
+### Metadata-only Manifest discovery (`okf tool manifest`)
+
+`okf tool manifest` lists concepts by bounded **frontmatter and file metadata only** — it never reads Markdown bodies, loads embeddings, or builds/touches the vector index. Multi-megabyte bodies are bounded by the frontmatter bytes plus one 4 KiB read prefetch.
+
+```bash
+# Default: at most 100 items, offset 0, ordered by normalized path then ID.
+okf tool manifest --json
+# Pagination + filters (limit 1..500; within a dimension OR, across dimensions AND).
+okf tool manifest --offset 100 --limit 50 --types source,note --tags go --json
+```
+
+Each item carries identity/ref, path, title/description, type, tags, effective status, trust tier, stale data, latest generated/verified timestamp, source count (≤3 source strings) and an `estimated_tokens = ceil(file_bytes/4)` label. Broken frontmatter omits only that file with a stable warning code (`manifest_frontmatter_missing|too_large|invalid`) and scanning continues. MCP exposes the identical contract as `okf_manifest`.
+
+### Hierarchical grouped retrieval (`-group-by`)
+
+Append `-group-by chunk|concept|source|folder` to `okf search` (and `-group-by` to `okf eval`) to project the already-fused, scored candidates into groups **before** final dedupe/TopK shaping. Omitting the flag keeps the existing ungrouped output and scores byte-for-byte unchanged.
+
+```bash
+# One representative per source (no source monopolization), plus hit/concept/source counts.
+okf search -q "retrieval" -group-by source
+# Group derived chunks under their parent concept; folder keys are bundle-relative "/", root is ".".
+okf search -q "vector index" -group-by concept
+```
+
+The representative is always the first raw member (its score is unchanged, never re-aggregated into a sum). Folder projection rejects absolute paths and `..` escapes, falling back to concept grouping with a warning rather than producing unsafe keys. Any value outside the four groups fails with `invalid_group_by` (no silent fallback).
+
+### Project-scoped agent integration (`okf agent`)
+
+`okf agent plan|apply|status|remove` installs deterministic project-local configuration for **Cursor**, **Claude Code**, and **Codex** without touching user-global settings or storing any credentials.
+
+```bash
+# Plan is read-only: reports every proposed path/action/redacted hash and writes nothing.
+okf agent plan --client cursor --format json
+# Apply needs an explicit confirmation in non-interactive mode; it is idempotent (apply twice → zero diff)
+# and preserves every unknown/owned-elsewhere config key and comment.
+okf agent apply --client cursor --yes
+okf agent apply --client cursor --yes   # second run: zero diff
+okf agent status --client cursor
+okf agent remove --client cursor --yes
+```
+
+Ownership is marked with the non-secret `OKF_MANAGED=agentconfig-v1` token. An existing entry that is malformed, unowned, or has unbalanced markers is reported as `conflict` and left byte-identical — there is no `--force`. Cursor uses `.cursor/mcp.json` + `.cursor/rules/okf.md`; Claude Code uses `.mcp.json` + `.claude/skills/okf/SKILL.md`; Codex uses `.codex/config.toml` + a managed `AGENTS.md` block. Use `--client all` (the default) for all three.
 
 ## Documentation
 

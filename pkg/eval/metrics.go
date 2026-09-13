@@ -3,7 +3,14 @@
 // search quality against a golden query set.
 package eval
 
-import "math"
+import (
+	"math"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"github.com/superops-team/okf/pkg/query"
+)
 
 // toSet converts a slice to a lookup set.
 func toSet(items []string) map[string]struct{} {
@@ -104,4 +111,155 @@ func NDCG(results []string, expected []string, k int) float64 {
 		return 0
 	}
 	return actual / ideal
+}
+
+// ---------------------------------------------------------------------------
+// Grouped-projection metrics (S47). These operate on the already-projected
+// []query.GroupedHit produced by query.Project. They never re-run retrieval
+// and never mutate the groups.
+// ---------------------------------------------------------------------------
+
+// normalizedEvalPath canonicalizes a relative file path for metric comparison:
+// trimmed, cleaned, "/" separators. Empty stays empty. It does NOT enforce the
+// query-package safety contract because these identifiers already come from
+// loaded concepts; it only makes "/" and "\" consistent.
+func normalizedEvalPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(p))
+}
+
+// groupCoveredSources returns the deduplicated set of source/concept
+// identifiers a group contains. It uses GroupedHit.CoveredSources (populated
+// by query.Project from every group member, not just the representative). When
+// CoveredSources is empty (e.g. a hand-built test fixture without it), it falls
+// back to the representative's source/concept path.
+func groupCoveredSources(g query.GroupedHit) []string {
+	if len(g.CoveredSources) > 0 {
+		return g.CoveredSources
+	}
+	if s := normalizedEvalPath(g.Representative.SourcePath); s != "" {
+		return []string{s}
+	}
+	if s := normalizedEvalPath(g.Representative.ConceptPath); s != "" {
+		return []string{s}
+	}
+	return nil
+}
+
+// groupCoveredSource returns the first covered source (for backward compat with
+// callers that only need one identifier). Prefer groupCoveredSources for
+// multi-source groups like folder projections.
+func groupCoveredSource(g query.GroupedHit) string {
+	srcs := groupCoveredSources(g)
+	if len(srcs) > 0 {
+		return srcs[0]
+	}
+	return ""
+}
+
+// RelevantSourceRecallAtK is the fraction of relevant sources that are covered
+// by at least one group among the top-k groups. A source is covered when it
+// appears in ANY member of ANY top-k group (via GroupedHit.CoveredSources),
+// not just the group representative. This is critical for folder projections
+// where one folder group can contain multiple relevant sources. If
+// relevantSources is empty it returns 1.0 (no relevant sources to miss).
+func RelevantSourceRecallAtK(groups []query.GroupedHit, relevantSources []string, k int) float64 {
+	if len(relevantSources) == 0 {
+		return 1.0
+	}
+	covered := make(map[string]struct{})
+	for _, g := range topNGroups(groups, k) {
+		for _, src := range groupCoveredSources(g) {
+			if src != "" {
+				covered[src] = struct{}{}
+			}
+		}
+	}
+	hits := 0
+	for _, r := range relevantSources {
+		if _, ok := covered[normalizedEvalPath(r)]; ok {
+			hits++
+		}
+	}
+	return float64(hits) / float64(len(relevantSources))
+}
+
+// GroupNDCG is NDCG@k over projected groups. relevance maps a group key to a
+// graded gain (>= 0); groups absent from the map score 0. The ideal ranking
+// truncates the k highest available gains. This is the group-level analogue of
+// the binary document NDCG above; it is a separate function because Go has no
+// overloading. If relevance is empty it returns 1.0; if no gain is available it
+// returns 0.
+func GroupNDCG(groups []query.GroupedHit, relevance map[string]float64, k int) float64 {
+	if len(relevance) == 0 {
+		return 1.0
+	}
+	actual := 0.0
+	for i, g := range topNGroups(groups, k) {
+		if gain := relevance[g.GroupKey]; gain > 0 {
+			actual += gain / math.Log2(float64(i+2))
+		}
+	}
+	gains := make([]float64, 0, len(groups))
+	for _, g := range groups {
+		if gain := relevance[g.GroupKey]; gain > 0 {
+			gains = append(gains, gain)
+		}
+	}
+	slices.Sort(gains)
+	slices.Reverse(gains) // descending: best gains fill the first ideal slots
+	if len(gains) > k {
+		gains = gains[:k]
+	}
+	ideal := 0.0
+	for i, gain := range gains {
+		ideal += gain / math.Log2(float64(i+2))
+	}
+	if ideal == 0 {
+		return 0
+	}
+	return actual / ideal
+}
+
+// Diversity is how evenly the raw hits are spread across groups: the number of
+// (already distinct) group keys divided by the total hits they hold. 1 means
+// every exposed hit is its own group; 1/n means all hits collapse into one.
+// Returns 0 when there are no hits.
+func Diversity(groups []query.GroupedHit) float64 {
+	total := 0
+	for _, g := range groups {
+		total += g.HitCount
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(len(groups)) / float64(total)
+}
+
+// SameSourceOccupancy is the share of all hits held by the single largest group
+// (max group hit_count / total hits). It measures how much one source/concept
+// monopolizes the result list; 1 means one group holds every hit. Returns 0 when
+// there are no hits.
+func SameSourceOccupancy(groups []query.GroupedHit) float64 {
+	total := 0
+	largest := 0
+	for _, g := range groups {
+		total += g.HitCount
+		largest = max(largest, g.HitCount)
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(largest) / float64(total)
+}
+
+// topNGroups returns the first n groups (or all when n <= 0 / n >= len).
+func topNGroups(groups []query.GroupedHit, n int) []query.GroupedHit {
+	if n <= 0 || n >= len(groups) {
+		return groups
+	}
+	return groups[:n]
 }

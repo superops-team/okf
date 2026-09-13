@@ -43,7 +43,7 @@ func weightBundle(t *testing.T) (*KnowledgeBundle, map[string]*Concept) {
 	return b, byName
 }
 
-func fpOf(c *Concept) string { return Fingerprint(c) }
+func fpOf(c *Concept) string { return ConceptKey(c) }
 
 func TestWeightedRRFVectorWeightDominates(t *testing.T) {
 	b, by := weightBundle(t)
@@ -367,7 +367,7 @@ func TestVectorAndLexicalChannelsShareChunkKeys(t *testing.T) {
 		if !vectorKeys[h.Key] {
 			t.Errorf("词法 key %q 不在向量 key 集合中，两通道分块口径已漂移", h.Key)
 		}
-		if ChunkKeyConcept(h.Key) != Fingerprint(c) {
+		if ChunkKeyConcept(h.Key) != ConceptKey(c) {
 			t.Errorf("key %q 无法回溯到父概念", h.Key)
 		}
 	}

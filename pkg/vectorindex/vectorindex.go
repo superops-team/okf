@@ -15,6 +15,8 @@ import (
 	"sync"
 
 	"github.com/coder/hnsw"
+
+	"github.com/superops-team/okf/pkg/identity"
 )
 
 // VectorIndex 定义向量索引的最小接口。
@@ -36,11 +38,20 @@ type Match struct {
 
 // CurrentIndexFormatVersion 是当前索引格式版本。
 //
-// 版本 2 起索引以 chunk 为单位，key 形如 "<概念指纹>#<块序号>"；
-// 版本 1（或缺失该字段）为概念级 key，二者不兼容：
-// 用旧索引检索会因 key 无法回溯到概念而静默返回空结果，
-// 故加载时必须显式拒绝并提示 rebuild。
-const CurrentIndexFormatVersion = 2
+// 版本 3 起索引 key 带 identity 前缀（v3:id:<okf_id> 或
+// v3:legacy:<指纹>），以 <conceptKey>#<块序号> 为单位；
+// 版本 2 以 "<概念指纹>#<块序号>" 为 key、版本 1 为概念级 key，二者与 v3
+// 不兼容：加载旧索引会因 key 无法回溯到概念而静默返回空结果，故加载时
+// 必须显式拒绝并返回 index_rebuild_required。
+const CurrentIndexFormatVersion = 3
+
+// FormatVersion 返回当前索引格式版本的纯函数访问器。
+//
+// 它不触发 HNSW 图、embedding 或任何运行时初始化，只是返回
+// CurrentIndexFormatVersion 常量。元数据只读消费者（如 pkg/manifest 的
+// ObserveIndexStatus）应调用本函数而非复制常量，以消除第二事实源；
+// 本函数本身不依赖任何运行时状态，import 它不会拉入 HNSW/embedding 运行时。
+func FormatVersion() int { return CurrentIndexFormatVersion }
 
 // Meta 描述索引元信息，用于加载时版本/维度一致性校验。
 type Meta struct {
@@ -279,11 +290,12 @@ func (h *HNSW) Load(dir string) (Meta, error) {
 		return meta, fmt.Errorf("解析索引元信息失败（%w），请执行 okf vector rebuild", err)
 	}
 	// 索引格式版本校验先于维度校验：格式不兼容时 key 语义已变，
-	// 即使维度相同也不能使用（会静默返回空结果）。
+	// 即使维度相同也不能使用（会静默返回空结果）。用 %w 包装 identity
+	// 类型化 sentinel，使上层（tool.Service）能 errors.As 提取稳定 code
+	// index_rebuild_required 并映射到 remediation "okf vector rebuild"。
 	if meta.IndexFormatVersion != CurrentIndexFormatVersion {
-		return meta, fmt.Errorf(
-			"索引格式版本 %d 与当前版本 %d 不兼容（分块级索引），请执行 okf vector rebuild",
-			meta.IndexFormatVersion, CurrentIndexFormatVersion)
+		return meta, fmt.Errorf("%w: 索引格式版本 %d 与当前版本 %d 不兼容（identity-aware v3 key），请执行 okf vector rebuild",
+			identity.ErrIndexRebuildRequired, meta.IndexFormatVersion, CurrentIndexFormatVersion)
 	}
 	if meta.Dims != h.dims {
 		return meta, fmt.Errorf("索引维度 %d 与当前模型维度 %d 不一致，请执行 okf vector rebuild", meta.Dims, h.dims)

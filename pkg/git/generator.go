@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/superops-team/okf/pkg/identity"
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/parser"
 )
@@ -828,6 +829,14 @@ func SaveKnowledgeBase(bundle *okf.KnowledgeBundle, cfg *Config) (int, error) {
 		fullPath := filepath.Join(outputDir, relPath)
 		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
 			failures = append(failures, fmt.Sprintf("mkdir %s: %v", filepath.Dir(fullPath), err))
+			continue
+		}
+
+		// Final-destination identity: preserve an existing valid okf_id on this
+		// owned target across refresh, or mint a fresh one for a new target.
+		// Staging/temp artifacts never reach this loop.
+		if _, err := identity.EnsureFinalID(concept, fullPath); err != nil {
+			failures = append(failures, fmt.Sprintf("identity %s: %v", relPath, err))
 			continue
 		}
 

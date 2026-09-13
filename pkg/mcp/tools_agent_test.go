@@ -27,6 +27,7 @@ func TestAgentFacingToolsAreRegistered(t *testing.T) {
 		"okf_refresh",
 		"okf_query",
 		"okf_context",
+		"okf_resolve",
 		"okf_ask",
 	} {
 		if !got[name] {
@@ -504,4 +505,203 @@ func initMCPToolTestRepo(t *testing.T) string {
 		t.Fatalf("git commit: %v: %s", err, output)
 	}
 	return repo
+}
+
+// S11: the MCP okf_resolve handler resolves a stable okf://concept/<id> ref to
+// the concept's current path after a file move.
+func TestMCPResolveSurvivesMove(t *testing.T) {
+	repo := initMCPToolTestRepo(t)
+	const okfID = "okf_17a2c56db85c4889b4f8fe02ca9ac67e"
+	oldRel := "notes/original.md"
+	newRel := "notes/renamed.md"
+	mustWriteMCPConcept(t, repo, oldRel, "---\ntype: note\ntitle: Original\nokf_id: "+okfID+"\n---\nbody\n")
+
+	registry := NewToolRegistryWithService(toolsvc.NewService(toolsvc.Config{RepoPath: repo}))
+	uri := "okf://concept/" + okfID
+
+	callResolve := func(ref string) (map[string]any, *ToolCallResult) {
+		result, err := registry.Call("okf_resolve", map[string]interface{}{"ref": ref})
+		if err != nil {
+			t.Fatalf("call okf_resolve: %v", err)
+		}
+		var env map[string]any
+		if err := json.Unmarshal([]byte(result.Content[0].Text), &env); err != nil {
+			t.Fatalf("unmarshal envelope: %v\n%s", err, result.Content[0].Text)
+		}
+		return env, result
+	}
+
+	// Before move.
+	env, _ := callResolve(uri)
+	if ok, _ := env["ok"].(bool); !ok {
+		t.Fatalf("resolve before move not ok: %v", env)
+	}
+	result, _ := env["result"].(map[string]any)
+	if got, _ := result["path"].(string); got != oldRel {
+		t.Fatalf("before move: path = %q, want %q", got, oldRel)
+	}
+
+	// Move the file.
+	kbDir := filepath.Join(repo, ".okf", "knowledge")
+	if err := os.Rename(filepath.Join(kbDir, filepath.FromSlash(oldRel)), filepath.Join(kbDir, filepath.FromSlash(newRel))); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteMCPConcept(t, repo, newRel, "---\ntype: note\ntitle: Renamed\nokf_id: "+okfID+"\n---\nbody\n")
+
+	// After move: same ref, new path.
+	env, _ = callResolve(uri)
+	if ok, _ := env["ok"].(bool); !ok {
+		t.Fatalf("resolve after move not ok: %v", env)
+	}
+	result, _ = env["result"].(map[string]any)
+	if got, _ := result["path"].(string); got != newRel {
+		t.Fatalf("after move: path = %q, want %q", got, newRel)
+	}
+
+	// Unknown valid-syntax ref -> concept_ref_not_found.
+	env, _ = callResolve("okf://concept/okf_ffffffffffffffffffffffffffffffff")
+	if ok, _ := env["ok"].(bool); ok {
+		t.Fatal("unknown ref should not be ok")
+	}
+	errObj, _ := env["error"].(map[string]any)
+	if code, _ := errObj["code"].(string); code != "concept_ref_not_found" {
+		t.Fatalf("unknown ref code = %q, want concept_ref_not_found", code)
+	}
+}
+
+// S26: okf_manifest is registered with the additive okf.tool.v1 envelope schema.
+func TestMCPManifestSchema(t *testing.T) {
+	repo := initMCPToolTestRepo(t)
+	registry := NewToolRegistryWithService(toolsvc.NewService(toolsvc.Config{RepoPath: repo}))
+	var found *Tool
+	for _, definition := range registry.List() {
+		if definition.Name == "okf_manifest" {
+			found = &definition
+		}
+	}
+	if found == nil {
+		t.Fatal("okf_manifest is not registered")
+	}
+	props, _ := found.InputSchema["properties"].(map[string]interface{})
+	for _, key := range []string{"offset", "limit", "types", "tags", "statuses", "stale", "folder_prefix", "include_trace"} {
+		if _, ok := props[key]; !ok {
+			t.Errorf("okf_manifest schema missing property %q", key)
+		}
+	}
+}
+
+// S26: MCP okf_manifest and Service.Manifest produce byte-identical envelopes
+// for the same repo and request.
+func TestMCPManifestParity(t *testing.T) {
+	repo := initMCPToolTestRepo(t)
+	mustWriteMCPConcept(t, repo, "concepts/alpha.md", `---
+type: concept
+title: Alpha
+okf_id: okf_17a2c56db85c4889b4f8fe02ca9ac67e
+---
+Alpha body.
+`)
+	mustWriteMCPConcept(t, repo, "concepts/beta.md", `---
+type: source
+title: Beta
+tags: [x]
+---
+Beta body.
+`)
+	service := toolsvc.NewService(toolsvc.Config{RepoPath: repo})
+	registry := NewToolRegistryWithService(service)
+
+	limit := 5
+	args := map[string]interface{}{"limit": float64(limit), "types": []interface{}{"concept"}}
+	result, err := registry.Call("okf_manifest", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(service.Manifest(t.Context(), toolsvc.ManifestRequest{Limit: &limit, Types: []string{"concept"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Content[0].Text; got != string(want) {
+		t.Fatalf("MCP manifest envelope differs from Service.Manifest\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// groupingMCPFixture mirrors the Service grouping fixture: two concepts share
+// src/doc1.md and a third lives in src/doc2.md.
+func groupingMCPFixture(t *testing.T) string {
+	t.Helper()
+	repo := initMCPToolTestRepo(t)
+	mustWriteMCPConcept(t, repo, "concepts/one.md", "---\ntype: concept\ntitle: Alpha Doc One\ndescription: ParityToken first half of doc1\nsource_path: src/doc1.md\n---\nParityToken body alpha one.\n")
+	mustWriteMCPConcept(t, repo, "concepts/two.md", "---\ntype: concept\ntitle: Alpha Doc Two\ndescription: ParityToken second half of doc1\nsource_path: src/doc1.md\n---\nParityToken body alpha two.\n")
+	mustWriteMCPConcept(t, repo, "concepts/three.md", "---\ntype: concept\ntitle: Beta Doc\ndescription: ParityToken lives in doc2\nsource_path: src/doc2.md\n---\nParityToken body beta.\n")
+	return repo
+}
+
+// TestMCPGroupingOmittedHasNoGroups (S27): without group_by the okf_query
+// envelope carries no groups field.
+func TestMCPGroupingOmittedHasNoGroups(t *testing.T) {
+	repo := groupingMCPFixture(t)
+	registry := NewToolRegistryWithService(toolsvc.NewService(toolsvc.Config{RepoPath: repo}))
+	result, err := registry.Call("okf_query", map[string]interface{}{"query": "ParityToken", "limit": float64(5)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Result struct {
+			Groups json.RawMessage `json:"groups"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Result.Groups) != 0 {
+		t.Fatalf("groups present when omitted: %s", envelope.Result.Groups)
+	}
+}
+
+// TestMCPGroupingMatchesService (S34): okf_query with group_by produces an
+// envelope byte-identical to the direct Service.Query result, proving MCP and
+// Service share the grouped projection semantics.
+func TestMCPGroupingMatchesService(t *testing.T) {
+	repo := groupingMCPFixture(t)
+	service := toolsvc.NewService(toolsvc.Config{RepoPath: repo})
+	registry := NewToolRegistryWithService(service)
+
+	args := map[string]interface{}{
+		"query": "ParityToken", "limit": float64(5),
+		"group_by": "source", "include_group_members": true,
+	}
+	result, err := registry.Call("okf_query", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(service.Query(t.Context(), toolsvc.QueryRequest{
+		Query: "ParityToken", Limit: 5, GroupBy: "source", IncludeGroupMembers: true,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Content[0].Text; got != string(want) {
+		t.Fatalf("MCP grouped envelope differs from Service\n got: %s\nwant: %s", got, want)
+	}
+
+	// And the payload actually contains two groups with the expected counts.
+	var envelope struct {
+		Result struct {
+			Groups []struct {
+				GroupKey    string `json:"group_key"`
+				HitCount    int    `json:"hit_count"`
+				SourceCount int    `json:"source_count"`
+			} `json:"groups"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Result.Groups) != 2 {
+		t.Fatalf("MCP groups = %d, want 2", len(envelope.Result.Groups))
+	}
+	if envelope.Result.Groups[0].GroupKey != "src:src/doc1.md" || envelope.Result.Groups[0].HitCount != 2 {
+		t.Fatalf("MCP group0 = %+v", envelope.Result.Groups[0])
+	}
 }

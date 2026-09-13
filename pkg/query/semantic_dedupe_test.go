@@ -61,10 +61,10 @@ func TestSemanticSearch_DedupeBySource(t *testing.T) {
 		{Type: "doc", Title: "Alpha", Content: "apple banana", FilePath: "kb/a.md"},
 	}}
 	fb := &fakeBackend{hits: []SemanticHit{
-		{Key: Fingerprint(b.Concepts[0]), Score: 0.9},
-		{Key: Fingerprint(b.Concepts[1]), Score: 0.8},
-		{Key: Fingerprint(b.Concepts[2]), Score: 0.7},
-		{Key: Fingerprint(b.Concepts[3]), Score: 0.6},
+		{Key: ConceptKey(b.Concepts[0]), Score: 0.9},
+		{Key: ConceptKey(b.Concepts[1]), Score: 0.8},
+		{Key: ConceptKey(b.Concepts[2]), Score: 0.7},
+		{Key: ConceptKey(b.Concepts[3]), Score: 0.6},
 	}}
 
 	res, err := SemanticSearch(b, "doc", fb, SearchOptions{TopK: 10})
@@ -100,8 +100,8 @@ func TestSemanticSearch_DedupeKeepsTopScore(t *testing.T) {
 	}}
 	// part 2 语义 rank 更高（RRF 按 rank 计分）
 	fb := &fakeBackend{hits: []SemanticHit{
-		{Key: Fingerprint(b.Concepts[1]), Score: 0.95},
-		{Key: Fingerprint(b.Concepts[0]), Score: 0.3},
+		{Key: ConceptKey(b.Concepts[1]), Score: 0.95},
+		{Key: ConceptKey(b.Concepts[0]), Score: 0.3},
 	}}
 	res, err := SemanticSearch(b, "doc", fb, SearchOptions{TopK: 5})
 	if err != nil {
@@ -124,8 +124,8 @@ func TestSemanticSearch_DisableDedupe(t *testing.T) {
 		chunkConcept("doc — part 2", "kb/doc.pdf", "kb/doc.pdf__c1.md"),
 	}}
 	fb := &fakeBackend{hits: []SemanticHit{
-		{Key: Fingerprint(b.Concepts[0]), Score: 0.9},
-		{Key: Fingerprint(b.Concepts[1]), Score: 0.8},
+		{Key: ConceptKey(b.Concepts[0]), Score: 0.9},
+		{Key: ConceptKey(b.Concepts[1]), Score: 0.8},
 	}}
 	res, err := SemanticSearch(b, "doc", fb, SearchOptions{TopK: 5, DisableDedupe: true})
 	if err != nil {
@@ -145,9 +145,9 @@ func TestSemanticSearch_NonChunkConceptsUnaffected(t *testing.T) {
 	// 无 source_path / __cN 的普通概念：不同文件不去重
 	b := newTestBundle()
 	fb := &fakeBackend{hits: []SemanticHit{
-		{Key: Fingerprint(b.Concepts[0]), Score: 0.9},
-		{Key: Fingerprint(b.Concepts[1]), Score: 0.8},
-		{Key: Fingerprint(b.Concepts[2]), Score: 0.7},
+		{Key: ConceptKey(b.Concepts[0]), Score: 0.9},
+		{Key: ConceptKey(b.Concepts[1]), Score: 0.8},
+		{Key: ConceptKey(b.Concepts[2]), Score: 0.7},
 	}}
 	res, err := SemanticSearch(b, "apple", fb, SearchOptions{TopK: 5})
 	if err != nil {
@@ -166,9 +166,9 @@ func TestSemanticSearch_DedupeStillFusesLexical(t *testing.T) {
 		{Type: "doc", Title: "Beta", Content: "unrelated topic", FilePath: "kb/b.md"},
 	}}
 	fb := &fakeBackend{hits: []SemanticHit{
-		{Key: Fingerprint(b.Concepts[1]), Score: 0.95}, // Alpha rank1
-		{Key: Fingerprint(b.Concepts[0]), Score: 0.8},  // chunk rank2
-		{Key: Fingerprint(b.Concepts[2]), Score: 0.7},  // Beta rank3
+		{Key: ConceptKey(b.Concepts[1]), Score: 0.95}, // Alpha rank1
+		{Key: ConceptKey(b.Concepts[0]), Score: 0.8},  // chunk rank2
+		{Key: ConceptKey(b.Concepts[2]), Score: 0.7},  // Beta rank3
 	}}
 	res, err := SemanticSearch(b, "apple", fb, SearchOptions{TopK: 5})
 	if err != nil {
@@ -197,9 +197,9 @@ func TestSemanticSearch_DedupeResultsSortedByScore(t *testing.T) {
 		{Type: "doc", Title: "Mid", Content: "banana cherry", FilePath: "kb/mid.md"},
 	}}
 	fb := &fakeBackend{hits: []SemanticHit{
-		{Key: Fingerprint(b.Concepts[1]), Score: 0.95}, // High rank1
-		{Key: Fingerprint(b.Concepts[2]), Score: 0.80}, // Mid rank2
-		{Key: Fingerprint(b.Concepts[0]), Score: 0.60}, // Low rank3
+		{Key: ConceptKey(b.Concepts[1]), Score: 0.95}, // High rank1
+		{Key: ConceptKey(b.Concepts[2]), Score: 0.80}, // Mid rank2
+		{Key: ConceptKey(b.Concepts[0]), Score: 0.60}, // Low rank3
 	}}
 	// Run twice; order must be identical (deterministic).
 	var first []string

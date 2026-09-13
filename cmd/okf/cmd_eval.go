@@ -23,6 +23,7 @@ func cmdEval(args []string) int {
 	k := fs.Int("k", 0, "Cut-off K for Recall@K/Precision@K/NDCG@K (default: value from golden set, else 5)")
 	compare := fs.Bool("compare", false, "Compare retrieval strategies (lexical / semantic / hybrid) instead of running one")
 	verbose := fs.Bool("verbose", false, "Print per-case results")
+	groupBy := fs.String("group-by", "", "Optional hierarchical projection grouping: chunk|concept|source|folder. Omitted keeps the existing ungrouped eval path.")
 	fs.Parse(args)
 
 	if *golden == "" {
@@ -70,6 +71,48 @@ func cmdEval(args []string) int {
 		}
 		fmt.Printf("         例如: %v\n", show)
 		fmt.Printf("         请确认 -path 指向该 golden set 对应的知识库。\n\n")
+	}
+
+	if *groupBy != "" {
+		// Validate group_by before running the benchmark. An invalid value
+		// would be silently ignored by RunGroupedBenchmarkWith (producing
+		// all-zero results), which is a UX defect. Fail loudly instead.
+		switch query.GroupBy(*groupBy) {
+		case query.GroupChunk, query.GroupConcept, query.GroupSource, query.GroupFolder:
+			// valid
+		default:
+			fmt.Fprintf(os.Stderr, "Error: invalid_group_by: %s\n", *groupBy)
+			fmt.Fprintln(os.Stderr, "Valid group-by values: chunk, concept, source, folder")
+			return 1
+		}
+		// S47: grouped eval must use the same hybrid raw-candidate strategy as
+		// S46, not the lexical-only DefaultStrategy. Build semantic+BM25 backends
+		// and fall back to lexical with a clear warning if the vector index is
+		// unavailable.
+		groupedStrategy := eval.DefaultStrategy
+		if emb, err := embeddings.NewMiniLM(); err == nil {
+			defer emb.Close()
+			idx := vectorindex.NewHNSW(emb.Dimension())
+			if _, lerr := idx.Load(vectorIndexDir(*path)); lerr == nil {
+				sem := &semanticBackend{emb: emb, idx: idx}
+				lex := query.BuildLexicalBackend(qb)
+				groupedStrategy = makeEvalStrategy(sem, lex, cutoff,
+					query.DefaultVectorWeight, query.DefaultLexicalWeight)
+			} else {
+				fmt.Printf("Warning: 向量索引不可用 (%v)，grouped eval 回退到 lexical 策略\n\n", lerr)
+			}
+		} else {
+			fmt.Printf("Warning: 向量模型不可用 (%v)，grouped eval 回退到 lexical 策略\n\n", err)
+		}
+		gReport := eval.RunGroupedBenchmarkWith(qb, cases, cutoff, query.GroupBy(*groupBy), groupedStrategy)
+		fmt.Print(gReport.String())
+		if *verbose {
+			for _, c := range gReport.Cases {
+				fmt.Printf("  %-22s → groups=%d srcRecall=%.2f ndcg=%.2f diversity=%.2f occupancy=%.2f\n",
+					truncateQuery(c.Query, 22), c.Groups, c.RelevantSourceRecall, c.GroupNDCG, c.Diversity, c.SameSourceOccupancy)
+			}
+		}
+		return 0
 	}
 
 	if !*compare {
@@ -187,6 +230,15 @@ func loadGoldenSetK(path string) (int, error) {
 		return 0, err
 	}
 	return set.K, nil
+}
+
+// truncateQuery 截断查询串用于 verbose 打印，避免超长查询撑宽输出。
+func truncateQuery(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n-1]) + "…"
 }
 
 func sortedKeys(m map[string]*eval.EvalReport) []string {

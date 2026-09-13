@@ -167,10 +167,18 @@ func summarizeWarnings(ws []downmark.Warning) []string {
 // frontmatter format stays single-sourced. Emits the okf.document generation
 // marker so generated-file lifecycle (okf sync -prune, incremental updates)
 // can identify and remove the product without touching author-owned files.
-func WrapConcept(title, filename, format, ctype, body string) string {
+//
+// okfID, when non-empty, is written as the stable okf_id extension. The
+// conversion/staging path passes empty so temporary artifacts never receive a
+// random id; only the final owned destination supplies it.
+func WrapConcept(title, filename, format, ctype, body, okfID string) string {
 	desc := fmt.Sprintf("Converted from %s (via %s)", filename, format)
-	return fmt.Sprintf("---\ntype: %s\ntitle: %q\ndescription: %q\ngenerated: true\ngenerator: %q\nsource_path: %q\n---\n%s\n",
-		ctype, title, desc, generatorName, filename, body)
+	idLine := ""
+	if okfID != "" {
+		idLine = fmt.Sprintf("okf_id: %q\n", okfID)
+	}
+	return fmt.Sprintf("---\ntype: %s\ntitle: %q\ndescription: %q\n%sgenerated: true\ngenerator: %q\nsource_path: %q\n---\n%s\n",
+		ctype, title, desc, idLine, generatorName, filename, body)
 }
 
 // generatorName identifies products of the document-conversion import path.
@@ -183,14 +191,18 @@ const generatorName = "okf.document"
 // import time (never filename-derived); custom fields carry chunk_index,
 // chunk_count, source_path, derived:true, the okf.document generation marker
 // and heading_path (when present) so dedupe and sync lifecycle can identify
-// derived artifacts.
-func WrapChunkConcept(title, filename, format, sourcePath string, index, count int, headingPath, body string) string {
+// derived artifacts. parentOKFID, when non-empty, records the parent concept's
+// stable okf_id under parent_okf_id.
+func WrapChunkConcept(title, filename, format, sourcePath string, index, count int, headingPath, body, parentOKFID string) string {
 	desc := fmt.Sprintf("Converted from %s (via %s)", filename, format)
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "---\ntype: source\ntitle: %q\ndescription: %q\n", title, desc)
 	fmt.Fprintf(&sb, "generated: true\ngenerator: %q\n", generatorName)
 	fmt.Fprintf(&sb, "chunk_index: %d\nchunk_count: %d\n", index, count)
 	fmt.Fprintf(&sb, "source_path: %q\nderived: \"true\"\n", sourcePath)
+	if parentOKFID != "" {
+		fmt.Fprintf(&sb, "parent_okf_id: %q\n", parentOKFID)
+	}
 	if headingPath != "" {
 		fmt.Fprintf(&sb, "heading_path: %q\n", headingPath)
 	}

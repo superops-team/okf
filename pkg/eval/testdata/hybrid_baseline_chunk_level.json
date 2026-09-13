@@ -1,0 +1,9 @@
+{
+  "golden_set": "testdata/golden_semantic.json",
+  "knowledge_path": "../../docs/knowledge",
+  "strategy": "hybrid-default (chunk-level, v3 keys)",
+  "recall_at_5": 0.9230769230769231,
+  "mrr": 0.6615384615384615,
+  "ndcg_at_5": 0.7251542932674765,
+  "positive_cases": 26
+}

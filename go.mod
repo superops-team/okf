@@ -14,6 +14,7 @@ require (
 	github.com/coder/hnsw v0.6.1
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/giraffesyo/downmark v0.10.0
+	github.com/google/renameio v1.0.1
 )
 
 require (
@@ -26,7 +27,6 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
 	github.com/giraffesyo/pdf v0.6.0 // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
-	github.com/google/renameio v1.0.1 // indirect
 	github.com/kr/text v0.1.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/richardlehane/mscfb v1.0.7 // indirect

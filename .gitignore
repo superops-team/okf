@@ -9,6 +9,7 @@ Icon?
 
 # Go build artifacts
 /okf
+/okf-usability-test
 *.bin
 *.exe
 *.exe~
@@ -40,6 +41,7 @@ dist/
 out/
 tmp/
 temp/
+.artifacts/
 *.tmp
 *.log
 .cache/

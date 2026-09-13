@@ -1,5 +1,47 @@
 # OKF Release Notes
 
+## v0.7.0 (unreleased) — Agent Knowledge Discovery
+
+This release adds four agent-facing capabilities on top of v0.6.0's retrieval
+quality closed loop: stable concept identity, metadata-only Manifest,
+hierarchical grouped retrieval, and project-scoped agent client integration.
+
+### New capabilities
+
+- **Optional stable concept identity (`okf_id`)**: `okf_<32 hex>` persisted in
+  frontmatter; explicit migration via `okf identity ensure` (dry-run default);
+  stable ref resolution across rename/move through `Service.Resolve`,
+  `okf identity resolve`, and MCP `okf_resolve`.
+- **Identity-aware vector index v3**: keys `v3:id:<okf_id>` / `v3:legacy:<fp>`;
+  v2 indexes require explicit `okf vector rebuild`.
+- **Metadata-only Manifest**: `okf tool manifest` / MCP `okf_manifest` list
+  bounded frontmatter + file metadata with no body, embedding, or index side
+  effects; pagination 1..500, AND/OR filters, `estimated_tokens=ceil(bytes/4)`.
+- **Hierarchical grouped retrieval**: `okf search -group-by
+  chunk|concept|source|folder` and `okf eval -group-by` project the existing
+  fused/scored candidate window; omitted `group_by` preserves legacy output
+  byte-for-byte.
+- **Project-scoped agent integration**: `okf agent plan|apply|status|remove
+  --client cursor|claude-code|codex|all` with self-describing ownership markers,
+  no credential persistence, and no `--force`.
+
+### Behavior changes
+
+- Vector index v2 must be rebuilt (`index_rebuild_required`).
+- `identity ensure --apply` rewrites frontmatter (comments/key order normalized;
+  body preserved).
+- Client config ownership is strict — unowned/malformed config reports `conflict`
+  and is never overwritten.
+
+### Retrieval baseline
+
+- Hybrid retrieval (golden_semantic.json, 28 cases): Recall@5=0.9231,
+  MRR=0.6872 with the current tree and v3 index. The v0.6.0-era figure
+  (0.9615/0.7256) was measured at an earlier point; the v0.7.0 code changes
+  only index-key prefixes and do not alter vectors, scores, or ranking.
+- Lexical-substring on the same golden set: Recall@5=0.0769 (reported
+  separately, not as the hybrid baseline).
+
 ## v0.6.0 (unreleased) — Retrieval Quality Closed Loop (M1)
 
 This release builds on v0.5.0's index-time chunking, BM25 and weighted RRF with
