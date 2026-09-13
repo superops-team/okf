@@ -16,9 +16,10 @@
   - `2c6805d` — first-round usability fixes + 64-assertion suite
   - `96811e2` — four-way audit second edition, D4 unknown-keys JSON merge, eval invalid group_by validation
   - `4a70ba3` — zero-skip usability audit (156 assertions), D5 conflict preflight (unowned whole-file artifacts), E3 derived-chunk parent_okf_id propagation
-- Evidence commit: this `conformance.md` and `evidence.md` are committed separately after the final fresh run. Two-SHA split avoids circular claim: evidence numbers were produced from the implementation at `4a70ba3`, then recorded here.
+  - `3c7f58c` — S46 spec-amendment Approved by user explicit approval; conformance S46 partial→fully; tasks checklist complete
+- Evidence commit: this `conformance.md` and `evidence.md` are committed separately after the final fresh run. Two-SHA split avoids circular claim: evidence numbers were produced from the implementation at `3c7f58c`, then recorded here.
 - S46 spec-amendment: **Approved** by user explicit approval on 2026-09-13 (see `spec-amendment.md`). Approved revision supersedes original S46 baseline clause; base-vs-head zero-regression proof retained.
-- Verification timestamp (UTC): 2026-09-12T05:01:48Z (verify run); gauntlet run immediately after (EXIT=0).
+- Verification timestamp (UTC): 2026-09-13T00:17:06Z (verify-discovery run); gauntlet run immediately after (EXIT=0, coverage 69%, mutation 23/23 killed); usability 156/0/0; MCP E2E 13/13.
 - Go/tool versions: `go version go1.26.7 linux/amd64`; no new third-party dependency.
 - One-command entry point: `tools/verify-agent-discovery.sh` (fresh run); gate: `tools/gauntlet.sh` (L1–L10 + L6a/b/L7/L8/L9b).
 - Reproduce: `go build ./... && go vet ./... && go test ./... && tools/mutants-agent-discovery.sh && tools/verify-agent-discovery.sh && tools/gauntlet.sh`.
@@ -95,4 +96,4 @@ Alignment legend: `fully` = exact behavior implemented and verified by a fresh r
 - [x] Results come from the final source state after the last edit (fresh `tools/verify-agent-discovery.sh` run).
 - [x] No `gap` or `partial` remains. S46 is `fully` — spec-amendment.md was **Approved** by user explicit approval on 2026-09-13; the approved revision supersedes the original S46 baseline clause. Base-vs-head zero-regression proof and chunk-level machine gate retained. S47 is `fully` (code bug fixed per original spec).
 - [x] Retrieval metrics, Manifest bytes-read, client fixture results and mutation kills use actual numbers (see `evidence.md`).
-- [x] Implementation commits `070decd`/`47ec717`/`018996c`/`33c33e1`/`02d1312`/`2c6805d`/`96811e2`/`4a70ba3` and evidence commit (this file) are all on branch `spec/agent-knowledge-discovery`; all commands are reproducible from the repository.
+- [x] Implementation commits `070decd`/`47ec717`/`018996c`/`33c33e1`/`02d1312`/`2c6805d`/`96811e2`/`4a70ba3`/`3c7f58c` and evidence commit (this file) are all on branch `spec/agent-knowledge-discovery`; all commands are reproducible from the repository.

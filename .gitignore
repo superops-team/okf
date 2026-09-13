@@ -9,6 +9,7 @@ Icon?
 
 # Go build artifacts
 /okf
+/okf-usability-test
 *.bin
 *.exe
 *.exe~
