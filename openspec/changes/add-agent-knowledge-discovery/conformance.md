@@ -1,9 +1,13 @@
 # Conformance Audit — add-agent-knowledge-discovery
 
-> Status: implementation complete. Every S01–S50 Scenario maps to a real
+> Status: local implementation and evidence matrix complete; strict three-client model-E2E release acceptance is blocked by Claude Code and Cursor authentication. Every S01–S61 Scenario maps to a real
 > implementation symbol, an executable test, and a fresh-run command. Numbers in
 > this file come from `tools/verify-agent-discovery.sh` (see `evidence.md`),
 > which rebuilds the CLI from the current source and exercises every entry point.
+> Real Agent client E2E evidence comes from `tools/verify-real-agent-e2e.sh`
+> (four-layer: adapter fixture / official config discovery / real model MCP calls /
+> final answer & effect). Clients without model authentication are reported as
+> `BLOCKED_AUTH`, never aggregated into `PASS`.
 
 ## Audit metadata
 
@@ -79,7 +83,18 @@ Alignment legend: `fully` = exact behavior implemented and verified by a fresh r
 | S47 | Grouped retrieval utility | grouped eval uses hybrid raw-candidate strategy; `RelevantSourceRecallAtK` checks ALL group members' covered sources (fixed: was representative-only) | `TestEvalGroupedMetrics`, `TestRelevantSourceRecallAtK_MultiSourceFolder`, `grouped_metrics_test.go` | verify: concept srcRecall=0.9231; source srcRecall=0.9231; folder srcRecall=0.9231 (fixed from 0.4038). All three ≥ raw hybrid Recall@5=0.9231. | fully |
 | S48 | Resource bounds | bounded reader + O(n) projection | `TestManifestBenchmark1000FileBytesRead`, `TestManifestDoesNotParseBody`, path properties | verify BENCH: files=1000 body=250MiB bytes_read=4MiB | fully |
 | S49 | Full gauntlet | `tools/gauntlet.sh` + `tools/verify-agent-discovery.sh` + mutants | L1–L10 + L6a/b/L7/L8 + `mutants-agent-discovery.sh` (5/5) | verify script exit 0; gauntlet layers added | fully |
-| S50 | Spec conformance | this audit + conformance checker | 50-row matrix below | no partial/gap; commit + commands recorded | fully |
+| S50 | Spec conformance | this audit + conformance checker | 61-row matrix below | no partial/gap for S01–S50; S51–S55 Codex fully, Claude/Cursor model closure partial (BLOCKED_AUTH); S57–S61 fully; commit + commands recorded | fully |
+| S51 | Official clients consume generated project config | `pkg/agentconfig` adapters generate `.cursor/mcp.json`, `.mcp.json`, `.codex/config.toml`; official client CLIs inspect project MCP config | `tools/verify-real-agent-e2e.sh` layer `official_config_discovery` | fresh: Codex PASS (codex-cli 0.153.4 discovers okf), Claude Code PASS (official CLI config discovery), Cursor PASS (official CLI config discovery); absent client = BLOCKED_CLIENT_MISSING | fully |
+| S52 | Real Agent produces source-grounded answer through OKF MCP | `okf mcp --repo .` stdio server; official Agent client calls okf_status→okf_manifest→okf_query→okf_context in order; canary fact in final answer | `tools/verify-real-agent-e2e.sh` layer `model_read_answer` (Codex); JSONL event stream machine-validated | fresh: Codex PASS (real model called all 4 tools in order, no shell/file/CLI, canary in final answer); Claude Code BLOCKED_AUTH (no model credential); Cursor BLOCKED_AUTH | partial |
+| S53 | Agent acceptance cannot bypass OKF MCP | event-stream audit: no shell, terminal, direct file-read, or direct OKF CLI execution; `tools/mcp_call.py`/`test_mcp.py` results excluded from Agent-client evidence | `tools/verify-real-agent-e2e.sh` JSONL audit (Codex) | fresh: Codex PASS (zero bypass events in JSONL); Claude/Cursor not run (BLOCKED_AUTH) | partial |
+| S54 | Real Agent recovers from structured OKF error | Agent resolves invalid ref → observes `invalid_concept_id` + remediation → calls okf_manifest → retries okf_resolve → final answer reports resolved path | `tools/verify-real-agent-e2e.sh` layer `model_error_recovery` (Codex) | fresh: Codex PASS (real model consumed structured error, retried, resolved path in answer); Claude/Cursor BLOCKED_AUTH | partial |
+| S55 | Real Agent performs controlled durable capture | Agent calls okf_note with idempotency key → okf_query reads back → note persisted under knowledge dir → final answer contains durable content | `tools/verify-real-agent-e2e.sh` layer `model_controlled_write` (Codex) | fresh: Codex PASS (note persisted, query readback, content in answer); Claude/Cursor BLOCKED_AUTH | partial |
+| S56 | Client capability status is fail-closed | `tools/verify-real-agent-e2e.sh` records per-client per-layer status and executes validator negative controls; BLOCKED_* never aggregated into PASS; config discovery reported separately from model/tool/answer closure | `tools/verify-real-agent-e2e.sh` results.tsv + summary.json + `real-agent-evidence.md` | fresh: 8 PASS / 0 FAIL / 2 BLOCKED_AUTH; counts include parser gate, three config-discovery gates, validator negative-controls, and three Codex model closures; strict mode remains blocked by Claude/Cursor auth | fully |
+| S57 | Code metadata combination filter returns results | `pkg/tool/service.go` `filteredConceptsForQuery` delegates to `querypkg.Query.Execute` (content-aware, case-insensitive, substring over body/regex index); `matchesQueryFilters` post-filters only Type/Types/Project/Tag; exact custom-field comparisons for file path/language/symbol/qualified-name/relation endpoints removed | `TestFilteredConceptsCodeMetadataCombination`, `TestFilteredConceptsNoFalsePositive` | `go test ./pkg/tool/ -run 'TestFilteredConceptsCodeMetadataCombination|TestFilteredConceptsNoFalsePositive'` green | fully |
+| S58 | Context returns token-bounded source snippet for matched symbol | `pkg/tool/service.go` `rankConcepts` falls back to `symbolLocationFromContent` + `parseSymbolLocation` when `start_line` custom field is 0 (exact name > substring > first hit); `Service.Context` extracts the parsed range and hardcodes `Provenance="repo.source"` | `TestRankConceptsSymbolLocationFromContent`, `TestContextExtractsSymbolBody` | `go test ./pkg/tool/ -run 'TestRankConceptsSymbolLocationFromContent|TestContextExtractsSymbolBody'` green; snippet spans multiple lines and excludes unrelated symbols | fully |
+| S59 | Status reports code concept count | `pkg/tool/service.go` `StatusResult.CodeConceptCount` (`json:"code_concept_count,omitempty"`) from `stats.TypeCounts["code_file"]`; omitted when zero | `TestStatusReportsCodeConceptCount`, `TestStatusOmitsCodeConceptCountWhenNone` | `go test ./pkg/tool/ -run 'TestStatusReportsCodeConceptCount|TestStatusOmitsCodeConceptCountWhenNone'` green | fully |
+| S60 | Code metadata filtering consistent across Service, CLI and MCP | all three entry points route through the same `Service.Query`/`filteredConceptsForQuery` path; unified substring semantics locked by renamed `...UseSubstringSemantics` tests | `TestQueryStructuredFiltersUseSubstringSemantics`, `TestQueryRelationSourceAndTargetFiltersUseSubstringSemantics`, `TestFilteredConceptsCodeMetadataCombination` | `go test ./pkg/tool/ -run 'SubstringSemantics'` green; Service/CLI/MCP share one filter implementation | fully |
+| S61 | Non-code concept filtering is unchanged | `matchesQueryFilters` still applies Type/Types/Project/Tag; empty filters pass through unchanged | `TestFilteredConceptsBackwardCompat` | `go test ./pkg/tool/ -run TestFilteredConceptsBackwardCompat` green | fully |
 
 ## Allowed alignment values
 
@@ -90,10 +105,14 @@ Alignment legend: `fully` = exact behavior implemented and verified by a fresh r
 
 ## Final gates
 
-- [x] 50 rows exist, one per Scenario, no duplicate/missing S01–S50.
+- [x] 61 rows exist, one per Scenario, no duplicate/missing S01–S61.
 - [x] Every row names a public or internal wiring point and an executable test.
 - [x] All cited paths/symbols and test function names exist (verified by grep).
-- [x] Results come from the final source state after the last edit (fresh `tools/verify-agent-discovery.sh` run).
-- [x] No `gap` or `partial` remains. S46 is `fully` — spec-amendment.md was **Approved** by user explicit approval on 2026-09-13; the approved revision supersedes the original S46 baseline clause. Base-vs-head zero-regression proof and chunk-level machine gate retained. S47 is `fully` (code bug fixed per original spec).
+- [x] Results come from the final source state after the last edit (fresh `tools/verify-agent-discovery.sh` run + fresh `tools/verify-real-agent-e2e.sh` run).
+- [x] S01–S50 no `gap` or `partial`. S46 is `fully` — spec-amendment.md was **Approved** by user explicit approval on 2026-09-13; the approved revision supersedes the original S46 baseline clause. Base-vs-head zero-regression proof and chunk-level machine gate retained. S47 is `fully` (code bug fixed per original spec).
+- [x] S51–S55: Codex `fully` (real model E2E passed: read-answer, error-recovery, controlled-write, no-bypass). Claude Code and Cursor model closure are `partial` / `BLOCKED_AUTH` (official config discovery PASS; no model credential in this environment; fail-closed per S56). Not aggregated into PASS.
+- [x] S56 `fully`: capability status fail-closed; fresh evidence reports 8 PASS / 0 FAIL / 2 BLOCKED_AUTH and strict mode remains non-zero while blocked.
+- [x] S57–S61 `fully`: unified code-metadata filtering (`filteredConceptsForQuery` → `querypkg.Query.Execute`, post-filter limited to Type/Types/Project/Tag), body-derived symbol range (`symbolLocationFromContent`/`parseSymbolLocation`), token-bounded Context snippet with `repo.source` provenance, additive `code_concept_count`, and unchanged non-code filtering; locked by `pkg/tool/service_code_query_test.go` and the renamed `...UseSubstringSemantics` tests.
 - [x] Retrieval metrics, Manifest bytes-read, client fixture results and mutation kills use actual numbers (see `evidence.md`).
+- [x] Real Agent E2E uses official client JSONL event streams, not `tools/mcp_call.py` or `test_mcp.py` (those are MCP protocol layer only, S53).
 - [x] Implementation commits `070decd`/`47ec717`/`018996c`/`33c33e1`/`02d1312`/`2c6805d`/`96811e2`/`4a70ba3`/`3c7f58c` and evidence commit (this file) are all on branch `spec/agent-knowledge-discovery`; all commands are reproducible from the repository.

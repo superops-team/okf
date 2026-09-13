@@ -7,7 +7,7 @@
 1. **Stable Concept ID**：可选扩展字段 `okf_id` 与稳定 URI `okf://concept/<okf_id>`，使 Concept 重命名或移动后仍可被长期引用。
 2. **Manifest 元数据发现**：通过 frontmatter-only 扫描低成本列出知识元数据，不读取正文、不初始化 embedding、不隐式构建索引。
 3. **分层检索聚合**：在现有各通道已经产生的有界、已评分候选上，于最终输出去重/TopK 整形前提供 `chunk|concept|source|folder` 投影，保留底层分数、来源与确定性 trace；未分组路径不变。
-4. **Agent Integration**：以项目级、幂等、可预览、可诊断、可逆的方式配置 Cursor、Claude Code、Codex，并从单一模板生成 MCP 与使用规范。
+4. **Agent Integration**：以项目级、幂等、可预览、可诊断、可逆的方式配置 Cursor、Claude Code、Codex，并从单一模板生成 MCP 与使用规范。真实 Agent 客户端验收按四层模型（adapter fixture / official config discovery / real model MCP calls / final answer & effect）分别报告，未认证客户端为 BLOCKED_AUTH，不聚合为 PASS（S51–S56）。
 
 四项能力构成一条链路：稳定身份 → 低成本发现 → 分层检索 → Agent 工作流编排。
 

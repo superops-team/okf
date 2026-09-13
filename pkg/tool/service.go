@@ -10,8 +10,10 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -175,11 +177,12 @@ type ResolveResult struct {
 }
 
 type StatusResult struct {
-	Ready         bool                `json:"ready"`
-	ConceptCount  int                 `json:"concept_count"`
-	UniqueTypes   int                 `json:"unique_types"`
-	UniqueTags    int                 `json:"unique_tags"`
-	KnowledgePath KnowledgePathStatus `json:"knowledge_path,omitempty"`
+	Ready            bool                `json:"ready"`
+	ConceptCount     int                 `json:"concept_count"`
+	UniqueTypes      int                 `json:"unique_types"`
+	UniqueTags       int                 `json:"unique_tags"`
+	CodeConceptCount int                 `json:"code_concept_count,omitempty"`
+	KnowledgePath    KnowledgePathStatus `json:"knowledge_path,omitempty"`
 }
 
 type InitResult struct {
@@ -336,11 +339,12 @@ func (s *Service) Status(_ stdctx.Context, _ StatusRequest) ToolEnvelope {
 		Freshness:     freshness,
 		Warnings:      loadMeta.Warnings,
 		Result: StatusResult{
-			Ready:         true,
-			ConceptCount:  stats.TotalConcepts,
-			UniqueTypes:   stats.UniqueTypes,
-			UniqueTags:    stats.UniqueTags,
-			KnowledgePath: knowledgePathStatus(resolved),
+			Ready:            true,
+			ConceptCount:     stats.TotalConcepts,
+			UniqueTypes:      stats.UniqueTypes,
+			UniqueTags:       stats.UniqueTags,
+			CodeConceptCount: stats.TypeCounts["code_file"],
+			KnowledgePath:    knowledgePathStatus(resolved),
 		},
 	}
 }
@@ -1597,6 +1601,22 @@ func rankConcepts(concepts []*okf.Concept, query string, filters queryFilters) [
 		endLine := intCustomField(concept.CustomFields, "end_line")
 		symbolKind, _ := stringCustomField(concept.CustomFields, "symbol_kind")
 		qualifiedName, _ := stringCustomField(concept.CustomFields, "qualified_name")
+		// Generated code_file concepts store symbol ranges only in their body
+		// (e.g. "- `function` `Render` (exported) at `path:159-177`"). When the
+		// start/end custom fields are absent, parse the best-matching symbol
+		// line so Context can extract the full function body.
+		if startLine == 0 {
+			if parsedStart, parsedEnd, parsedKind, parsedName := symbolLocationFromContent(concept.Content, query); parsedStart != 0 {
+				startLine = parsedStart
+				endLine = parsedEnd
+				if symbolKind == "" {
+					symbolKind = parsedKind
+				}
+				if qualifiedName == "" {
+					qualifiedName = parsedName
+				}
+			}
+		}
 		relationKind, _ := stringCustomField(concept.CustomFields, "relation_kind")
 		relationSource, _ := stringCustomField(concept.CustomFields, "relation_source")
 		relationTarget, _ := stringCustomField(concept.CustomFields, "relation_target")
@@ -1821,6 +1841,12 @@ func scoreConcept(concept *okf.Concept, rawQuery string) (int, string, int) {
 	return int(math.Min(float64(score), 1000)), strings.Join(uniqueStrings(reasons), ", "), exactness
 }
 
+// matchesQueryFilters applies only the post-filter dimensions that the query
+// package builder cannot express (Type, Types, Project, Tag). Code metadata
+// (file path, language, symbol kind, qualified name, relation endpoints) is
+// already filtered content-aware and case-insensitively by querypkg.Query in
+// filteredConceptsForQuery; re-checking it here against CustomFields only
+// rejected generated code_file concepts that carry that metadata in their body.
 func matchesQueryFilters(concept *okf.Concept, filters queryFilters) bool {
 	if filters.Type != "" && concept.Type != filters.Type {
 		return false
@@ -1834,28 +1860,82 @@ func matchesQueryFilters(concept *okf.Concept, filters queryFilters) bool {
 	if filters.Tag != "" && !hasTag(concept.Tags, filters.Tag) {
 		return false
 	}
-	if filters.FilePath != "" && sourcePathForConcept(concept) != filters.FilePath {
-		return false
-	}
-	if filters.Language != "" && !strings.EqualFold(stringCustomFieldOrEmpty(concept.CustomFields, "language"), filters.Language) {
-		return false
-	}
-	if filters.SymbolKind != "" && stringCustomFieldOrEmpty(concept.CustomFields, "symbol_kind") != filters.SymbolKind {
-		return false
-	}
-	if filters.QualifiedName != "" && stringCustomFieldOrEmpty(concept.CustomFields, "qualified_name") != filters.QualifiedName {
-		return false
-	}
-	if filters.RelationKind != "" && stringCustomFieldOrEmpty(concept.CustomFields, "relation_kind") != filters.RelationKind {
-		return false
-	}
-	if filters.RelationSource != "" && filepath.Clean(stringCustomFieldOrEmpty(concept.CustomFields, "relation_source")) != filters.RelationSource {
-		return false
-	}
-	if filters.RelationTarget != "" && filepath.Clean(stringCustomFieldOrEmpty(concept.CustomFields, "relation_target")) != filters.RelationTarget {
-		return false
-	}
 	return true
+}
+
+// generatedSymbolLinePattern matches a generated code symbol line of the form
+// "- `kind` `name` (visibility) at `path:start-end`". It mirrors the regex used
+// by pkg/query and pkg/git for the same generated format.
+var generatedSymbolLinePattern = regexp.MustCompile("^- `([^`]+)` `([^`]+)` \\(([^)]+)\\) at `([^`]+)`$")
+
+// symbolLocationFromContent parses generated symbol lines of the form
+// "- `kind` `name` (visibility) at `path:start-end`" and returns the line range
+// of the symbol whose name best matches the query. Exact name match wins over
+// substring match; ties resolve to the first matching symbol. Returns 0,0 when
+// no symbol matches the query.
+func symbolLocationFromContent(content, query string) (startLine, endLine int, symbolKind, qualifiedName string) {
+	needle := strings.ToLower(strings.TrimSpace(query))
+	if needle == "" {
+		return 0, 0, "", ""
+	}
+	type parsedSymbol struct {
+		kind, name, location string
+	}
+	var exact, substring []parsedSymbol
+	for _, line := range strings.Split(content, "\n") {
+		parts := generatedSymbolLinePattern.FindStringSubmatch(strings.TrimSpace(line))
+		if len(parts) != 5 {
+			continue
+		}
+		kind, name, location := parts[1], parts[2], parts[4]
+		switch normalized := strings.ToLower(name); {
+		case normalized == needle:
+			exact = append(exact, parsedSymbol{kind, name, location})
+		case strings.Contains(normalized, needle):
+			substring = append(substring, parsedSymbol{kind, name, location})
+		}
+	}
+	best := exact
+	if len(best) == 0 {
+		best = substring
+	}
+	if len(best) == 0 {
+		return 0, 0, "", ""
+	}
+	start, end, ok := parseSymbolLocation(best[0].location)
+	if !ok {
+		return 0, 0, "", ""
+	}
+	return start, end, best[0].kind, best[0].name
+}
+
+// parseSymbolLocation splits a "path:start-end" location into its 1-indexed
+// line range.
+func parseSymbolLocation(location string) (start, end int, ok bool) {
+	colon := strings.LastIndex(location, ":")
+	if colon < 0 {
+		return 0, 0, false
+	}
+	rangePart := location[colon+1:]
+	startStr, endStr, found := strings.Cut(rangePart, "-")
+	if !found {
+		return 0, 0, false
+	}
+	start, err := strconv.Atoi(strings.TrimSpace(startStr))
+	if err != nil {
+		return 0, 0, false
+	}
+	end, err = strconv.Atoi(strings.TrimSpace(endStr))
+	if err != nil {
+		return 0, 0, false
+	}
+	if start <= 0 {
+		return 0, 0, false
+	}
+	if end < start {
+		end = start
+	}
+	return start, end, true
 }
 
 func hasTag(tags []string, want string) bool {

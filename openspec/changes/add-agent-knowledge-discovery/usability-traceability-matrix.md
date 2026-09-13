@@ -47,7 +47,13 @@
 | F3 JSON clean streams | S18/S26 | cmd/okf/*, pkg/mcp | cmd tests, test_mcp.py | `--json` commands |
 | F4 help/README examples | S50 | cmd/okf/main.go, README | help_golden_test.go | help, README |
 | F5 output verbosity | S49 | cmd/okf/* | cmd tests | all commands |
-| G1 MCP startup | S26/S39 | cmd/okf/cmd_mcp.go, pkg/mcp | test_mcp.py | `okf mcp --repo .` |
-| G2 actual tool calls | S26/S34 | pkg/mcp/tools.go | test_mcp.py, tools_agent_test.go | MCP stdio |
-| G3 MCP error handling | S33/S12 | pkg/mcp/tools.go, errToTool | tools_agent_test.go | MCP stdio |
-| G4 durable note capture | S16 | pkg/tool/write.go, pkg/identity/persist.go | identity_resolve_test.go | MCP okf_note |
+| G1 MCP startup (protocol layer) | S26/S39 | cmd/okf/cmd_mcp.go, pkg/mcp | test_mcp.py | `okf mcp --repo .` (direct stdio, NOT real Agent) |
+| G2 actual tool calls (protocol layer) | S26/S34 | pkg/mcp/tools.go | test_mcp.py, tools_agent_test.go | MCP stdio via tools/mcp_call.py |
+| G3 MCP error handling (protocol layer) | S33/S12 | pkg/mcp/tools.go, errToTool | tools_agent_test.go | MCP stdio via tools/mcp_call.py |
+| G4 durable note capture (protocol layer) | S16 | pkg/tool/write.go, pkg/identity/persist.go | identity_resolve_test.go | MCP okf_note via tools/mcp_call.py |
+| H1 adapter fixture | S38/S51 | pkg/agentconfig/{cursor,claude,codex}.go | conformance_test.go, verify-real-agent-e2e.sh | `okf agent apply --client all` |
+| H2 official config discovery | S51 | pkg/agentconfig adapters + official CLIs | verify-real-agent-e2e.sh layer official_config_discovery | codex mcp list / claude / cursor |
+| H3 real model read-answer | S52/S53 | okf mcp server + official Agent LLM | verify-real-agent-e2e.sh layer model_read_answer (Codex) | codex exec --json JSONL |
+| H4 real model error recovery | S54 | okf_resolve error + remediation | verify-real-agent-e2e.sh layer model_error_recovery (Codex) | codex exec --json JSONL |
+| H5 real model controlled write | S55 | okf_note + okf_query | verify-real-agent-e2e.sh layer model_controlled_write (Codex) | codex exec --json JSONL |
+| H6 capability fail-closed | S56 | verify-real-agent-e2e.sh status reporting + validator negative controls | results.tsv/summary.json + real-agent-evidence.md | 8 PASS / 0 FAIL / 2 BLOCKED_AUTH; strict mode exits non-zero |

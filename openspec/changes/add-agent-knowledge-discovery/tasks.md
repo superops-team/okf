@@ -132,9 +132,30 @@ P0-P4 are dependency order only. This change is complete only when all four prod
 
 ### T4.4 Spec-to-implementation audit
 - **File**: `conformance.md`.
-- **Implement**: map S01–S50 to code, test, last fresh command/result and status `fully|aligned|partial|gap`.
-- **Gate**: no unexplained partial/gap; no scenario without an executable test.
-- **Scenarios**: S50.
+- **Implement**: map S01–S56 to code, test, last fresh command/result and status `fully|aligned|partial|gap`. S51–S55 Codex fully; Claude/Cursor model closure partial (BLOCKED_AUTH); S56 fully (fail-closed).
+- **Gate**: no unexplained partial/gap for S01–S50; S51–S55 partial only for BLOCKED_AUTH clients with explicit reason; no scenario without an executable test.
+- **Scenarios**: S50, S51–S56.
+
+## P5 — Code metadata filtering consistency (amendment; complete)
+
+- [x] **T5.1 Unify code metadata filtering under the query package.**
+  - **Files**: `pkg/tool/service.go`.
+  - **Implement**: `filteredConceptsForQuery` builds a `querypkg.Query` (code language/path/symbol-kind/qualified-name/relation endpoints + tags) and calls `Execute()`; `matchesQueryFilters` post-filters only Type/Types/Project/Tag. Removed exact custom-field comparison for `FilePath`/`Language`/`SymbolKind`/`QualifiedName`/`RelationKind`/`RelationSource`/`RelationTarget`.
+  - **Tests**: `TestFilteredConceptsCodeMetadataCombination`, `TestFilteredConceptsNoFalsePositive`, `TestQueryStructuredFiltersUseSubstringSemantics`, `TestQueryRelationSourceAndTargetFiltersUseSubstringSemantics`.
+  - **Scenarios**: S57, S60.
+- [x] **T5.2 Parse symbol location from concept body for Context.**
+  - **Files**: `pkg/tool/service.go`.
+  - **Implement**: `symbolLocationFromContent` + `parseSymbolLocation` parse ``- `kind` `name` (visibility) at `path:start-end``; `rankConcepts` backfills StartLine/EndLine and missing symbol_kind/qualified_name when `start_line` custom field is 0 (exact name > substring > first hit); `Service.Context` returns a token-bounded multi-line symbol snippet with `repo.source` provenance.
+  - **Tests**: `TestRankConceptsSymbolLocationFromContent`, `TestContextExtractsSymbolBody`.
+  - **Scenarios**: S58.
+- [x] **T5.3 Expose code concept count in Status.**
+  - **Files**: `pkg/tool/service.go`.
+  - **Implement**: `StatusResult.CodeConceptCount` (`json:"code_concept_count,omitempty"`) from `stats.TypeCounts["code_file"]`; omitted when zero.
+  - **Tests**: `TestStatusReportsCodeConceptCount`, `TestStatusOmitsCodeConceptCountWhenNone`.
+  - **Scenarios**: S59.
+- [x] **T5.4 Lock non-code filtering behavior.**
+  - **Tests**: `TestFilteredConceptsBackwardCompat`.
+  - **Scenarios**: S61.
 
 ## Scenario → test → entry-point matrix
 
@@ -190,6 +211,11 @@ P0-P4 are dependency order only. This change is complete only when all four prod
 | S48 | Manifest/projector benchmarks | persisted verification script |
 | S49 | final fresh gauntlet evidence | `tools/verify-agent-discovery.sh` |
 | S50 | conformance checker | `conformance.md` |
+| S57 | `TestFilteredConceptsCodeMetadataCombination`, `TestFilteredConceptsNoFalsePositive` | `Service.Query` / `okf_query` |
+| S58 | `TestRankConceptsSymbolLocationFromContent`, `TestContextExtractsSymbolBody` | `Service.Context` / `okf_context` |
+| S59 | `TestStatusReportsCodeConceptCount`, `TestStatusOmitsCodeConceptCountWhenNone` | `Service.Status` / `okf_status` |
+| S60 | `TestQueryStructuredFiltersUseSubstringSemantics`, `TestQueryRelationSourceAndTargetFiltersUseSubstringSemantics` | Service / CLI JSON / MCP `okf_query` |
+| S61 | `TestFilteredConceptsBackwardCompat` | `Service.Query` Type/Types/Tag/Project filters |
 
 ## Schedule (dependency planning, not delivery slicing)
 
@@ -205,12 +231,16 @@ P0-P4 are dependency order only. This change is complete only when all four prod
 ## Merge checklist
 
 - [x] S01–S50 all mapped and green.
+- [x] S51–S56 mapped: Codex fully (real model E2E); Claude/Cursor model closure partial (BLOCKED_AUTH, fail-closed per S56); official config discovery PASS for all three.
 - [x] No new third-party dependency, or spec revised and explicitly approved before addition.
 - [x] Existing no-group query output compatibility proven.
 - [x] Current hybrid baseline does not regress (base-vs-head zero regression; S46 amendment user-approved 2026-09-13).
 - [x] `tools/gauntlet.sh` and new targeted mutants pass.
-- [x] Real CLI and MCP stdio flows pass.
-- [x] Cursor/Claude/Codex fixture apply→apply→status→remove passes.
+- [x] Real CLI and MCP stdio protocol flows pass (test_mcp.py 13/13).
+- [x] Real Agent capability matrix executed: Codex read-answer/error-recovery/controlled-write PASS; all three official clients discover generated project configuration.
+- [ ] Strict three-client model E2E gate: `REQUIRE_ALL_AGENT_MODELS=1 tools/verify-real-agent-e2e.sh` exits 0. Currently blocked: Claude Code and Cursor `BLOCKED_AUTH`; generic machine event-stream validators are implemented and negative-controlled, but must be exercised against authenticated official-client streams before PASS.
+- [x] Cursor/Claude/Codex fixture apply→apply→status→remove passes (adapter contract layer).
 - [x] Secret scan passes and no credential is present in fixtures/state/output.
 - [x] `review.md` has no unresolved critical/high issue.
-- [x] `conformance.md` has no unexplained partial/gap (S46 fully after user-approved amendment).
+- [x] `conformance.md` has no unexplained partial/gap (S46 fully after user-approved amendment; S52–S55 partial only for BLOCKED_AUTH clients with explicit reason).
+- [x] S57–S61 fully: unified code-metadata filtering, body-derived symbol-line context snippet with `repo.source` provenance, additive `code_concept_count`, and unchanged non-code filtering (locked by `pkg/tool/service_code_query_test.go` and renamed `...UseSubstringSemantics` tests).

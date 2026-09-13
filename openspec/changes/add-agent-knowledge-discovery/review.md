@@ -170,3 +170,9 @@
 - **设计准入**：通过，可进入显式 Spec 审批。
 - **实现准入**：待用户批准本次修订后的 Spec。
 - **发布准入**：未通过；代码、RED/GREEN、gauntlet、真实评测、CI 和最终 conformance 均尚未执行。
+
+## 后续补记（实现完成后）
+
+- Spec 后续新增 S51–S56（Official Agent client acceptance，四层模型：adapter fixture / official config discovery / real model MCP calls / final answer & effect）。
+- 实现已完成 S01–S50 全部 `fully`；S51–S55 Codex `fully`（真实模型 E2E 通过），Claude/Cursor 模型层 `partial`（BLOCKED_AUTH，本环境无模型凭据，fail-closed 不聚合为 PASS）；S56 `fully`。
+- 本评审文件为实现前设计评审，保留原始结论不改写；实现与验证状态以 `conformance.md`、`evidence.md`、`usability-evidence.md` 为准。

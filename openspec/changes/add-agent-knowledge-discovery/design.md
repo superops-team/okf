@@ -19,6 +19,7 @@
 3. There is no frontmatter-only discovery contract.
 4. Existing source dedupe is a fixed search behavior, not a general result projection.
 5. MCP availability does not install or maintain client-specific project integration.
+6. Code metadata filtering mixed two semantics: `Service.filteredConceptsForQuery` re-ran exact `CustomFields` equality for file path, language, symbol kind, qualified name and relation endpoints after the content-aware query. Generated `code_file` concepts keep that metadata only in their body (symbol lines), so combined filters rejected them and returned zero results. **Fixed** in this change: code metadata filtering is unified under `querypkg.Query` (content-aware, case-insensitive, substring), post-filters keep only Type/Types/Project/Tag, and Context resolves symbol line ranges from the body so `okf_context` returns the token-bounded symbol body. See §5.5.
 
 ## 2. Design principles
 
@@ -252,6 +253,18 @@ This deliberately avoids sum/average/max re-ranking beyond the existing ordered 
 - MCP `okf_query` schema exposes the same enum and returns the existing `okf.tool.v1` envelope with additive fields.
 - Legacy `okf_search`/`okf_semantic_search`: add optional grouping only after routing through the shared projection; their omitted behavior remains unchanged.
 
+### 5.5 Code metadata filtering consistency
+
+`Service.filteredConceptsForQuery` owns code metadata filtering for `okf_query`. Its semantics are deliberately unified rather than split between a content-aware query and an exact field comparison:
+
+- **Retrieval is delegated to the query package.** `filteredConceptsForQuery` builds a `querypkg.Query` (`WithType`, `WithCodeLanguage`, `WithCodeFilePath`, `WithCodeSymbolKind`, `WithCodeQualifiedName`, `WithCodeRelationKind`, `WithCodeRelationSource`, `WithCodeRelationTarget`, and `WithTags` when a tag is present) and calls `Query.Execute()`. The query package applies content-aware, case-insensitive, substring matching over concept body and metadata, including the regular-expression index over generated symbol lines.
+- **Post-filtering keeps only dimensions the query builder cannot express.** After `Execute()`, `matchesQueryFilters` re-checks exactly four dimensions: `Type`, `Types`, `Project` and `Tag`. The previous exact custom-field comparisons for `FilePath`, `Language`, `SymbolKind`, `QualifiedName`, `RelationKind`, `RelationSource` and `RelationTarget` were removed.
+- **Generated `code_file` concepts are matched through the body.** These concepts store `source_path` in `CustomFields` but keep symbol metadata (`kind`, name, visibility, `path:start-end`) only in generated symbol lines of the form ``- `kind` `name` (visibility) at `path:start-end` ``. The query package's body/regex index matches them, so combined `file_path` + `symbol_kind` + `qualified_name` filters no longer reject them into an empty result.
+- **Context recovers the symbol range from the body.** When `rankConcepts` finds `start_line` absent (zero) in custom fields, it calls `symbolLocationFromContent(content, query)` plus `parseSymbolLocation` to parse the best-matching symbol line: exact symbol-name match wins over substring match, ties resolve to the first hit. It backfills `StartLine`, `EndLine` and any missing `symbol_kind`/`qualified_name`. `Service.Context` then reads the repository source file and extracts a token-bounded snippet for that range, so `okf_context` returns the full multi-line symbol body instead of a single line, preserving `source_path`, the parsed start/end lines and provenance `repo.source`.
+- **Status exposes the code concept count.** `StatusResult.CodeConceptCount` (JSON `code_concept_count`, `omitempty`) is read from `stats.TypeCounts["code_file"]`. It is omitted when zero, giving an agent a clear, additive signal that code knowledge was generated before it queries symbols.
+
+Because Service, CLI JSON mode and MCP `okf_query` all funnel through the same `Service.Query` path, this filtering semantics is consistent across all three entry points; legacy non-code concepts continue to be filtered by Type/Types/Project/Tag exactly as before.
+
 ## 6. Agent Integration
 
 ### 6.1 Package and command
@@ -328,6 +341,17 @@ Rules:
 - No command contains shell interpolation; config uses argument arrays.
 - Symlink roots and path escapes fail closed.
 
+### 6.6 Four-layer Agent client acceptance model (S51–S56)
+
+Adapter fixtures and direct MCP protocol calls are prerequisites but are NOT official Agent end-to-end evidence. Acceptance is reported in four separate layers per client:
+
+1. **Adapter fixture** (`okf agent apply` generates parseable project config).
+2. **Official config discovery** (installed official client CLI inspects project config and discovers server `okf` with command `okf mcp --repo .`).
+3. **Real model MCP calls** (authenticated official Agent calls okf_status→okf_manifest→okf_query→okf_context in order; JSONL event stream machine-validated; no shell/file/CLI bypass).
+4. **Final answer / effect** (canary fact in final answer; persisted note verified; error recovery observed).
+
+A client lacking executable, authentication, MCP approval, model access or a machine validator is reported as a specific `BLOCKED_*` state and is never aggregated into `PASS`. Configuration discovery is always reported separately from model/tool/answer closure. `tools/mcp_call.py` and `test_mcp.py` validate the MCP server protocol layer only and are excluded from Agent-client evidence.
+
 ## 7. Error contract
 
 Additive `pkg/tool` codes:
@@ -366,6 +390,8 @@ MCP returns these inside the existing ToolEnvelope/Error format. CLI exits non-z
 | Existing vector index v2 | explicit incompatible status; rebuild required |
 | Existing user Agent config | preserved unless exact OKF-owned key/block is changed |
 | Existing AGENTS.md | only delimited OKF block is added/replaced |
+| Code metadata filters (file_path/language/symbol_kind/qualified_name/relation endpoints) | exact `CustomFields` equality becomes content-aware case-insensitive substring matching; an exact path is still a substring and ranks first by exactness/score, so exact callers see their match on top; combined filters no longer drop `code_file` concepts whose metadata lives in the body |
+| `StatusResult` without code_file concepts | additive `code_concept_count` omitted (`omitempty`) when zero; old status consumers unchanged |
 
 ## 10. Test strategy
 

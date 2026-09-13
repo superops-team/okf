@@ -16,6 +16,22 @@ cd "$(dirname "$0")/.."
 GO=${GO:-go}
 EVIDENCE="openspec/changes/add-agent-knowledge-discovery/evidence.md"
 REPO_SHA="$(git rev-parse HEAD)"
+SOURCE_DIRTY=false
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then SOURCE_DIRTY=true; fi
+SOURCE_TREE_SHA256=$(python3 - <<'PY'
+import hashlib, os, pathlib, subprocess
+excluded={
+ 'openspec/changes/add-agent-knowledge-discovery/evidence.md',
+ 'openspec/changes/add-agent-knowledge-discovery/real-agent-evidence.md',
+}
+paths=subprocess.check_output(['git','ls-files','--cached','--others','--exclude-standard','-z']).decode().split('\0')
+h=hashlib.sha256()
+for value in sorted(p for p in paths if p and p not in excluded):
+    p=pathlib.Path(value); h.update(value.encode()); h.update(b'\0')
+    h.update((os.readlink(p).encode() if p.is_symlink() else p.read_bytes())); h.update(b'\0')
+print(h.hexdigest())
+PY
+)
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 GO_VER="$($GO version)"
 
@@ -234,6 +250,8 @@ say "write evidence.md"
   echo "# Evidence — add-agent-knowledge-discovery (fresh run)"
   echo
   echo "- Source commit: \`$REPO_SHA\`"
+  echo "- Source dirty: \`$SOURCE_DIRTY\`"
+  echo "- Source tree SHA-256: \`$SOURCE_TREE_SHA256\` (tracked + non-ignored untracked files; generated evidence excluded)"
   echo "- Verification timestamp (UTC): $TS"
   echo "- Toolchain: $GO_VER"
   echo "- Go/tool versions: $(go env GOVERSION) / toolchain $(go env GOTOOLCHAIN)"
@@ -292,6 +310,10 @@ say "write evidence.md"
   echo "- \`go build ./...\`, \`go vet ./...\`: PASS (precondition)"
   echo "- targeted mutation set: see tools/mutants-agent-discovery.sh (5/5 killed)"
   echo "- this script itself: PASS"
+  echo
+  echo "## S51-S56 official Agent client evidence"
+  echo "- Generated independently by \`tools/verify-real-agent-e2e.sh\` in \`real-agent-evidence.md\`."
+  echo "- Direct MCP helpers are protocol evidence only and are excluded from official Agent-client acceptance."
   echo
 } > "$EVIDENCE"
 echo "wrote $EVIDENCE"

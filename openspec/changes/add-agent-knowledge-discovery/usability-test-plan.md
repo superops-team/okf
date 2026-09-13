@@ -301,31 +301,83 @@ Version under test: okf CLI 0.7.0
 - **Expected**: key info visible; no debug spam; --verbose adds detail
 - **Failure**: wall of text, missing key info
 
-## Journey G: Real Agent smoke (MCP stdio)
+## Journey G: MCP protocol verification (direct stdio, NOT real Agent client)
+
+> **Layer clarification**: This journey uses `tools/mcp_call.py` / `test_mcp.py` to
+> start `okf mcp --repo .` directly and send Content-Length framed JSON-RPC.
+> This validates the **MCP server protocol layer** only. It does NOT validate
+> official Agent client transport discovery or LLM tool-use. Real Agent client
+> E2E is Journey H (four-layer model).
 
 ### G1. Three-client config round-trip + MCP startup
-- **Goal**: Generated configs produce working MCP server
+- **Goal**: Generated configs produce working MCP server (adapter contract + protocol)
 - **Steps**: in temp repo, apply for all three clients; extract command from each; start `okf mcp --repo .`; send initialize; tools/list
 - **Expected**: server responds to initialize; tools/list includes okf_resolve, okf_manifest, okf_query, okf_search, etc.; cwd correct
 - **Failure**: server doesn't start, tools missing, wrong cwd
 
-### G2. Actual tool calls through MCP
-- **Goal**: Tools work end-to-end
+### G2. Actual tool calls through MCP (protocol layer)
+- **Goal**: Tools work end-to-end over direct MCP stdio
 - **Steps**: initialize; call okf_manifest (expect total=N); call okf_query with group_by=source; call okf_resolve with valid ref
 - **Expected**: valid responses; manifest no body leak; query grouping works; resolve follows IDs
 - **Failure**: tool errors, wrong responses, body leak
 
-### G3. Error handling through MCP
+### G3. Error handling through MCP (protocol layer)
 - **Goal**: MCP tool errors are structured
 - **Steps**: call okf_resolve with bad ref; call okf_query with bad group_by; call okf_manifest with bad limit
 - **Expected**: tool returns isError=true with structured content; code/message/remediation present
 - **Failure**: crash, empty error, vague message
 
-### G4. Controlled note/feedback (if applicable)
+### G4. Controlled note/feedback (protocol layer)
 - **Goal**: Durable capture works through MCP
 - **Steps**: call okf_note (if exists) with content; verify file written with okf_id; re-query finds it
 - **Expected**: note persisted, ID assigned, queryable; no credential leak
 - **Failure**: note not saved, ID missing, not queryable
+
+## Journey H: Real Agent client E2E (four-layer model)
+
+> **Four layers**, each reported separately per S51–S56:
+> 1. **Adapter fixture**: `okf agent apply` generates parseable project config (cursor/claude/codex).
+> 2. **Official config discovery**: installed official client CLI inspects project config and discovers server `okf` with command `okf mcp --repo .`.
+> 3. **Real model MCP calls**: authenticated official Agent calls okf_status→okf_manifest→okf_query→okf_context (and error-recovery / controlled-write variants); JSONL event stream machine-validated.
+> 4. **Final answer / effect**: canary fact in final answer; persisted note verified; no shell/file/CLI bypass.
+>
+> Clients without model authentication are `BLOCKED_AUTH`, never `PASS` (S56).
+
+### H1. Adapter fixture (all three clients)
+- **Goal**: Generated project configs parse with standard parsers
+- **Steps**: `okf agent apply --client all --yes`; parse `.cursor/mcp.json`, `.mcp.json`, `.codex/config.toml`
+- **Expected**: all three parse; each declares server `okf` with command `okf mcp --repo .`
+- **Failure**: parse error, wrong command, missing server
+
+### H2. Official config discovery (all three clients)
+- **Goal**: Official client CLIs discover the generated project MCP config
+- **Steps**: run each official client's MCP list/get from the project repo
+- **Expected**: each discovers server named `okf`; command matches `okf mcp --repo .`; absent client = `BLOCKED_CLIENT_MISSING`
+- **Failure**: client does not discover okf; wrong command
+
+### H3. Real model read-answer (Codex; Claude/Cursor if authenticated)
+- **Goal**: Real Agent produces source-grounded answer through OKF MCP only
+- **Steps**: `codex exec --json` (or equivalent) with prompt forbidding shell/file/CLI; instruct to call okf_status→okf_manifest→okf_query→okf_context; canary fact in knowledge
+- **Expected**: JSONL contains all 4 tool calls in order; all succeed; final answer contains canary; zero shell/file/CLI events
+- **Failure**: missing tool call, wrong order, canary absent, bypass detected
+
+### H4. Real model error recovery (Codex; Claude/Cursor if authenticated)
+- **Goal**: Real Agent recovers from structured OKF error
+- **Steps**: Agent first resolves invalid ref; observes `invalid_concept_id` + remediation; calls okf_manifest; retries okf_resolve
+- **Expected**: error observed with remediation; retry succeeds; final answer reports resolved path
+- **Failure**: no recovery, wrong error, no remediation
+
+### H5. Real model controlled durable capture (Codex; Claude/Cursor if authenticated)
+- **Goal**: Real Agent performs controlled note + readback
+- **Steps**: Agent calls okf_note with idempotency key; then okf_query to read back
+- **Expected**: note persisted under knowledge dir; query finds it; final answer contains durable content
+- **Failure**: note not saved, not queryable, content absent
+
+### H6. Capability fail-closed (all clients)
+- **Goal**: Clients without auth/executable are BLOCKED, never PASS
+- **Steps**: run `tools/verify-real-agent-e2e.sh`; inspect results.tsv
+- **Expected**: per-client per-layer status; BLOCKED_* not aggregated; config discovery separate from model closure
+- **Failure**: BLOCKED reported as PASS; layers conflated
 
 ## Automation levels
 
@@ -333,8 +385,9 @@ Version under test: okf CLI 0.7.0
 |---|---|---|
 | Go unit/property/fuzz | pkg/*_test.go | Logic, edge cases, determinism |
 | CLI black-box | cmd/okf/*_test.go + verify script | User-visible output, exit codes, help text |
-| MCP Content-Length E2E | test_mcp.py + verify script | Protocol, tool contract, cwd |
-| Three-client fixture round-trip | verify-agent-usability.sh | Config parse/generate/parse |
+| MCP Content-Length E2E (protocol layer) | test_mcp.py + tools/mcp_call.py | Protocol, tool contract, cwd — NOT real Agent client |
+| Three-client adapter fixture | verify-agent-usability.sh | Config parse/generate/parse — adapter contract layer |
+| Real Agent client E2E (four-layer) | tools/verify-real-agent-e2e.sh | Adapter fixture / official config discovery / real model MCP calls / final answer & effect |
 | Golden/help/error text | help_golden_test.go + fixtures | Text stability, remediation |
 | Failure injection | read-only files, symlinks, corrupt fixtures | Rollback, error paths |
 

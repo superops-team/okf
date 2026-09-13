@@ -1,6 +1,6 @@
 # Release Notes — Agent Knowledge Discovery
 
-Change: `add-agent-knowledge-discovery` (S01–S50).
+Change: `add-agent-knowledge-discovery` (S01–S56).
 Target CLI version: **0.7.0** (`cmd/okf/main.go`).
 Library meta version remains `0.4.1` (`pkg/okf/meta/version.go`), overridable at
 release time via `-ldflags "-X ...meta.Version=v0.7.0"`; the two version strings
@@ -8,6 +8,12 @@ serve different purposes (CLI user-facing vs. library build stamp) and are
 intentionally not forced to match.
 This is an additive release: no OKF v0.2 required field changes, no new third-party
 dependency, and the ungrouped retrieval path is byte-for-byte unchanged.
+
+Real Agent client E2E (S51–S56, four-layer): Codex fully passes adapter fixture,
+official config discovery, real model MCP calls, and final answer/effect. Claude
+Code and Cursor pass adapter fixture + official config discovery but are
+BLOCKED_AUTH at the model layer in this environment (fail-closed, never
+aggregated into PASS). See `tools/verify-real-agent-e2e.sh` and `evidence.md`.
 
 ## New capabilities
 

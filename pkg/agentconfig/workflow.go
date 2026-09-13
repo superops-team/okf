@@ -163,7 +163,14 @@ func RenderCodexMCPTOML(cmd []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[mcp_servers.okf]\n")
 	fmt.Fprintf(&b, "command = %q\n", cmd[0])
-	fmt.Fprintf(&b, "args = %q\n", cmd[1:])
+	b.WriteString("args = [")
+	for i, arg := range cmd[1:] {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%q", arg)
+	}
+	b.WriteString("]\n")
 	b.WriteString("[mcp_servers.okf.env]\n")
 	fmt.Fprintf(&b, "%s = %q\n", OwnedMarkerKey, OwnedMarkerValue)
 	return b.String()

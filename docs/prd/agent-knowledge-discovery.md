@@ -102,15 +102,27 @@ OKF 已形成“多格式导入 → Markdown Concept → 本地混合检索 → 
 - `remove` 仅删除带受认可 `OKF_MANAGED` 标记的 JSON key、成对 marker 区块或 OKF ownership header 文件；同名但无标记、未知、不平衡或未受管内容始终拒绝删除。
 - 不创建安装状态文件，不保存原文件快照、凭据或知识正文；所有权直接由受管 key/marker/header 判定。
 
+#### 4.4.1 真实 Agent 客户端验收四层模型（S51–S56）
+
+Adapter fixture 和直接 MCP protocol 调用是前置条件，但**不是**官方 Agent 端到端证据。验收按四层分别报告，每层每客户端独立状态：
+
+1. **Adapter fixture**：`okf agent apply` 生成可被标准解析器解析的项目配置。
+2. **Official config discovery**：已安装的官方客户端 CLI 检查项目配置并发现 server `okf`，命令为 `okf mcp --repo .`。
+3. **Real model MCP calls**：已认证官方 Agent 按序调用 okf_status→okf_manifest→okf_query→okf_context；JSONL 事件流机器校验；无 shell/文件/CLI 绕过。
+4. **Final answer / effect**：最终回答包含 canary 事实；持久化 note 验证；错误恢复可观察。
+
+缺少可执行文件、认证、MCP 审批、模型访问或机器校验器的客户端报告为具体 `BLOCKED_*` 状态，**绝不聚合为 PASS**。配置发现始终与模型/工具/回答闭环分开报告。`tools/mcp_call.py` 和 `test_mcp.py` 仅验证 MCP server protocol 层，不计入 Agent 客户端证据。
+
 ## 5. 成功指标
 
 ### 功能与兼容
 
-- 100% Spec Scenario 有实现接线和自动化测试。
+- 100% Spec Scenario (S01–S56) 有实现接线和自动化测试。
 - 路径/标题重命名后 stable URI 解析成功率 100%。
 - 旧 bundle 在不回填 ID 时 parse/lint/query 回归全绿。
 - 未指定 `group_by` 时既有 CLI/MCP golden 输出无非预期变化。
 - 三客户端 apply 二次执行产生 0 diff；remove 只删除 OKF 拥有内容。JSON 宿主文件保证未知 key 的语义值不变；marker 型 TOML/Markdown 保证受管区块外字节不变。
+- 真实 Agent 客户端 E2E 按四层模型报告：Codex 全四层 PASS；Claude/Cursor 在无模型凭据环境为 BLOCKED_AUTH（fail-closed，不聚合为 PASS）。
 
 ### 检索质量
 
@@ -144,4 +156,6 @@ OKF 已形成“多格式导入 → Markdown Concept → 本地混合检索 → 
 
 ## 8. 验收定义
 
-只有以下条件全部满足才算完成：四项功能全部接线；P0-P4 全部任务完成；全部 Scenario 测试通过；真实 CLI/MCP/三客户端 fixture 验证通过；检索质量与兼容门槛通过；无未解释的 `partial/gap`；最终 `conformance.md` 与最后一次 fresh gauntlet evidence 对齐。
+只有以下条件全部满足才算**本地实现与能力矩阵完成**：四项功能全部接线；P0-P4 全部任务完成；S01-S50 全绿；S51-S56 均有真实入口、机器测试和明确状态；真实 CLI/MCP/三客户端 fixture 验证通过；检索质量与兼容门槛通过；所有 `partial/gap/BLOCKED_*` 均有原因和解阻动作；最终 `conformance.md` 与最后一次 fresh gauntlet evidence 对齐。
+
+只有 `REQUIRE_ALL_AGENT_MODELS=1 tools/verify-real-agent-e2e.sh` 退出 0，才算**三客户端模型闭环发布验收完成**。当前 Codex 全闭环 PASS；Claude Code/Cursor 因官方客户端未登录保持 `BLOCKED_AUTH`，因此严格发布门禁尚未完成。

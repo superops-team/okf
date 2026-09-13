@@ -351,12 +351,89 @@ The implementation SHALL preserve current retrieval quality, provide determinist
 - **AND** measured results are recorded in EVIDENCE without a flaky wall-clock gate
 
 ### Scenario S49: Full executable gauntlet passes
-- **WHEN** the final source state runs `tools/gauntlet.sh`, MCP E2E, identity migration E2E, client fixture E2E and retrieval eval
+- **WHEN** the final source state runs `tools/gauntlet.sh`, MCP protocol E2E, identity migration E2E, client fixture E2E, `tools/verify-real-agent-e2e.sh` and retrieval eval
 - **THEN** build, vet, gofmt, staticcheck, race, coverage threshold, shuffle, mutation, property, secret scan and real execution all pass
-- **AND** no skipped layer is reported as passed
+- **AND** no skipped or `BLOCKED_*` layer is reported as passed
+- **AND** release mode `REQUIRE_ALL_AGENT_MODELS=1` exits non-zero while any official-client model E2E remains blocked
 
 ### Scenario S50: Spec implementation conformance is complete
 - **WHEN** implementation is ready for merge
-- **THEN** `conformance.md` maps every S01–S50 Scenario to implementation, test and fresh result
-- **AND** no unexplained `partial` or `gap` remains
+- **THEN** `conformance.md` maps every S01–S56 Scenario to implementation, test and fresh result
+- **AND** every `partial`, `gap` or `BLOCKED_*` state is explicit and has a blocking action
+- **AND** the strict three-client model-E2E release gate cannot pass while such a state remains
 - **AND** the source commit and reproducible commands are recorded
+
+## Requirement: Official Agent client acceptance
+
+Agent Integration SHALL be accepted in the official Cursor Agent, Claude Code and Codex clients. Configuration fixtures, direct MCP protocol calls, and hand-written MCP clients are prerequisites but SHALL NOT be reported as official Agent end-to-end evidence.
+
+### Scenario S51: Official clients consume generated project configuration
+- **GIVEN** `okf agent apply --client all --yes` generated the project files
+- **WHEN** each installed official client inspects project MCP configuration
+- **THEN** Cursor Agent, Claude Code and Codex each discover a server named `okf`
+- **AND** standard JSON/TOML parsing confirms the generated command is `okf mcp --repo .`
+- **AND** a client that is absent is `BLOCKED_CLIENT_MISSING`, not `PASS`
+
+### Scenario S52: A real Agent produces a source-grounded answer through OKF MCP
+- **GIVEN** a concept with stable ref and a repository-local `source_path` containing a deterministic canary fact
+- **WHEN** an authenticated official Agent is instructed to use only OKF MCP
+- **THEN** the recorded client event stream contains `okf_status`, `okf_manifest`, `okf_query`, then `okf_context`, once each and in order
+- **AND** all four tool calls complete successfully
+- **AND** the final answer contains the exact canary fact, prescribed action and stable ref derived from MCP evidence
+
+### Scenario S53: Agent acceptance cannot bypass OKF MCP
+- **WHEN** S52, S54 or S55 runs
+- **THEN** the event stream contains no shell, terminal, direct file-read or direct OKF CLI execution
+- **AND** direct `tools/mcp_call.py` or `test_mcp.py` results are not used as Agent-client evidence
+
+### Scenario S54: A real Agent recovers from a structured OKF error
+- **WHEN** the Agent first resolves an invalid ref
+- **THEN** it observes `invalid_concept_id` and a non-empty remediation
+- **AND** it calls `okf_manifest` to obtain a canonical stable ref
+- **AND** retrying `okf_resolve` succeeds and the final answer reports the resolved path
+
+### Scenario S55: A real Agent performs controlled durable capture
+- **WHEN** the Agent is explicitly asked to persist a note with an idempotency key and read it back
+- **THEN** the event stream contains `okf_note` followed by `okf_query`
+- **AND** the note is persisted under the repository knowledge directory
+- **AND** the final answer contains the queried durable content
+
+### Scenario S56: Client capability status is fail-closed
+- **WHEN** a client lacks executable, authentication, MCP approval, model access or a machine validator
+- **THEN** its model E2E status is a specific `BLOCKED_*` state
+- **AND** it is never aggregated into `PASS`
+- **AND** evidence reports configuration discovery separately from model/tool/answer closure
+
+## Requirement: Consistent code metadata filtering and symbol-body context
+
+The system SHALL filter code metadata (file path, language, symbol kind, qualified name, relation endpoints) through the content-aware, case-insensitive, substring semantics of the query package, and SHALL keep post-filtering limited to the dimensions that the query builder cannot express (Type, Types, Project, Tag). Generated `code_file` concepts whose symbol metadata lives in the body SHALL be matched and SHALL return a token-bounded source snippet for the best-matching symbol, and `Status` SHALL report the count of code concepts.
+
+### Scenario S57: Code metadata combination filter returns results
+- **GIVEN** a generated `code_file` concept with a `source_path` CustomField and symbol lines in its body
+- **WHEN** `okf_query` is called with `file_path`, `symbol_kind`, and `qualified_name`
+- **THEN** the concept is returned
+- **AND** no concept is rejected solely because symbol metadata lives in the body rather than CustomFields
+
+### Scenario S58: Context returns token-bounded source snippet for matched symbol
+- **GIVEN** a `code_file` concept whose body lists a symbol at a known line range
+- **WHEN** `okf_context` queries for that symbol name
+- **THEN** the returned ContextItem includes the source file path, correct `start_line` and `end_line`
+- **AND** the snippet contains the full symbol body (multiple lines), not just the matching line
+- **AND** provenance is `repo.source`
+
+### Scenario S59: Status reports code concept count
+- **GIVEN** a bundle with `code_file` concepts
+- **WHEN** `okf_status` is called
+- **THEN** `StatusResult` includes `code_concept_count` > 0
+- **AND** a bundle without `code_file` concepts omits the field
+
+### Scenario S60: Code metadata filtering is consistent across Service, CLI and MCP
+- **GIVEN** the same `code_file` concept and the same `file_path`/`symbol_kind`/`qualified_name` filters
+- **WHEN** `Service.Query`, CLI JSON mode, and MCP `okf_query` are invoked
+- **THEN** they return equivalent result sets
+- **AND** all three use content-aware substring matching, not exact CustomField equality
+
+### Scenario S61: Non-code concept filtering is unchanged
+- **GIVEN** a legacy document concept without symbol lines
+- **WHEN** `type`, `tag`, or `project` filters are applied
+- **THEN** behavior is identical to before the change

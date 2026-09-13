@@ -41,6 +41,7 @@ dist/
 out/
 tmp/
 temp/
+.artifacts/
 *.tmp
 *.log
 .cache/

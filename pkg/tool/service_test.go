@@ -857,7 +857,12 @@ delta imports beta
 	}
 }
 
-func TestQueryStructuredFiltersRemainExactAfterSharedQueryFiltering(t *testing.T) {
+// TestQueryStructuredFiltersUseSubstringSemantics pins the unified code-metadata
+// filter contract: FilePath / QualifiedName filtering is now content-aware and
+// substring-based (matching the query package on Service/CLI/MCP). A suffix
+// variant of the path and qualified name therefore passes the filters, while
+// the exact match still ranks first by score.
+func TestQueryStructuredFiltersUseSubstringSemantics(t *testing.T) {
 	repo := initToolTestRepo(t)
 	mustWriteToolFile(t, filepath.Join(repo, ".okf", "knowledge", "code", "alpha.md"), `---
 type: code_symbol
@@ -876,7 +881,7 @@ RouteAlphaSymbol exact match.
 	mustWriteToolFile(t, filepath.Join(repo, ".okf", "knowledge", "code", "alpha-suffix.md"), `---
 type: code_symbol
 title: RouteAlphaSymbolSuffix
-description: RouteAlphaSymbol suffix should not pass exact filters
+description: RouteAlphaSymbol suffix also passes substring filters
 resource: code://repo/internal/alpha/service.go.bak
 source_path: internal/alpha/service.go.bak
 language: go
@@ -900,15 +905,22 @@ RouteAlphaSymbol suffix match.
 		t.Fatalf("query OK = false, error = %#v", resp.Error)
 	}
 	result := resp.Result.(QueryResult)
-	if len(result.Results) != 1 {
-		t.Fatalf("results = %#v, want only exact structured filter match", result.Results)
+	if len(result.Results) != 2 {
+		t.Fatalf("results = %#v, want exact plus substring suffix match", result.Results)
 	}
 	if result.Results[0].QualifiedName != "alpha.RouteAlphaSymbol" || result.Results[0].SourcePath != "internal/alpha/service.go" {
-		t.Fatalf("result = %#v, want exact alpha symbol", result.Results[0])
+		t.Fatalf("result[0] = %#v, want exact alpha symbol ranked first", result.Results[0])
+	}
+	if result.Results[1].QualifiedName != "alpha.RouteAlphaSymbolSuffix" {
+		t.Fatalf("result[1] = %#v, want suffix variant passed by substring filter", result.Results[1])
 	}
 }
 
-func TestQueryRelationSourceAndTargetFiltersRemainExact(t *testing.T) {
+// TestQueryRelationSourceAndTargetFiltersUseSubstringSemantics pins the unified
+// relation endpoint filter contract: RelationSource / RelationTarget are now
+// substring matches consistent with the query package, so a .bak suffix passes
+// while the exact endpoints still rank first.
+func TestQueryRelationSourceAndTargetFiltersUseSubstringSemantics(t *testing.T) {
 	repo := initToolTestRepo(t)
 	mustWriteToolFile(t, filepath.Join(repo, ".okf", "knowledge", "relations", "alpha-beta.md"), `---
 type: code_relation
@@ -953,11 +965,14 @@ alpha imports beta backup
 		t.Fatalf("query OK = false, error = %#v", resp.Error)
 	}
 	result := resp.Result.(QueryResult)
-	if len(result.Results) != 1 {
-		t.Fatalf("results = %#v, want only exact relation source/target match", result.Results)
+	if len(result.Results) != 2 {
+		t.Fatalf("results = %#v, want exact plus substring suffix relation match", result.Results)
 	}
 	if result.Results[0].RelationSource != "internal/alpha/service.go" || result.Results[0].RelationTarget != "internal/beta/service.go" {
-		t.Fatalf("result = %#v, want exact relation endpoints", result.Results[0])
+		t.Fatalf("result[0] = %#v, want exact relation endpoints ranked first", result.Results[0])
+	}
+	if result.Results[1].RelationSource != "internal/alpha/service.go.bak" || result.Results[1].RelationTarget != "internal/beta/service.go.bak" {
+		t.Fatalf("result[1] = %#v, want .bak suffix passed by substring filter", result.Results[1])
 	}
 }
 

@@ -92,3 +92,14 @@ func TestRenderMCPEmptyCommandNoPanic(t *testing.T) {
 		})
 	}
 }
+
+// TestRenderCodexMCPTOMLStringArraySyntax locks the real Codex contract: args
+// is a TOML array of comma-separated strings. A whitespace-only rendering such
+// as ["mcp" "--repo" "."] looks plausible but is rejected by Codex/tomllib.
+func TestRenderCodexMCPTOMLStringArraySyntax(t *testing.T) {
+	got := RenderCodexMCPTOML([]string{"okf", "mcp", "--repo", "."})
+	want := "args = [\"mcp\", \"--repo\", \".\"]\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("Codex args are not a comma-separated TOML string array:\n%s", got)
+	}
+}

@@ -1,13 +1,13 @@
 # Evidence — add-agent-knowledge-discovery (fresh run)
 
-- Implementation source commit: `3c7f58caba08efccf938648f609573370e740ff5` (docs: S46 amendment Approved)
-- Evidence commit: this file + conformance.md committed separately after fresh run (two-SHA split avoids circular claim)
-- Verification timestamp (UTC): 2026-09-13T00:17:06Z (verify-discovery); gauntlet run immediately after (EXIT=0)
+- Source commit: `22d52dad795250812fd3c9015f6b03314fe02541`
+- Source dirty: `true`
+- Source tree SHA-256: `6495a00af57ebc081f40c3386ecbb2818d2b48ef6d80677576286dee40577c9b` (tracked + non-ignored untracked files; generated evidence excluded)
+- Verification timestamp (UTC): 2026-09-13T02:52:12Z
 - Toolchain: go version go1.26.7 linux/amd64
 - Go/tool versions: go1.26.7 / toolchain auto
 - One-command entry point: `tools/verify-agent-discovery.sh`
 - All numbers below come from this run (not reused).
-- S46 spec-amendment: **Approved** by user explicit approval 2026-09-13 (see `spec-amendment.md`). Approved revision supersedes original S46 baseline clause; base-vs-head zero-regression proof retained.
 
 ## Build / versions
 - `go build -o okf ./cmd/okf`: OK
@@ -65,21 +65,7 @@ BENCH files=1000 body_bytes_on_disk=262144000 frontmatter_bytes=51000 bytes_read
 - targeted mutation set: see tools/mutants-agent-discovery.sh (5/5 killed)
 - this script itself: PASS
 
-## Full validation summary (fresh run, implementation commit 3c7f58c)
-
-| Suite | Result | Key numbers |
-|-------|--------|-------------|
-| `tools/verify-agent-discovery.sh` | PASS (exit 0) | identity/manifest/grouped/agent/eval/benchmark all green |
-| `tools/verify-agent-usability.sh` | **156 passed, 0 failed, 0 skipped** | A1–G4 all executed; zero-skip enforced |
-| `tools/gauntlet.sh` | PASS (exit 0) | build/vet/staticcheck/tests/race/coverage(69%)/shuffle/property(20)/secret-scan/mod-verify/mutation(18/18+5/5)/real-exec |
-| `test_mcp.py` (MCP E2E) | ALL TESTS PASSED (13/13) | Content-Length stdio protocol |
-| `go test ./...` | all green | — |
-| `go test -race` (identity/agentconfig/manifest/query) | clean | — |
-| `go test -shuffle=on` | no order dependency | — |
-
-## S46/S47 retrieval eval (approved baseline)
-- hybrid-default (S46, approved reproducible baseline): Recall@5=0.9231, MRR=0.6615
-- base-vs-head (aaafcbb vs implementation, same content/toolchain/index config): identical → zero code regression
-- machine gate `TestHybridBaselineGate_ChunkLevel`: Recall@5≥0.90, MRR≥0.60; negative controls (broken semantic channel / wrong weights) fail gate
-- S47 grouped eval (hybrid, all projections ≥ raw): concept/source/folder srcRecall all =0.9231
+## S51-S56 official Agent client evidence
+- Generated independently by `tools/verify-real-agent-e2e.sh` in `real-agent-evidence.md`.
+- Direct MCP helpers are protocol evidence only and are excluded from official Agent-client acceptance.
 
