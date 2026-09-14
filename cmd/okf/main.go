@@ -4,10 +4,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/superops-team/okf/pkg/dashboard"
 	"github.com/superops-team/okf/pkg/git"
 	"github.com/superops-team/okf/pkg/lint"
 	"github.com/superops-team/okf/pkg/mcp"
@@ -40,6 +42,7 @@ Commands:
   identity    Stable concept identity migration and resolution (ensure|resolve)
   agent       Project-scoped agent integration (plan|apply|status|remove)
   mcp         Start MCP (Model Context Protocol) server for AI agent integration
+  dashboard   Start interactive web dashboard for knowledge graph exploration
   hook        Install git hook for automatic updates
   version     Show version information
   help        Show this help message
@@ -97,6 +100,8 @@ func main() {
 		os.Exit(CmdAgent(os.Args[2:]))
 	case "mcp":
 		cmdMCP(os.Args[2:])
+	case "dashboard":
+		os.Exit(cmdDashboard(os.Args[2:]))
 	case "hook":
 		cmdHook(os.Args[2:])
 	case "version", "--version", "-v":
@@ -694,4 +699,56 @@ func cmdMCP(args []string) {
 		fmt.Fprintf(os.Stderr, "MCP server error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// cmdDashboard starts the interactive web dashboard for knowledge graph exploration.
+//
+// Usage:
+//
+//	okf dashboard [-port 8080] [-open] [-no-browser] [-path DIR]
+func cmdDashboard(args []string) int {
+	fs := flag.NewFlagSet("dashboard", flag.ExitOnError)
+	port := fs.Int("port", 8080, "Port to listen on")
+	open := fs.Bool("open", false, "Open default browser on start")
+	noBrowser := fs.Bool("no-browser", false, "Do not open browser (overrides -open)")
+	path := fs.String("path", "", "Path to knowledge bundle or repository (default: current directory)")
+	fs.Parse(args)
+
+	if *path == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		*path = wd
+	}
+
+	openBrowser := *open && !*noBrowser
+
+	cfg := dashboard.ServerConfig{
+		BundlePath:  *path,
+		Addr:        fmt.Sprintf(":%d", *port),
+		OpenBrowser: openBrowser,
+	}
+
+	server, err := dashboard.NewServer(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating dashboard server: %v\n", err)
+		return 1
+	}
+
+	// Handle graceful shutdown on Ctrl+C.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	go func() {
+		<-sigCh
+		fmt.Println("\nShutting down dashboard...")
+		server.Stop()
+	}()
+
+	if err := server.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Dashboard error: %v\n", err)
+		return 1
+	}
+	return 0
 }
