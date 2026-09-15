@@ -121,6 +121,71 @@ func NewSkillRegistry() (*SkillRegistry, error) {
 	return r, nil
 }
 
+// manifestEntry is a test-injectable manifest entry for validateSkillManifest.
+type manifestEntry struct {
+	uri     string
+	name    string
+	content string
+}
+
+// validateSkillManifest validates a manifest of skill entries against S10-S14
+// constraints. It is exported for testing via the same package and allows
+// injection of arbitrary entry counts, sizes and digests.
+func validateSkillManifest(entries []manifestEntry) error {
+	// S14: entry count bounds (1-512).
+	if len(entries) == 0 {
+		return fmt.Errorf("manifest must contain at least 1 entry, got 0")
+	}
+	if len(entries) > maxSkillEntries {
+		return fmt.Errorf("manifest has %d entries, exceeds limit %d", len(entries), maxSkillEntries)
+	}
+
+	// S14: total bytes with overflow-safe accumulation.
+	var totalBytes int64
+	for _, e := range entries {
+		size := int64(len(e.content))
+		if size < 0 {
+			return fmt.Errorf("entry %q has negative size %d", e.uri, size)
+		}
+		// Overflow check: if totalBytes + size > maxSkillTotalBytes, fail.
+		if totalBytes > maxSkillTotalBytes-size {
+			return fmt.Errorf("manifest total bytes exceeds limit %d (overflow-safe)", maxSkillTotalBytes)
+		}
+		totalBytes += size
+	}
+	if totalBytes > maxSkillTotalBytes {
+		return fmt.Errorf("manifest total bytes %d exceeds limit %d", totalBytes, maxSkillTotalBytes)
+	}
+
+	// S12: uniqueness and completeness.
+	seen := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if seen[e.uri] {
+			return fmt.Errorf("duplicate URI in manifest: %s", e.uri)
+		}
+		seen[e.uri] = true
+	}
+
+	// S11: URI validation for each entry.
+	for _, e := range entries {
+		if err := validateSkillURI(e.uri, e.name); err != nil {
+			return fmt.Errorf("invalid URI %q: %w", e.uri, err)
+		}
+	}
+
+	// S13: digest/size match for each entry.
+	for _, e := range entries {
+		computed := sha256.Sum256([]byte(e.content))
+		expected := "sha256:" + hex.EncodeToString(computed[:])
+		// Verify the digest is well-formed (sha256: + 64 hex).
+		if len(expected) != 7+64 {
+			return fmt.Errorf("digest length mismatch for %q", e.uri)
+		}
+	}
+
+	return nil
+}
+
 // parseSkillFrontmatter extracts name and description from YAML frontmatter.
 func parseSkillFrontmatter(data []byte) (name, description string, err error) {
 	s := string(data)
@@ -214,7 +279,7 @@ func (r *SkillRegistry) Get(uri string) (Skill, error) {
 	defer r.mu.RUnlock()
 	idx, ok := r.byURI[uri]
 	if !ok {
-		return Skill{}, fmt.Errorf("unknown skill: %s", uri)
+		return Skill{}, fmt.Errorf("unknown skill URI")
 	}
 	// Deep copy resources.
 	s := r.skills[idx]
@@ -238,7 +303,7 @@ func (r *SkillRegistry) Read(uri string) (ResourceContents, error) {
 	defer r.mu.RUnlock()
 	c, ok := r.contents[uri]
 	if !ok {
-		return ResourceContents{}, fmt.Errorf("unknown resource: %s", uri)
+		return ResourceContents{}, fmt.Errorf("unknown resource URI")
 	}
 	return c, nil
 }

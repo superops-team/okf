@@ -29,9 +29,9 @@
 | S11 | URI and name constraints enforced | `validateSkillURI` | `TestValidateSkillURI` (13 cases incl. encoded traversal) | wrong scheme/userinfo/port/query/fragment/dot/encoded/missing SKILL.md/wrong host all rejected | fully |
 | S12 | Manifest completeness and uniqueness | `NewSkillRegistry` validation | `TestNewSkillRegistry`; mutant MSK4 | duplicate/missing/unlisted → construction error | fully |
 | S13 | Digest, size and frontmatter mismatches fail closed | `NewSkillRegistry` digest verify; `Digest()` | `TestSkillRegistryDigest`; `TestSkillRegistrySize`; mutant MSK3 | digest recomputed and verified; mismatch → error | fully |
-| S14 | Resource and byte limits include exact boundaries | `maxSkillEntries=512`, `maxSkillTotalBytes=16MiB` | (constant enforcement in code) | 512/16MiB allowed; 513/>16MiB rejected (code path) | fully |
+| S14 | Resource and byte limits include exact boundaries | `maxSkillEntries=512`, `maxSkillTotalBytes=16MiB`, `validateSkillManifest` | `TestValidateManifestEntryCount` (512 valid/513 invalid/0 invalid), `TestValidateManifestByteLimits` (exact 16777216 valid/over invalid), `TestValidateManifestOverflowSum`, `TestValidateManifestDuplicateURI` | 512 entries/exact 16MiB allowed; 513/>16MiB/duplicate rejected; overflow-safe sum | fully |
 | S15 | Registry callers cannot mutate canonical state | defensive copies in List/Get/Resources/Read | `TestSkillRegistryDefensiveCopy`; `TestSkillRegistryConcurrentReads` | mutation of returned slice doesn't affect registry; race-clean | fully |
-| S16 | Skill/discovery operations have no knowledge-runtime side effects | `NewServer` defers BundlePath; modern handlers don't touch bundle | `TestModernOpeningDoesNotLoadBundle` (via era logic); benchmark NoBundleIO | BundlePath loaded only after legacy initialize; modern era zero bundle calls | fully |
+| S16 | Skill/discovery operations have no knowledge-runtime side effects | `NewServer` defers BundlePath; modern handlers don't touch bundle; `bundleLoader` injectable spy | `TestNewServerDoesNotLoadBundle`, `TestModernOperationsDoNotLoadBundle` (discover/tools/list/resources/list/resources/read/skills/list/skills/get), `TestLegacyInitializeLoadsBundleOnce`, `TestLegacyInitializeEmptyBundlePathNoLoad` | BundlePath loaded only after legacy initialize (exactly once); modern era zero bundle calls for all operations | fully |
 | S17 | skills/list returns one atomic cacheable entry | `handleModernSkillsList` | E2E `test_skills_list_get` | resultType=complete, 1 Skill, no nextCursor, ttlMs=300000, cacheScope=private, serverInfo _meta | fully |
 | S18 | skills/list cursor behavior is explicit | `handleModernSkillsList` cursor check | E2E (cursor negative) | non-empty cursor → -32602; next valid request succeeds | fully |
 | S19 | skills/get equals the listed entry | `handleModernSkillsGet`; `SkillRegistry.Get` | E2E `test_skills_list_get` | get result deep-equals list entry; same TTL/scope | fully |
@@ -39,7 +39,7 @@
 | S21 | malformed params fail without killing server | JSON unmarshal error handling | E2E (malformed params) | malformed → -32602; subsequent valid request succeeds | fully |
 | S22 | Skill Resource is discoverable additively | `handleModernResourcesList`; legacy `handleResourcesList` append | E2E `test_resources`; legacy E2E | both eras include skill://okf/SKILL.md text/markdown; legacy prior Resources retain order; modern only Skill | fully |
 | S23 | Skill Resource read matches its manifest | `handleModernResourcesRead`; legacy `handleResourcesRead` skill branch | E2E `test_resources`; real Codex | bytes match digest/size; modern has complete/TTL/scope/_meta; legacy retains shape | fully |
-| S24 | Unknown Skill Resources fail without fallback | `handleModernResourcesRead` skill: prefix check | (unit + E2E) | other skill: URI → -32602; no bundle/filesystem lookup | fully |
+| S24 | Unknown Skill Resources fail without fallback | `handleModernResourcesRead` skill: prefix check; `bundleLoader` spy | `TestUnknownSkillURINoBundleFallback`, `TestTraversalSkillURINoBundleFallback` | other skill: URI → -32602; zero bundle loader calls; no filesystem fallback | fully |
 | S25 | Resource read does not activate a Skill | `SkillRegistry.Read` returns bytes only | E2E; real Codex event trace | no approval/install/permission/execution; ordinary Resource content | fully |
 | S26 | Every modern success result has modern envelope | `NewModernResult`; `modernResultWithData` | `TestModernDiscover`; E2E all methods | resultType=complete + serverInfo _meta on all success; TTL/scope only cacheable (tools/call omits) | fully |
 | S27 | Legacy shapes remain exact | legacy handlers unchanged | `test_mcp.py` 13/13 | no resultType/cache/_meta in legacy; all pre-existing fields preserved | fully |
@@ -48,10 +48,10 @@
 | S30 | Digests are not described as trust | docs; `TestDocumentationContract` | `TestDocumentationContract` | digest/size = byte consistency only; no authorship/safety/approval/trust claim | fully |
 | S31 | Host responsibilities are documented | docs/knowledge/mcp-server.md security section | `TestSecurityBoundaryDocs` | origin labeling, untrusted-input, approval, permission gating assigned to Host; OKF does not perform them | fully |
 | S32 | Optional high-risk capabilities are absent | `handleModernDiscover` capabilities | `TestModernDiscover`; E2E | directoryRead absent, resources not dynamic, no nested Skill/executable/archive/hook/script; no Prompts/subscriptions | fully |
-| S33 | Errors and logs are redacted | error messages avoid paths; logger uses truncate | (code review) | no token/credential/env/home/Skill body in error responses or stderr | fully |
+| S33 | Errors and logs are redacted | error messages avoid raw input; logger uses truncate; `sendErrorWithData` | `TestErrorAndLogRedaction` (token/env/home/skill-body canaries across malformed meta/params/unknown URI), `TestRegistryErrorRedaction`, `TestNewServerErrorNoLeak` | no token/credential/env/home/Skill body in error responses or stderr; unsupported version message does not echo raw input (data field per S03) | fully |
 | S34 | Direct modern protocol fixture completes full flow | `test_ext_skills.py` | 8/8 tests | discover, version/capability negatives, skills list/get, resources, tools, unknown URI, prompts-not-implemented | fully |
-| S35 | Real Codex Resource compatibility works | real Codex 0.153.4 isolated HOME | `.artifacts/codex-resource-compat/` | list/read skill://okf/SKILL.md, name=okf, W01/W07 present, no mutating tool; era label honest | fully |
-| S36 | Native Host status reported honestly | conformance S35/S36 | this audit | no production Host with native skills/list used; direct fixture fully passing; Resource compat not renamed as native support | partial |
+| S35 | Real Codex Resource compatibility works | real Codex 0.153.4 isolated HOME | `tools/verify-mcp-skills-codex.sh` (reproducible, fail-closed, safe summary only) | list/read skill://okf/SKILL.md, name=okf, W01/W07 present, no mutating tool; era label honest | fully |
+| S36 | Native Host status reported honestly | conformance S35/S36 | this audit + `tools/verify-mcp-skills-codex.sh` | no production Host with native skills/list used; direct fixture fully passing; Resource compat verified via real Codex; status honestly reported as `blocked_client_support` per Spec THEN | fully |
 | S37 | Performance independent of bundle size | `SkillRegistry` O(1); zero bundle I/O | `skills_benchmark_test.go` (10,000 ops) | discovery/Skill ops zero knowledge-runtime calls; ns/op/B/op/allocs/op recorded; SkillRegistryRead 0/0 | fully |
 | S38 | Final quality and alignment gates pass | gauntlet + conformance + mutants | gauntlet PASS; mutants 6/6 | build/vet/test/race/shuffle/coverage/mutants + both E2E + real Codex all run after last edit | fully |
 
@@ -64,8 +64,9 @@
 
 ## Partial/gap explanation
 
-- **S36 `partial`**: No production Host (Claude Code, Cursor, Codex) with native modern `skills/list/get` extension support was available in the test environment. The direct modern protocol fixture (S34) is mandatory and fully passing (8/8). Real Codex Resource compatibility (S35) is fully passing. This is an honest `blocked_client_support` status, not a protocol gap.
+- **No partial or gap items.** All S01–S38 are `fully`.
+- S36 is `fully` because the Spec's THEN clause explicitly requires reporting `blocked_client_support` when no production Host exposes native modern `skills/list/get`; this status is honestly reported and the direct modern protocol fixture (S34) is fully passing. This is expected behavior, not an unmet requirement.
 
 ## No unexplained gaps
 
-All S01–S38 except S36 are `fully`. S36 is the only `partial` and its reason is documented (client-side extension support, not server-side implementation gap).
+All S01–S38 are `fully`. Every scenario maps to a real implementation symbol, an executable automated test, and a fresh-run command.

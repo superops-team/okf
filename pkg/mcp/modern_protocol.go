@@ -40,7 +40,7 @@ func ParseModernMeta(raw json.RawMessage) (*ModernRequestMeta, error) {
 	if meta.ProtocolVersion != ModernProtocolVersion {
 		return nil, &RPCError{
 			Code:    UnsupportedProtocolVersionCode,
-			Message: fmt.Sprintf("unsupported protocol version: %s", meta.ProtocolVersion),
+			Message: "unsupported protocol version",
 			Data: map[string]any{
 				"supported": []string{ModernProtocolVersion},
 				"requested": meta.ProtocolVersion,

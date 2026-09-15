@@ -44,6 +44,7 @@ type Server struct {
 	config       ServerConfig
 	bundleLoaded bool
 	skills       *SkillRegistry
+	bundleLoader func(path string) (*okf.KnowledgeBundle, error)
 }
 
 // ServerConfig holds configuration for the MCP server.
@@ -101,7 +102,11 @@ func (s *Server) loadBundleLegacy() {
 	if s.config.BundlePath == "" || s.bundleLoaded {
 		return
 	}
-	bundle, err := loadBundleSilent(s.config.BundlePath)
+	loader := s.bundleLoader
+	if loader == nil {
+		loader = loadBundleSilent
+	}
+	bundle, err := loader(s.config.BundlePath)
 	if err != nil {
 		s.logger.Printf("Warning: failed to auto-load bundle from %s: %v", s.config.BundlePath, err)
 	} else {

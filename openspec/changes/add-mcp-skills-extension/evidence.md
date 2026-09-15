@@ -1,8 +1,9 @@
 # Evidence — add-mcp-skills-extension (fresh run)
 
 - Branch: `spec/mcp-skills-extension`
-- Base commit: `f99af86`
-- Implementation commit: see `git log` (post-review fixes)
+- Base Spec commit: `f99af86` (approved)
+- Implementation commits: `6380226` (initial), `e4d51d5` (hard gap fixes), see `git log` for subsequent review fixes
+- Evidence commit: this file is committed alongside the implementation; the tree state at verification time is recorded by `git rev-parse HEAD` and `git status --porcelain` (clean)
 - Toolchain: go1.26.7 linux/amd64
 - CLI version: okf 0.7.0 (library meta 0.4.1)
 - Verification timestamp: 2026-09-16 (fresh after last code edit)
@@ -38,18 +39,17 @@
 - Legacy resources/read for skill: URI, MIME, content all correct
 
 ## Real Codex Resource compatibility (S35)
+- Reproducible harness: `tools/verify-mcp-skills-codex.sh` (builds OKF, configures isolated CODEX_HOME, runs real Codex, parses JSONL, outputs safe summary only, fail-closed)
 - Codex version: 0.153.4
-- Isolated CODEX_HOME: /tmp/codex-skill-test/codex-home
 - Model channel: xeart (gpt-5.6-sol__dev via local proxy 127.0.0.1:18080)
-- OKF binary: /tmp/okf-codex-test (built from this branch)
 - **Result: PASS**
   - MCP tool calls: `codex.list_mcp_resources` (completed), `okf.read_mcp_resource` (completed)
   - Resource name: okf
   - Contains W01: Yes
   - Contains W07: Yes
-  - Mutating tools called (okf_note/init/refresh/feedback): No
-- Evidence: `.artifacts/codex-resource-compat/events.jsonl`, `SUMMARY.md`
+  - Mutating tools called (okf_note/init/refresh/feedback): 0
 - Era label: modern 2026-07-28 Resource compatibility (NOT native skills/list/get)
+- Raw event stream is NOT committed (may contain model-internal tokens); harness outputs only safe summary
 
 ## Dual-era behavior
 - Modern opening (server/discover with _meta): selects modern era
@@ -68,6 +68,9 @@
 - Construction: fail-closed; NewServer returns error on invalid registry
 
 ## Benchmarks (S37, 10,000 ops each)
+- Reproducible command: `go test ./pkg/mcp/ -bench="BenchmarkModern|BenchmarkSkill" -benchtime=10000x -run=^$ -benchmem`
+- Test file: `pkg/mcp/skills_benchmark_test.go` (8 benchmarks)
+
 | Benchmark | ns/op | B/op | allocs/op |
 |---|---:|---:|---:|
 | ModernDiscover | ~11,000 | ~6,900 | ~64 |
@@ -81,7 +84,7 @@
 
 - Zero knowledge-runtime I/O for discovery/Skill operations (registry built from static rendered bytes)
 - SkillRegistryRead: 0 B/op, 0 allocs/op
-- Evidence: `.artifacts/benchmarks/skills-benchmark.txt`
+- Numbers are representative; exact values depend on hardware
 
 ## Targeted mutants (S38, 6/6 killed)
 | Mutant | Target | Killed by |
@@ -109,11 +112,13 @@
 ## Key implementation files
 - `pkg/mcp/modern_protocol.go`: modern metadata types, errors (-32022/-32021), result envelope
 - `pkg/mcp/modern_handlers.go`: server/discover, tools, resources, skills handlers
-- `pkg/mcp/skills.go`: immutable SkillRegistry, URI validation, digest/size, defensive copies
-- `pkg/mcp/server.go`: dual-era dispatcher, deferred BundlePath load, shared serverInfo, sendErrorWithData
-- `pkg/mcp/dual_era_test.go`: dual-era dispatch tests, error data tests
-- `pkg/mcp/skills_test.go`: registry tests, URI validation, defensive copies, concurrent reads
-- `pkg/mcp/skills_benchmark_test.go`: S37 benchmarks
+- `pkg/mcp/skills.go`: immutable SkillRegistry, URI validation, digest/size, defensive copies, `validateSkillManifest` (injectable for S14 boundary tests)
+- `pkg/mcp/server.go`: dual-era dispatcher, deferred BundlePath load, shared serverInfo, sendErrorWithData, injectable `bundleLoader`
+- `pkg/mcp/dual_era_test.go`: dual-era dispatch tests, error data tests (S01-S05, S26)
+- `pkg/mcp/skills_test.go`: registry tests, URI validation (13 cases incl. encoded traversal), defensive copies, concurrent reads, S14 manifest boundary tests (512/513, 16777216/over, overflow, duplicate)
+- `pkg/mcp/skills_benchmark_test.go`: S37 benchmarks (8 benchmarks, 10000 ops)
+- `pkg/mcp/bundle_load_test.go`: S16/S24 loader spy tests (NewServer/modern no-load, legacy load-once, unknown/traversal URI no-fallback)
+- `pkg/mcp/redaction_test.go`: S33 error/log redaction tests (token/env/home/skill-body canaries)
 - `pkg/mcp/docs_contract_test.go`: S30-S32 documentation contract tests
 - `pkg/agentconfig/workflow.go`: RenderAgentSkill() portable renderer
 - `pkg/agentconfig/skill_test.go`: renderer tests
@@ -121,5 +126,6 @@
 - `docs/knowledge/mcp-server.md`: dual-era, Skill, security boundary documentation
 - `README.md`: dual-era and Skill section
 - `openspec/changes/add-mcp-skills-extension/release-notes.md`: release notes
-- `test_ext_skills.py`: modern protocol E2E
-- `tools/mutants-mcp-skills.sh`: targeted mutation runner
+- `test_ext_skills.py`: modern protocol E2E (8/8)
+- `tools/mutants-mcp-skills.sh`: targeted mutation runner (6/6 killed)
+- `tools/verify-mcp-skills-codex.sh`: real Codex Resource compatibility harness (reproducible, fail-closed, safe summary)
