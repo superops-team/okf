@@ -2,88 +2,89 @@
 
 ## Feasibility experiments (2026-09-16, local, temporary code, no formal changes)
 
-### Experiment 1: code_refs glob matching precision/recall
+### Experiment 1: code_refs glob matching (lexical)
 
 **Method**: Simulated 5 concepts with code_refs patterns, queried `pkg/mcp/server.go`.
 
-**Patterns tested**:
-- `pkg/mcp/*.go` (single-segment glob)
-- `pkg/okf/types.go` (exact path)
-- `cmd/okf/main.go` (exact path)
-- `**/*.go` (recursive, overly broad)
-- no code_refs
-
 **Result**:
 - Query `pkg/mcp/server.go` matched exactly `arch/layers` (pattern `pkg/mcp/*.go`).
-- `**/*.go` would match everything — requires depth limit (proposed: 8 levels).
+- `**/*.go` would match everything — requires depth limit (set to 8 levels).
 - Direct `filepath.Match` handles single-segment; recursive needs custom bounded matcher.
+- for_path is one input path vs pattern match — no file scanning.
 
-**Conclusion**: for_path matching is feasible with existing Go stdlib + bounded recursive matcher. Precision is high when patterns are specific; depth limit prevents `**` explosion.
+**Conclusion**: for_path matching feasible with Go stdlib + bounded recursive matcher. Precision high with specific patterns.
 
 ### Experiment 2: governance default inference
 
-**Method**: Simulated 5 concepts with various governance values and path locations.
+**Method**: Simulated concepts with various governance values and path locations.
 
-**Result**:
-- `convention/principles` with no governance → default `constraint` ✅
-- `arch/layers` with `governance: context` → `context` ✅
-- `decisions/freeze` with `governance: hold` → `hold` ✅
-- `unknown/value` with `governance: weird` → treated as `context` (backward compat) ✅
+**Decision**: No path-based inference in v1. All concepts default to `context` without explicit field. `convention/` auto-constraint was considered but rejected (strong inference without evidence, minimal surprise violation). Templates/docs may suggest explicit `governance: constraint`.
 
-**Conclusion**: Default inference is simple and deterministic. Unknown values degrading to `context` is safe for backward compatibility.
+### Experiment 3: duplicate detection pilot (confusion matrix)
 
-### Experiment 3: search-before-write false positive rate
+**Method**: 329 concepts from `.okf/knowledge/` (mostly `code_file` type, auto-generated from source). 10 test cases (5 near-duplicate positives, 5 novel negatives). Title+body Jaccard at 0.15 threshold.
 
-**Method**: Used existing 329-concept knowledge base (`.okf/knowledge/`). Simulated 5 new notes with title+body Jaccard similarity at 30% threshold.
+**Result (PILOT, n=10, Jaccard-only)**:
 
-**Test notes**:
-1. "MCP server dual era protocol" — 0 potential duplicates
-2. "BM25 lexical search parameters" — 0 potential duplicates
-3. "completely novel topic xyzzy" — 0 potential duplicates
-4. "go build test commands" — 0 potential duplicates
-5. "agent skill workflow W01-W07" — 0 potential duplicates
+| | Predicted duplicate | Predicted novel |
+|---|---|---|
+| Actual duplicate | TP=0 | FN=5 |
+| Actual novel | FP=0 | TN=5 |
 
-**Result**: 0 false positives at 30% Jaccard threshold with title+body tokenization.
+- Precision: N/A (0 predicted duplicates)
+- Recall: 0.00
+- FPR: 0.00
 
-**Caveat**: Title-only matching has higher false positive risk; body+title reduces it. Recall for actual duplicates may be lower with Jaccard (BM25 would be better). First version should use BM25 (already exists) with normalized score, not Jaccard.
+**Analysis**: Jaccard-only has 0 recall on code_file-centric KB because test "duplicates" (MCP server, BM25, etc.) are domain concepts that don't exist as separate concepts in the code_file-centric knowledge base. BM25 candidate generation is essential to improve recall. Golden set (implementation phase) needs ≥40 cases with actual note/decision concept positives, Chinese/English/code identifiers, and common-word negatives.
 
-**Conclusion**: Advisory non-blocking is essential given threshold noise. BM25 reuse avoids building a second index. False positive rate is expected to be low (< 15%) with proper calibration.
+**Conclusion**: Advisory non-blocking is essential given threshold uncertainty. BM25 top-N + Jaccard re-rank is the designed approach. Pilot does NOT validate thresholds; golden set calibration required in implementation.
 
-### Experiment 4: progressive disclosure token estimate
+### Experiment 4: progressive disclosure token measurement (REAL)
 
-**Method**: Estimated tokens per concept for three modes based on existing manifest output.
+**Method**: Built actual ManifestItem JSON for 329 concepts from `.okf/knowledge/`. Measured JSON output bytes for three projection modes. Token estimate = JSON bytes / 4.
 
-**Estimates**:
-- Full mode: ~300+ tokens/concept (all metadata)
-- Hit mode: ~150 tokens/concept (summary + tags + code_refs + status)
-- Summary mode: ~50 tokens/concept (id + title + type + governance + 1-line desc)
+**Result (329 concepts, real measurement)**:
 
-**Conclusion**: Summary mode can reduce manifest token usage by ~80% for large knowledge bases. Recall@K is preserved because okf_id is always included for follow-up `okf_context`.
+| Mode | JSON bytes | Tokens (bytes/4) | Tokens/concept | Reduction vs full |
+|---|---:|---:|---:|---:|
+| full (default) | 145,916 | 36,479 | 110.9 | — |
+| hit | 65,247 | 16,311 | 49.6 | −55.3% |
+| summary | 57,351 | 14,337 | 43.6 | −60.7% |
+
+- Total source file bytes: 1,932,655 (file_bytes/4 = 483,164 tokens — this is the existing ManifestItem.EstimatedTokens, NOT the response budget).
+- Response token budget uses JSON projection bytes/4, distinct from file_bytes/4.
+
+**Conclusion**: Summary mode reduces response tokens by ~61%, hit by ~55%. ID parity guaranteed without max_tokens.
 
 ## Existing capabilities verified (not re-implemented)
 
 | Capability | Location | Status |
 |---|---|---|
-| BM25 lexical search | `pkg/lexical/` | exists, reuse |
-| Semantic + hybrid search | `pkg/query/`, `pkg/vectorindex/` | exists, reuse |
-| Durable note/log/feedback | `pkg/tool/write.go` | exists, extend |
+| BM25 lexical search | `pkg/lexical/` | exists, reuse for candidate generation |
+| Semantic + hybrid search | `pkg/query/`, `pkg/vectorindex/` | exists |
+| Durable note/log/feedback | `pkg/tool/write.go` | exists, WriteKnowledgeRequest has Kind/Content/Project/Tags/Metadata/IdempotencyKey/EvidenceRefs (NO title) |
 | Stable ID (okf_id) | `pkg/tool/identity.go` | exists, reuse |
-| Manifest | `pkg/tool/manifest.go` | exists, extend |
-| Query/Context | `pkg/tool/query.go` | exists, extend |
-| MCP Skills (W01-W07) | `pkg/agentconfig/workflow.go` | exists, extend |
-| Agent Integration | `pkg/agentconfig/` | exists, extend |
-| CustomFields | `pkg/okf/types.go` | exists, preserve |
-| OKF v0.2 fields (sources/generated/verified/status/stale_after) | `pkg/okf/types.go` | exists, preserve |
+| Manifest | `pkg/tool/manifest.go`, `pkg/manifest/` | exists, ManifestItem has okf_id/ref/path/title/description/type/tags/status/trust_tier/stale/file_size_bytes/estimated_tokens |
+| Query/Context | `pkg/tool/query.go` | exists, extend with memory_check |
+| MCP Skills (W01-W07) | `pkg/agentconfig/workflow.go` | exists, extend clauses |
+| Agent Integration | `pkg/agentconfig/` | exists |
+| CustomFields | `pkg/okf/types.go` (inline YAML map) | exists, USE for governance/code_refs |
+| OKF v0.2 fields | `pkg/okf/types.go` | exists, preserve |
+| CLI entry | `okf tool <operation>` (status/init/refresh/query/context/manifest) | verified, NOT `okf manifest/query` |
+| Service BM25 cache | `pkg/tool/service.go` has NO BM25 cache field | must verify/build per call or add caching in implementation |
 
 ## Related work
 
-- okf-agent-memory (external): governance model (constraint/hold/context), code_refs binding, search-before-write principle. See调研报告 for detailed gap analysis.
-- OKF v0.2 spec: extension field family (§7) allows `governance` and `code_refs` as custom extension fields.
+- okf-agent-memory (external): governance model, code_refs, search-before-write. Key difference: their approach modifies concept types; ours uses CustomFields + accessor per AGENTS.md constraint.
 
-## Key decisions
+## Key decisions (with rationale)
 
-1. **Formal fields, not CustomFields**: `governance` and `code_refs` are formal Concept struct fields for type safety and validation. CustomFields preserved for unknown keys.
-2. **Advisory, not blocking**: search-before-write never blocks without `--allow-duplicate` override. No auto-delete/merge.
-3. **No second index**: duplicate detection reuses existing BM25 index.
-4. **Depth-limited `**`**: max 8 levels, max 1000 files per pattern to prevent ReDoS/explosion.
-5. **Hold is advisory**: surfaced as warning, not enforced by OKF server (agent framework may enforce).
+1. **CustomFields + pkg/memorymeta, not Concept struct**: AGENTS.md prohibits core model changes for feature extensions. CustomFields is the OKF v0.2 extension mechanism.
+2. **No path-based governance default**: minimal surprise, backward compatible. All concepts default context.
+3. **memory_check read-only via okf_query**: avoids zombie allow_duplicate; check-then-write is Agent Skill responsibility.
+4. **No conflict classification**: cannot infer semantic conflict without external LLM (non-goal).
+5. **BM25 + Jaccard, not raw BM25 threshold**: BM25 raw scores not [0,1]; Jaccard provides normalized threshold.
+6. **for_path lexical only**: supports not-yet-created/renamed paths; no TOCTOU from FS.
+7. **stale-refs fail-closed**: silent empty would mislead as "no stale refs"; incomplete+warnings is honest.
+8. **JSON bytes/4 for response budget**: distinct from existing file_bytes/4; deterministic and measurable.
+9. **No new MCP tools in v1**: extend existing okf_manifest/okf_query params; both eras.

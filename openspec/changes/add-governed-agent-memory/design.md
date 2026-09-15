@@ -2,194 +2,237 @@
 
 ## 1. Design principles
 
-1. **Additive, backward-compatible**: all new fields optional; existing concepts work unchanged.
-2. **No second fact source**: governance and code_refs are concept frontmatter; progressive disclosure reuses Manifest.
-3. **Advisory before blocking**: search-before-write returns recommendations, never blocks without explicit override.
-4. **Local only**: no external LLM, database, or network; reuse existing BM25/semantic indexes.
-5. **Fail closed for holds**: `hold` governance is surfaced prominently; unknown governance values degrade to `context`.
-6. **Deterministic**: all filtering/sorting is deterministic and testable; no probabilistic behavior in governance/code_refs.
+1. **Core Concept struct immutable**: governance/code_refs stored in existing `CustomFields`; typed access via `pkg/memorymeta`. No second field set.
+2. **Default behavior unchanged**: no new params → byte/semantic identical to current behavior.
+3. **Advisory before blocking**: search-before-write is read-only; hold is warning-only.
+4. **Local only**: no external LLM; reuse existing BM25 for candidate generation.
+5. **Lexical for_path**: no FS access for matching; stale-refs is the only FS scanner and fails closed.
+6. **Deterministic**: all filtering/sorting deterministic; no probabilistic behavior.
+7. **No ghost commands**: all entry points verified against current `okf tool` CLI and MCP tools.
 
 ## 2. Architecture
 
 ```
-Concept frontmatter (existing + new)
-├── type, title, description, tags      [existing]
-├── sources, generated, verified         [existing v0.2]
-├── status, stale_after                  [existing v0.2]
-├── okf_id                               [existing Stable ID]
-├── governance                           [NEW: constraint|hold|context]
-└── code_refs                            [NEW: []string (paths/globs)]
+Concept (existing, UNMODIFIED)
+├── Type, Title, Description, Tags, Sources, Generated, Verified, Status, StaleAfter [existing]
+├── okf_id [existing Stable ID]
+└── CustomFields map[string]any [existing extension mechanism]
+    ├── governance  → accessed via memorymeta.Governance(concept)
+    └── code_refs   → accessed via memorymeta.CodeRefs(concept)
 
-Tool surface (existing + extended)
-├── okf_manifest  --for_path <path> --mode summary|hit|full  [EXTENDED]
-├── okf_query     --for_path <path> --governance <filter>    [EXTENDED]
-├── okf_context                                              [unchanged]
-├── okf_note      --check-duplicates (advisory)              [EXTENDED]
-├── okf_log       --check-duplicates (advisory)              [EXTENDED]
-└── okf_feedback  --check-duplicates (advisory)              [EXTENDED]
+pkg/memorymeta (NEW, typed accessor package)
+├── Governance(c) (GovernanceLevel, error) — normalize, validate, default=context
+├── SetGovernance(c, level) — write to CustomFields
+├── CodeRefs(c) ([]string, error) — normalize paths, validate globs
+├── SetCodeRefs(c, refs) — write to CustomFields
+└── Validate(c, strict) — governance/code_refs validation
+
+Tool surface (existing, EXTENDED with optional params)
+├── okf tool manifest  --for_path <path> --governance <filter> --mode summary|hit|full --max-tokens N
+├── okf tool query     --for_path <path> --governance <filter> --memory-check true
+├── okf tool context   (unchanged)
+├── okf tool status/init/refresh (unchanged)
+└── okf_note/okf_log/okf_feedback (unchanged; always write; advisory via query memory_check)
+
+MCP (both modern and legacy eras)
+├── okf_manifest: gains for_path, governance, mode, max_tokens params
+├── okf_query: gains for_path, governance, memory_check params
+└── No new MCP tools in v1
 
 Agent Skill (W01-W07 extension)
-└── W02 (mutation consent) gains: check holds for target paths
-    W03 (discovery) gains: for_path lookup before editing
+├── W01 (status): okf tool manifest --mode summary (fast overview)
+├── W02 (mutation consent): check holds via --for_path before editing; ask user
+├── W03 (discovery): --for_path primary mechanism for code-related knowledge
+└── W06 (persistence): first okf tool query --memory-check, then explicit write
 ```
 
 ## 3. Governance semantics
 
-### 3.1 Field definition
+### 3.1 Storage
 
-```yaml
-governance: constraint  # optional; one of: constraint | hold | context
-```
+`governance` is a frontmatter field stored in `Concept.CustomFields["governance"]`. Accessed via `memorymeta.Governance(concept)`.
 
-### 3.2 Default inference
+### 3.2 Values and defaults
 
-| Condition | Default governance |
+| Condition | Effective governance |
 |---|---|
-| Explicit `governance: constraint/hold/context` | respected (normalized lowercase) |
-| Concept ID under `convention/` | `constraint` |
-| All other concepts | `context` |
-| Unknown value (e.g. `weird`) | `context` (backward compatible, logged) |
+| Explicit `governance: constraint/hold/context` | normalized lowercase value |
+| No `governance` field | `context` (default for ALL concepts) |
+| Unknown value (e.g. `weird`) | non-strict: `context` + warning; strict: error |
 
-### 3.3 Inheritance and conflict
+**No path-based inference**. `convention/` concepts do NOT auto-default to constraint. This avoids mislabeling and respects minimal surprise/backward compatibility. Templates/docs may suggest explicit `governance: constraint` for convention docs.
 
-- Governance is per-concept, not inherited from parent directories (except the `convention/` default).
-- If a concept has both explicit `governance` and is under `convention/`, explicit wins.
-- No conflict resolution needed: each concept has exactly one effective governance level.
+### 3.3 No inheritance
+
+Governance is per-concept only. No parent-directory inheritance. No conflict resolution needed (each concept has exactly one effective level).
 
 ### 3.4 Filtering and sorting
 
-- `okf_manifest --governance constraint|hold|context`: filter by effective governance.
-- `okf_query --governance ...`: same filter.
-- Default sort: `hold` first, then `constraint`, then `context`; within each level, by existing manifest order (stable).
-- `for_path` results: `hold` and `constraint` surfaced before `context`.
+- `--governance constraint,hold`: filter by effective governance.
+- **Default sort unchanged** when no `--for_path` or `--governance` is used: existing manifest order preserved (byte/semantic compatible).
+- **Governance sort activates only** with `--for_path` or `--governance`: order is `hold` → `constraint` → `context`, then original stable order within each level.
+- `for_path` results include `governance_warning: true` when any result has `hold` governance.
 
-### 3.5 Agent consumption
+### 3.5 Hold is advisory, not enforced
 
-- MCP Skill W02 (mutation consent): before modifying code, agent MUST run `okf_manifest --for_path <target>` and check for `hold` concepts.
-- W03 (discovery): `for_path` is the primary discovery mechanism for code-related knowledge.
-- `hold` concepts are surfaced as warnings in tool responses; agent should not proceed without human signoff.
+- OKF server/tools never block writes or edits based on governance.
+- `hold` concepts are surfaced with `governance_warning` in responses.
+- Agent Skill W02 instructs: before modifying code governed by a `hold` concept, ask user for confirmation.
+- No "fail closed for holds" language anywhere.
+
+### 3.6 Agent consumption
+
+- MCP Skill W02: before modifying code, run `okf tool manifest --for_path <target>` and check for `hold` concepts.
+- W03: `--for_path` is primary discovery mechanism.
+- `hold` = warning, not block. Agent decides (with user input) whether to proceed.
 
 ## 4. Code-to-knowledge binding (code_refs + for_path)
 
-### 4.1 Field definition
+### 4.1 Storage
 
-```yaml
-code_refs:
-  - pkg/mcp/*.go
-  - cmd/okf/main.go
-  - docs/guides/*.md
-```
+`code_refs` is a frontmatter list stored in `Concept.CustomFields["code_refs"]`. Accessed via `memorymeta.CodeRefs(concept)`.
 
 ### 4.2 Path syntax
 
-- **Repo-relative** paths only; no absolute paths, no `..` traversal.
-- Forward slashes on all platforms (normalized at parse time).
-- Glob syntax: `*` (single segment), `**` (recursive, depth-limited to 8 levels), `?` (single char), `[abc]` (char class).
-- Symlinks: resolved at match time; path escape via symlink is rejected (resolved path must remain under repo root).
-- ReDoS prevention: glob matching uses Go `filepath.Match` for simple patterns and a bounded recursive matcher for `**` (max 8 levels, max 1000 files per pattern).
+- **Repo-relative** paths only. No absolute paths. No `..` traversal. No NUL bytes. No backslash ambiguity (reject `\` in patterns).
+- Forward slashes on all platforms (normalized at parse).
+- Glob: `*` (single segment, no `/`), `**` (recursive, max 8 levels), `?` (single char), `[abc]` (char class).
+- **No EvalSymlinks, no file-existence check** for for_path matching. This supports not-yet-created or renamed target paths.
+- Pattern bounds: max 16 patterns/concept, max 256 chars/pattern, max 8 segments/pattern.
 
-### 4.3 for_path matching
+### 4.3 for_path matching (lexical, no FS)
 
 ```
-okf_manifest --for_path pkg/mcp/server.go
+okf tool manifest --for-path pkg/mcp/server.go
 ```
 
-- Returns concepts where any `code_refs` pattern matches the given path.
-- Path is normalized to repo-relative, forward-slash form before matching.
-- Matching is deterministic: a pattern either matches or not; no fuzzy matching.
-- Results include the matched `code_refs` pattern for transparency.
+- Input path canonicalized: repo-relative, forward slashes, `.` and `..` resolved, trailing slashes removed.
+- Reject: absolute paths, paths escaping repo root via `..`, NUL, backslash.
+- Matching: for each concept, for each code_refs pattern, test pattern against canonicalized input path.
+- `**` recursion bounded to 8 levels; patterns with >8 segments rejected at validation.
+- Complexity: O(concepts × patterns × path_length). No FS scan.
+- Response includes `matched_code_ref: <pattern>` for transparency.
 
-### 4.4 Rename/delete handling
+### 4.4 stale-refs (FS scanner, fail-closed)
 
-- `code_refs` are static strings; if a referenced file is renamed, the concept's `code_refs` should be updated (manual or via `okf_refresh`).
-- `for_path` does not auto-fix stale `code_refs`; a `--stale-refs` flag on `okf_manifest` can list concepts whose `code_refs` match no existing files (advisory).
+`okf tool manifest --stale-refs` scans the filesystem to find concepts whose code_refs match no existing files.
+
+- This is the ONLY operation that accesses the filesystem for code_refs.
+- **Fail closed**: if symlink escapes repo root, or directory unreadable, returns `incomplete: true` + `warnings: [...]`. Never silently returns empty (which would mislead as "no stale refs").
+- Scan bounds: max 50,000 files scanned; if exceeded, `incomplete: true` + warning.
+- Advisory only: no auto-deletion or auto-fix of stale code_refs.
 
 ### 4.5 Relationship to existing fields
 
-- `resource` field: references the actual resource this knowledge describes (e.g. a URL, a file). `code_refs` is specifically for code files this concept governs. They are complementary, not redundant.
-- `file_path`/`source_path`: these are the concept's own file path, not code references. No conflict.
+| Field | Meaning | code_refs relationship |
+|---|---|---|
+| `resource` | What resource this knowledge describes (URL/file) | Different: code_refs = what code this knowledge governs |
+| `source_path`/`file_path` | The concept's own file path | Different: code_refs = target code files, not the concept's own path |
+| `code_file` concepts | Auto-generated concepts for source files | code_refs should NOT duplicate code_file concept paths; code_refs is for domain concepts governing code |
 
-## 5. Search-before-write (advisory)
+## 5. Search-before-write (read-only via okf_query memory_check)
 
-### 5.1 Flow
+### 5.1 Design decision
+
+**No `allow_duplicate`/override** (zombie when advisory never blocks). **No `possible_conflict`** (cannot infer semantic conflict without LLM; false capability).
+
+**Approach**: extend existing `okf tool query` with `memory_check: true`. Read-only. Returns similar concepts. Agent Skill W06 instructs check-then-write. Write tools always write.
+
+### 5.2 Flow
 
 ```
-okf_note --check-duplicates (default true for advisory)
-  1. Build query from title + body (first 500 chars)
-  2. Run BM25 search over existing concepts (title + description + body)
-  3. Compute similarity score for top-5 candidates
+okf tool query --memory-check true --content "<note content>" --kind note
+  1. Build query from content (first 1000 chars) + kind + tags
+  2. BM25 search → top-10 candidates (candidate generation, raw score not [0,1])
+  3. For each candidate: compute normalized token Jaccard [0,1] on (title+description+first 500 chars body)
   4. Classify:
-     - score >= 0.7: possible_duplicate
-     - score >= 0.5 AND type conflicts: possible_conflict
-     - otherwise: no_duplicate
-  5. Return advisory result alongside write result
-  6. If allow_duplicate=true, write proceeds regardless
-  7. Audit trace: log the check result to the concept's frontmatter (search_before_write: {checked_at, candidates, decision})
+     - Jaccard >= threshold: possible_duplicate (with candidates: okf_id, ref, jaccard_score)
+     - Jaccard < threshold: no_similar
+  5. Return advisory result (read-only, no write)
 ```
 
-### 5.2 Thresholds (first version, calibrated from experiment)
+### 5.3 Threshold calibration
 
-- `possible_duplicate`: BM25 score >= 0.7 (normalized 0-1)
-- `possible_conflict`: score >= 0.5 AND same type AND title overlap >= 0.4
-- Thresholds are configurable via `--dup-threshold` but default to above.
+- BM25 raw scores are not [0,1]; used only for top-N candidate generation.
+- Jaccard [0,1] used for threshold decision.
+- Pilot (n=10, Jaccard only, 329 code_file-centric concepts): TP=0 FP=0 TN=5 FN=5, Recall=0 FPR=0. This shows Jaccard-only has poor recall on code_file-centric KB; BM25 candidate generation is essential.
+- Golden set (implementation phase): ≥40 cases with actual note/decision positives, Chinese/English/code identifiers, common-word negatives. Threshold calibrated from confusion matrix.
+- Default threshold: 0.20 (initial, to be calibrated). Configurable via `--dup-threshold`.
 
-### 5.3 Idempotency and concurrency
+### 5.4 Idempotency and concurrency
 
-- Search-before-write is read-only; it does not modify existing concepts.
-- Concurrent writes: each write runs its own check; TOCTOU is acceptable for advisory mode (the audit trace records the state at check time).
-- If two concurrent writes create similar concepts, the audit trace on each records the other as a candidate (if visible at check time).
+- `memory_check` is read-only; no idempotency key needed.
+- Same query → same result (deterministic BM25 + Jaccard).
+- Concurrent checks: read-only, no interference.
+- Two concurrent writes: each advisory reflects state at check time; neither guarantees seeing the other. Documented explicitly.
 
-### 5.4 False positive handling
+### 5.5 Audit trace (bounded CustomFields metadata)
 
-- Advisory mode means false positives are non-blocking; agent reviews candidates and decides.
-- `allow_duplicate: true` explicitly overrides; recorded in audit trace.
-- Threshold calibration: measured on existing 329-concept knowledge base; title+body Jaccard at 30% yields 0 false positives for novel notes (see references/experiments).
-
-### 5.5 Audit trace
-
-```yaml
-search_before_write:
-  checked_at: "2026-09-16T00:00:00Z"
-  candidates:
-    - okf_id: okf_abc123...
-      score: 0.75
-      reason: possible_duplicate
-  decision: written  # written | overridden | skipped
+When a write (okf_note etc.) is performed, the caller MAY include `memory_check_result` in `Metadata`:
+```json
+{
+  "memory_check": {
+    "checked_at": "2026-09-16T00:00:00Z",
+    "candidates": ["okf_abc...", "okf_def..."],
+    "decision": "written"
+  }
+}
 ```
+- Max 3 candidates, each only okf_id + ref + score (no body text).
+- Same idempotency_key replay: does NOT re-run check or change checked_at (idempotent write reuses existing concept).
+- Bounded: max 256 bytes total for memory_check metadata.
 
 ## 6. Progressive disclosure
 
-### 6.1 Manifest modes
+### 6.1 Manifest modes (real measurements on 329 concepts)
 
-| Mode | Fields per concept | Est. tokens | Use case |
-|---|---|---|---|
-| `summary` | id, title, type, governance, description (1 line) | ~50 | Initial scan, W01 status check |
-| `hit` | summary + tags, code_refs, status, stale_after | ~150 | W03 discovery, for_path results |
-| `full` | all metadata (existing default) | ~300+ | Deep inspection |
+| Mode | Fields | Bytes (329 concepts) | Tokens (JSON bytes/4) | Tokens/concept |
+|---|---|---:|---:|---:|
+| `full` (default) | all existing ManifestItem fields | 145,916 | 36,479 | 110.9 |
+| `hit` | summary + tags, code_refs, status, stale_after | 65,247 | 16,311 | 49.6 |
+| `summary` | okf_id, title, type, governance, 1-line desc (≤80 chars) | 57,351 | 14,337 | 43.6 |
 
-### 6.2 Token budget
+- Token estimate = **JSON response bytes / 4**, NOT file_bytes/4. Existing `ManifestItem.EstimatedTokens` uses file_bytes/4 (source file estimate); response budget uses JSON projection bytes/4.
+- Reduction: hit −55.3%, summary −60.7% vs full.
 
-- `okf_manifest --mode summary --max-tokens 2000`: returns at most N concepts fitting the budget.
-- Stable sort: governance priority, then existing manifest order.
-- No truncation of individual concepts; if a concept doesn't fit, it's omitted (with `truncated: true` in response).
+### 6.2 ID parity guarantee (not Recall@5)
 
-### 6.3 Recall@K guarantee
+Manifest listing has no query ranking. Therefore:
+- Without `--max-tokens`: summary/hit/full return **identical concept ID sets and order** (100% parity).
+- With `--for_path` filter: all three modes return identical filtered ID sets.
+- Retrieval Recall is not affected by projection mode (can verify via existing eval regression, but this is not "summary Recall@5").
 
-- Summary mode includes `okf_id` and `title`, so agent can always follow up with `okf_context --id <okf_id>` for full body.
-- Recall@5: measured on existing golden queries; summary mode must not regress vs full mode (because all concepts are still listed, just with less metadata).
+### 6.3 max_tokens interaction
 
-### 6.4 Integration with W01-W07
+Pipeline order: **filter → stable sort → offset → limit → token budget**
 
-- W01 (status check): `okf_manifest --mode summary` — fast overview.
-- W03 (discovery): `okf_manifest --for_path <path> --mode hit` — governing concepts.
-- W04 (retrieval): `okf_context --id <okf_id>` — full body for selected concepts.
+1. Filter by `--for_path`/`--governance` if specified.
+2. Sort: default order (no new params) OR governance sort (with new params).
+3. Apply `--offset`.
+4. Apply `--limit` (existing).
+5. Apply `--max-tokens`: accumulate concepts until budget exceeded; do NOT include partial concept.
+6. Response: `items`, `next_offset`, `omitted_count`, `truncated: bool`.
+
+**Edge case: budget < first item**: return `budget_too_small` error with `min_required_tokens` (tokens needed for first item). No infinite loop. Caller must increase budget.
+
+### 6.4 Follow-up for full body
+
+Use existing `okf tool query --ref <okf_id>` or `okf tool resolve --ref <okf_id>`. NOT a non-existent `okf_context --id`.
+
+### 6.5 Integration with W01-W07
+
+- W01 (status): `okf tool manifest --mode summary` — fast overview.
+- W03 (discovery): `okf tool manifest --for-path <path> --mode hit` — governing concepts.
+- W04 (retrieval): `okf tool query --ref <okf_id>` — full body for selected concepts.
 - No new workflow steps; existing W01-W07 gain efficiency.
 
-## 7. Data model changes
+## 7. Data model (CustomFields, no Concept changes)
 
-### 7.1 Concept struct additions
+### 7.1 pkg/memorymeta (NEW package)
 
 ```go
+package memorymeta
+
 type GovernanceLevel string
 const (
     GovernanceConstraint GovernanceLevel = "constraint"
@@ -197,32 +240,62 @@ const (
     GovernanceContext    GovernanceLevel = "context"
 )
 
-type Concept struct {
-    // ... existing fields ...
-    Governance GovernanceLevel `yaml:"governance,omitempty" json:"governance,omitempty"`
-    CodeRefs   []string        `yaml:"code_refs,omitempty" json:"code_refs,omitempty"`
-}
+// Governance reads and normalizes the governance field from CustomFields.
+// Default: context. Unknown: context + warning (non-strict) or error (strict).
+func Governance(c *okf.Concept) (GovernanceLevel, warning string, err error)
+
+// SetGovernance writes governance to CustomFields.
+func SetGovernance(c *okf.Concept, level GovernanceLevel) error
+
+// CodeRefs reads, normalizes, and validates code_refs from CustomFields.
+func CodeRefs(c *okf.Concept) ([]string, error)
+
+// SetCodeRefs writes code_refs to CustomFields after validation.
+func SetCodeRefs(c *okf.Concept, refs []string) error
+
+// Validate checks governance and code_refs fields.
+func Validate(c *okf.Concept, strict bool) []string
 ```
 
-- Formal fields (not CustomFields) for type safety and validation.
-- CustomFields still preserved for unknown keys.
+- No second set of fields. Parser/query adapters call these accessors.
+- CustomFields preserved for unknown keys.
 
-### 7.2 Validation
+### 7.2 Frontmatter examples
 
-- `governance`: if present, must be one of `constraint|hold|context` (case-insensitive, normalized). Unknown values → warning + treated as `context`.
-- `code_refs`: each entry must be non-empty, repo-relative, no `..`, no absolute paths. Glob syntax validated at parse time.
+```yaml
+---
+type: Decision
+title: Zero external dependencies
+governance: constraint
+code_refs:
+  - go.mod
+  - pkg/**/*.go
+---
+```
+
+```yaml
+---
+type: Note
+title: Auth subsystem in migration
+governance: hold
+code_refs:
+  - pkg/auth/*.go
+---
+```
 
 ## 8. Security and safety
 
-- `hold` concepts are advisory warnings, not enforced blocks (agent framework may enforce).
-- `for_path` does not read file contents; only matches paths.
-- Search-before-write does not modify existing concepts.
+- `hold` = advisory warning, not enforced block.
+- `for_path` does not read file contents; only lexical path matching.
+- `memory_check` is read-only; does not modify existing concepts.
+- `stale-refs` fails closed on symlink escape/unreadable (never silently empty).
+- Audit trace bounded to 3 candidates × (okf_id + ref + score), no body text.
 - No new filesystem writes beyond the concept being written.
-- Audit trace is stored in the concept's own frontmatter (no separate log file).
 
 ## 9. Performance
 
-- Governance filtering: O(n) over concept list, in-memory, no I/O.
-- `for_path` matching: O(n * p) where n=concepts, p=patterns per concept; glob matching O(path length).
-- Search-before-write: reuses existing BM25 index (already built); adds one search per write (~300µs per experiment).
-- Progressive disclosure: reduces output size, no additional computation.
+- Governance filtering: O(n) in-memory, no I/O.
+- `for_path` matching: O(n × p × path_length), no FS access. p ≤ 16 patterns/concept.
+- `memory_check`: BM25 search (existing index) + Jaccard on top-10. BM25 index build: verify if cached per-Service or rebuilt per call (implementation task).
+- Progressive disclosure: reduces output size; no additional computation.
+- `stale-refs`: FS scan, bounded to 50,000 files, fail-closed on escape.
