@@ -30,8 +30,8 @@ pkg/memorymeta (NEW, typed accessor package)
 └── CheckMemory(content, types, project, tag) MemoryCheckResult — BM25+Jaccard (read-only)
 
 Tool surface (existing, EXTENDED with optional params)
-├── okf tool manifest  --for_path <path> --governance <filter> --mode summary|hit|full --max-tokens N
-├── okf tool query     -q <content> --types <list> --for_path <path> --governance <filter> --memory-check
+├── okf tool manifest  --for-path <path> --governance <filter> --mode summary|hit|full --max-tokens N
+├── okf tool query     -q <content> --type <single> --for-path <path> --governance <filter> --memory-check
 ├── okf tool context   -q <query> | --refs <ref1,ref2>  --budget-tokens N
 ├── okf tool status/init/refresh (unchanged)
 ├── okf lint --strict (validation, existing CLI)
@@ -45,8 +45,8 @@ MCP (both modern and legacy eras)
 
 Agent Skill (W01-W07 extension)
 ├── W01 (status): okf tool manifest --mode summary
-├── W02 (mutation consent): check holds via --for_path; SHOULD ask user (advisory)
-├── W03 (discovery): --for_path primary mechanism
+├── W02 (mutation consent): check holds via --for-path; SHOULD ask user (advisory)
+├── W03 (discovery): --for-path primary mechanism
 └── W06 (persistence): first okf tool query --memory-check, then explicit MCP write
 ```
 
@@ -73,9 +73,9 @@ Per-concept only. No parent-directory inheritance.
 ### 3.4 Filtering and sorting
 
 - `--governance constraint,hold`: filter by effective governance.
-- **Default sort unchanged** without `--for_path` or `--governance`: existing manifest order.
-- **Sort activates only** with `--for_path` or `--governance`:
-  - `--for_path` without `--governance`: hold → constraint → context, then original order within each level.
+- **Default sort unchanged** without `--for-path` or `--governance`: existing manifest order.
+- **Sort activates only** with `--for-path` or `--governance`:
+  - `--for-path` without `--governance`: hold → constraint → context, then original order within each level.
   - `--governance <filter>`: sort only the filtered levels in hold→constraint→context order, then original order.
 - `for_path` results include `governance_warning: true` when any result has `hold`.
 
@@ -150,7 +150,8 @@ Uses existing `QueryRequest` fields: `Query` (required when memory_check=true), 
 ### 5.3 Candidate source
 
 - **Default: durable types only** (note, event, feedback). Avoids code_file concept pollution.
-- `--types` can explicitly extend to other types (e.g. `--types note,decision`).
+- If user explicitly passes `--type X` (CLI) or `type: "X"` (MCP), candidate set is limited to that single existing type.
+- **No new `--types` flag for query CLI** (current CLI query only has `--type` singular). MCP query reuses existing `type` field (singular); no new `types` schema.
 - Candidate set bounded: max 1000 durable concepts; if exceeded, warning + truncated candidate set.
 
 ### 5.4 BM25 per-call build
@@ -233,24 +234,25 @@ Uses existing `QueryRequest` fields: `Query` (required when memory_check=true), 
 
 ### 6.2 Token estimate definition
 
-- Per-item estimate = `ceil(canonical_json_bytes(item) / 4)`.
-- Canonical JSON: stable field order (alphabetical or struct-defined), no HTML escaping (JSON default), no pretty-print whitespace.
+- Per-item estimate = `ceil(go_encoding_json_bytes(item) / 4)`.
+- Go `encoding/json` default serialization: stable struct field order (struct definition order), **HTML escaping enabled** (Go default: `<`, `>`, `&` escaped as `\u003c`, `\u003e`, `\u0026`). No custom `SetEscapeHTML(false)`.
 - **Budget accumulates item estimates only**; response wrapper/envelope overhead excluded.
 - Response includes `estimated_item_tokens` sum for returned items.
 - Distinct from existing `ManifestItem.EstimatedTokens` which is `file_bytes/4` (source file estimate).
+- Implementation fixture re-measures with identical Go `encoding/json` default encoding; pilot temporary measurement used manual JSON and is marked for re-measurement.
 
 ### 6.3 ID parity guarantee (not Recall@5)
 
 Manifest listing has no query ranking. Therefore:
 - Without `--max-tokens`: summary/hit/full return **identical concept ID sets and order** (100% parity).
-- With `--for_path` filter: all three modes return identical filtered ID sets.
+- With `--for-path` filter: all three modes return identical filtered ID sets.
 - Retrieval Recall not affected by projection mode.
 
 ### 6.4 max_tokens pipeline
 
 **Order**: filter → stable sort → offset → limit → token budget
 
-1. Filter by `--for_path`/`--governance` if specified.
+1. Filter by `--for-path`/`--governance` if specified.
 2. Sort: default order (no new params) OR governance sort (with new params).
 3. Apply `--offset`.
 4. Apply `--limit` (existing).
@@ -281,8 +283,7 @@ Add optional `refs` parameter to existing `okf tool context` (and MCP `okf_conte
 
 - W01: `okf tool manifest --mode summary`.
 - W03: `okf tool manifest --for-path <path> --mode hit`.
-- W04: `okf tool context --refs <okf_id>` for full body of selected concepts.
-- W06: `okf tool query -q <content> --memory-check`, then MCP okf_note.
+- W04: `okf tool context --refs <okf_id>` for full body of selected concepts.- W06: `okf tool query -q <content> --memory-check`, then MCP okf_note.
 
 ## 7. Data model (CustomFields, no Concept changes)
 

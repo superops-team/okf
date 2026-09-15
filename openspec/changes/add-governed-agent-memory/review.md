@@ -123,7 +123,19 @@ All 22 findings documented and fixed. Key: ghost commands, pilot confusion matri
 
 Spec is ready for implementation approval after 4 rounds of review (49 total findings, all fixed). All 39 scenarios testable, all thresholds defined or deferred to golden-set calibration with acceptance gates, all backward compatibility concerns addressed, all entry points verified against current code. No second fact source, no duplicate index, no over-design, no ghost commands, no pseudo-audit.
 
-Key decisions requiring user approval:
+## Independent acceptance review round 5: naming consistency (5 findings, all fixed)
+
+| # | Finding | Fix |
+|---|---|---|
+| N1 | CLI flags mixed hyphen/underscore (`--for_path`, `--max_tokens`, etc.) | All CLI flags unified to hyphen: `--for-path`, `--max-tokens`, `--stale-refs`, `--dup-threshold`, `--memory-check`, `--budget-tokens`, `--refs`. MCP/JSON fields keep underscore: `for_path`, `max_tokens`, `stale_refs`, `dup_threshold`, `memory_check`, `budget_tokens`, `refs`. |
+| N2 | `--types` for query CLI doesn't exist (only `--type` singular) | memory_check candidate types default note/event/feedback; explicit `--type X` limits to single type. No new `--types` flag. MCP reuses existing `type` field (singular). |
+| N3 | tasks matrix S06/S07 used `--for_path` | Fixed to `--for-path`. |
+| N4 | "Canonical JSON: no HTML escaping" wrong (Go encoding/json default DOES HTML escape) | Changed to Go `encoding/json` default serialization: stable struct field order, HTML escaping enabled (Go default). No custom SetEscapeHTML(false). Pilot measurement marked for re-measurement with identical encoding. |
+| N5 | proposal `--max_tokens` in pipeline description | Fixed to `--max-tokens`. |
+
+### Round 5 status: all findings fixed.
+
+## Key decisions requiring user approval:
 1. **CustomFields + pkg/memorymeta** (not Concept struct changes) — AGENTS.md constraint.
 2. **No path-based governance inference** (all default context) — minimal surprise.
 3. **memory_check read-only via okf_query -q --memory-check** (no write blocking, no allow_duplicate, no audit persistence).

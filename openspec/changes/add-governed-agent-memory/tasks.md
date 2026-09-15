@@ -31,7 +31,7 @@ P0–P4 are dependency order only. Completion requires all 39 Scenarios, pkg/mem
 
 ### T1.2 Manifest/Query extensions
 - **Files**: `pkg/manifest/manifest.go`, `pkg/tool/service.go`, `pkg/tool/query.go`, `pkg/mcp/tools.go` (both eras), `cmd/okf/cmd_tool.go`
-- **RED first**: `--for_path` returns matching concepts; `--governance` filters; default order unchanged; governance sort only with new params; hold warning.
+- **RED first**: `--for-path` returns matching concepts; `--governance` filters; default order unchanged; governance sort only with new params; hold warning.
 - **Implement**: for_path, governance params on ManifestRequest/QueryRequest; MCP tool schema updates (modern + legacy); CLI flags on cmdToolManifest/cmdToolQuery.
 - **Tests**: S05–S08, S06; default order regression test.
 - **Scenarios**: S05–S08.
@@ -48,7 +48,7 @@ P0–P4 are dependency order only. Completion requires all 39 Scenarios, pkg/mem
 ### T2.1 Duplicate detection engine
 - **Files**: `pkg/memorymeta/duplicate.go` (new), `pkg/tool/service.go`, `pkg/tool/query.go`
 - **RED first**: BM25 per-call build on bounded durable set (default note,event,feedback), top-10 candidates, Jaccard [0,1] re-rank with complete tokenization, classification no_similar/possible_duplicate, configurable threshold.
-- **Implement**: CheckMemory(content, types, project, tag) MemoryCheckResult; per-call BM25 build (no Service cache); Jaccard tokenizer (Unicode lowercase, code identifiers, Chinese per-char, body truncate 500); deterministic tie-break.
+- **Implement**: CheckMemory(content, type, project, tag) MemoryCheckResult; per-call BM25 build (no Service cache); Jaccard tokenizer (Unicode lowercase, code identifiers, Chinese per-char, body truncate 500); deterministic tie-break. Candidate types default note/event/feedback; explicit --type limits to single type.
 - **Tests**: S20–S23, S27; golden set ≥40 cases.
 - **Scenarios**: S20–S23, S27.
 
@@ -119,8 +119,8 @@ P0–P4 are dependency order only. Completion requires all 39 Scenarios, pkg/mem
 | S03 | explicit governance test | `memorymeta.Governance()` |
 | S04 | unknown value strict/non-strict test | `memorymeta.Validate()` |
 | S05 | default order regression test | `okf tool manifest` |
-| S06 | governance sort activation test | `okf tool manifest --for_path/--governance` |
-| S07 | hold advisory warning test | `okf tool manifest --for_path` |
+| S06 | governance sort activation test | `okf tool manifest --for-path/--governance` |
+| S07 | hold advisory warning test | `okf tool manifest --for-path` |
 | S08 | governance filter test | `okf tool manifest --governance` |
 | S09 | SetGovernance CustomFields test | `memorymeta.SetGovernance()` |
 | S10 | code_refs parse test | `memorymeta.CodeRefs()` |

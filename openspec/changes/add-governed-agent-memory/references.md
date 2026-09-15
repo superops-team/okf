@@ -56,7 +56,7 @@
 
 ### Experiment 4: progressive disclosure token measurement (REAL)
 
-**Method**: Built actual ManifestItem JSON for 329 concepts from `.okf/knowledge/`. Measured JSON output bytes for three projection modes. Token estimate = JSON bytes / 4.
+**Method**: Built ManifestItem-like JSON manually for 329 concepts from `.okf/knowledge/`. Measured JSON output bytes for three projection modes. Token estimate = JSON bytes / 4. **Note**: pilot used manual JSON construction; implementation fixture must re-measure using Go `encoding/json` default serialization (stable struct field order, HTML escaping enabled per Go default) to confirm numbers.
 
 **Result (329 concepts, real measurement)**:
 
@@ -106,6 +106,6 @@
 8. **stale-refs fail-closed**: silent empty would mislead as "no stale refs"; incomplete+warnings is honest.
 9. **No audit trace persistence**: read-only check; client-supplied metadata untrusted, no audit value. Result used per-call.
 10. **context refs added to existing okf_context**: query OR refs; not new tool; uses existing identity resolve for ref→path.
-11. **Token estimate = canonical JSON item bytes/4**: deterministic, measurable; budget items only (no envelope); distinct from file_bytes/4.
+11. **Token estimate = Go encoding/json default serialization bytes/4**: stable struct field order, HTML escaping enabled (Go default); budget items only (no envelope); distinct from file_bytes/4. Implementation fixture re-measures with identical encoding.
 12. **3 governance values only** (constraint/hold/context): no "review"/"deprecated" (latter uses existing status field).
 13. **Pattern bounds**: 16 patterns, 256 bytes, 32 segments, 2 ** operators, each ** max 8 segments — prevents ReDoS/explosion.

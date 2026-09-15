@@ -20,7 +20,7 @@ Optional frontmatter `governance` (constraint|hold|context), stored in CustomFie
 - **Default**: all concepts default to `context`. **No path-based inference** (no `convention/` → constraint). Only explicit values take effect.
 - Unknown values: non-strict → `context` + warning; strict → error.
 - Hold is advisory only: tools return `governance_warning`; OKF server never blocks writes. Agent Skill SHOULD request user confirmation before modifying hold-governed code.
-- Default manifest order unchanged when no new params; governance sort (hold→constraint→context, then original order) activates only with `--for_path` or `--governance`.
+- Default manifest order unchanged when no new params; governance sort (hold→constraint→context, then original order) activates only with `--for-path` or `--governance`.
 
 ### 2. Code-to-knowledge binding (code_refs + for_path)
 
@@ -36,7 +36,7 @@ Extend existing `okf tool query -q <content> --memory-check` with a read-only `m
 
 - **No `allow_duplicate`/override** (zombie when advisory never blocks). **No `possible_conflict`** (cannot infer semantic conflict without LLM; false capability).
 - **No write blocking**: memory_check is read-only. Agent Skill W06 instructs: first check, then explicitly write via MCP `okf_note`/`okf_log`/`okf_feedback` (no CLI for durable writes).
-- Candidate source: durable types only (note/event/feedback) by default; `--types` can extend. Avoids code_file concept pollution.
+- Candidate source: durable types only (note/event/feedback) by default; if user explicitly passes `--type X`, candidate set is limited to that single existing type. No new `--types` flag for query CLI. Avoids code_file concept pollution.
 - BM25: build per-call on bounded durable candidate set (Service has no BM25 cache); budget for 1000 durable concepts. BM25 top-10 candidates → normalized token Jaccard [0,1] threshold.
 - Tokenization: Unicode lowercase, code identifiers (`_` `-`), Chinese per-character, set Jaccard, empty set=0, body truncate 500 chars, deterministic tie-break.
 - Threshold: candidate default 0.20 (pilot-validated on 5 durable seeds: Precision=1.00 Recall=1.00 FPR=0.00, n=10); golden set ≥40 calibrates final default. Acceptance gate: Precision≥0.85, Recall≥0.70, FPR≤0.15.
@@ -49,10 +49,10 @@ Extend `okf tool manifest` with `--mode summary|hit|full`:
 - `hit`: summary + tags, code_refs, status, stale_after
 - `full`: existing full metadata (default, backward compatible)
 
-Real measurement on 329 concepts: full=36,479 tokens, hit=16,311 (−55%), summary=14,337 (−61%). Token estimate = canonical JSON item bytes/4 (not file_bytes/4).
+Real measurement on 329 concepts: full=36,479 tokens, hit=16,311 (−55%), summary=14,337 (−61%). Token estimate = Go `encoding/json` default serialization bytes/4 (stable struct field order, HTML escaping enabled per Go default; implementation fixture re-measures with identical encoding).
 
 - **ID parity**: without `--max-tokens`, summary/hit/full return identical concept ID sets and order.
-- `--max_tokens` pipeline: filter → stable sort → offset → limit → token budget. Returns `next_offset`, `omitted_count` (budget_omitted vs total_remaining distinguished), `truncated`. Budget < first item → `budget_too_small` error with `min_required_tokens` (dynamic, = first eligible item estimate).
+- `--max-tokens` pipeline: filter → stable sort → offset → limit → token budget. Returns `next_offset`, `omitted_count` (budget_omitted vs total_remaining distinguished), `truncated`. Budget < first item → `budget_too_small` error with `min_required_tokens` (dynamic, = first eligible item estimate).
 - **Follow-up for full body**: add `refs` parameter to existing `okf tool context` (query OR refs at least one; resolves stable refs to concept body, subject to budget). This extends existing ContextRequest, not a new tool.
 
 ## Non-goals
@@ -75,7 +75,7 @@ Real measurement on 329 concepts: full=36,479 tokens, hit=16,311 (−55%), summa
 ## Real entry points (verified against current code)
 
 - CLI: `okf tool manifest --for-path <path> --mode summary --max-tokens N`
-- CLI: `okf tool query -q <content> --types note,event --memory-check`
+- CLI: `okf tool query -q <content> --type note --memory-check` (or omit --type for default note/event/feedback candidate set)
 - CLI: `okf tool context -q <query>` or `okf tool context --refs okf_abc...,okf_def...`
 - CLI: `okf lint --strict` (validation)
 - MCP (both eras): `okf_manifest`, `okf_query`, `okf_context` gain optional params; `okf_note`/`okf_log`/`okf_feedback` unchanged (always write).

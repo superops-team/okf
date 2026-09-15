@@ -41,7 +41,7 @@ OKF SHALL support an optional `governance` frontmatter field (constraint|hold|co
 - **THEN** order is hold → constraint → context, then original stable order within each level
 - **WHEN** `okf tool manifest --governance constraint,hold` is called
 - **THEN** only filtered levels are returned, sorted hold → constraint, then original order
-- **AND** without --for_path or --governance, original order is preserved (S05)
+- **AND** without --for-path or --governance, original order is preserved (S05)
 
 ### Scenario S07: Hold is advisory warning only
 - **GIVEN** a hold concept with code_refs matching a path
@@ -156,7 +156,7 @@ OKF SHALL extend `okf tool query -q <content> --memory-check` with a read-only m
 - **THEN** BM25 returns top-10 candidates (built per-call on bounded durable set, raw scores not [0,1])
 - **AND** Jaccard similarity [0,1] is computed on query tokens vs candidate title+first-500-chars-body tokens
 - **AND** classification uses Jaccard threshold, not BM25 raw score
-- **AND** candidate source defaults to durable types (note,event,feedback); --types can extend
+- **AND** candidate source defaults to durable types (note,event,feedback); if user explicitly passes --type X, candidate set is limited to that single type (no new --types flag for query CLI)
 
 ### Scenario S23: No conflict classification
 - **GIVEN** two durable concepts of the same type with similar titles
@@ -234,7 +234,8 @@ OKF SHALL extend `okf tool manifest` with summary/hit/full modes and max_tokens 
 ### Scenario S34: Token estimate uses canonical JSON bytes/4
 - **GIVEN** a manifest response
 - **WHEN** token budget is computed
-- **THEN** per-item estimate = ceil(canonical_json_bytes(item) / 4)
+- **THEN** per-item estimate = ceil(go_encoding_json_default_bytes(item) / 4)
+- **AND** Go encoding/json default serialization is used (stable struct field order, HTML escaping enabled per Go default; no custom SetEscapeHTML)
 - **AND** budget accumulates item estimates only (response wrapper/envelope overhead excluded)
 - **AND** this is distinct from existing ManifestItem.EstimatedTokens which uses file_bytes/4
 
