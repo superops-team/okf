@@ -2,8 +2,9 @@
 
 > Status: implementation complete. Every S01–S38 Scenario maps to a real
 > implementation symbol, an executable test, and a fresh-run command.
-> Only S36 (native Host skills/list/get) is `partial` due to no production Host
-> with native extension support; direct modern protocol fixture is fully passing.
+> S36 is `fully` because its required outcome is the honest
+> `blocked_client_support` status when no production Host exposes native
+> `skills/list/get`; the direct modern fixture and real Codex Resource path pass.
 
 ## Audit metadata
 

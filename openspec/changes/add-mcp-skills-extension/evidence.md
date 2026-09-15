@@ -2,8 +2,8 @@
 
 - Branch: `spec/mcp-skills-extension`
 - Base Spec commit: `f99af86` (approved)
-- Implementation commits: `6380226` (initial), `e4d51d5` (hard gap fixes), see `git log` for subsequent review fixes
-- Evidence commit: this file is committed alongside the implementation; the tree state at verification time is recorded by `git rev-parse HEAD` and `git status --porcelain` (clean)
+- Verified implementation commit: `1f6835e` (includes `6380226` initial implementation and `e4d51d5` first hard-gap fixes)
+- This final evidence correction is documentation-only and does not change the verified implementation tree
 - Toolchain: go1.26.7 linux/amd64
 - CLI version: okf 0.7.0 (library meta 0.4.1)
 - Verification timestamp: 2026-09-16 (fresh after last code edit)
@@ -98,6 +98,13 @@
 
 - Script: `tools/mutants-mcp-skills.sh`
 - All mutants killed; files restored byte-for-byte after each
+
+## Final GAUNTLET (S38)
+- Command: `tools/gauntlet.sh`
+- Result: **PASS** after the last implementation edit
+- Full-repository coverage gate: **69%** (threshold 60%)
+- Included gates: build, vet, gofmt, staticcheck, full tests with race detection, coverage, shuffled test order, mutation tests and real CLI execution
+- Modern MCP E2E, legacy MCP E2E, targeted Skills mutants, benchmarks and real Codex compatibility were also run separately as recorded above
 
 ## Code review findings (post-implementation)
 ### Round 1 (explicit)
