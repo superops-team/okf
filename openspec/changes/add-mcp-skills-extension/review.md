@@ -1,74 +1,96 @@
-# Review: MCP Skills Extension
+# Spec Review: MCP Skills Extension
 
-## Review scope
+## Scope and method
 
-- Proposal, design, S01–S38 and P0–P5 implementation plan.
-- Pinned protocol source: ext-skills commit `d866efdba298b55b8156c7b7aa1bdebc1b625f4c` and SEP-2640.
-- Existing OKF MCP, Agent Integration and project `AGENTS.md` constraints.
-- Local PoC evidence is used only to prove feasibility; it is not treated as completion evidence.
+Two complete review rounds were performed against:
 
-## Overall verdict
+- proposal, design, S01–S38, P0–P5 plan and metadata;
+- current OKF MCP server/tool state model;
+- ext-skills commit `d866efdba298b55b8156c7b7aa1bdebc1b625f4c` and SEP-2640;
+- official MCP `2026-07-28` changelog, versioning, discovery, stdio, Tools, Resources and Prompts specifications;
+- project `AGENTS.md` 19-dimension and SDD/TDD completion rules.
 
-**Approved for TDD implementation after human approval of this Spec.** The design is intentionally limited to one static instructor Skill and extends the current MCP server without a second workflow source or another runtime. All 38 Scenarios have planned automated tests and real entry points. No unresolved design question is required to start RED tests.
+The first committed Spec (`8d72343`) was the review baseline. This file records issues found and corrections actually applied.
 
-## Issues found and corrections applied
+## Final verdict
 
-| ID | Severity | Finding | Correction in current Spec |
+**Pass after material redesign; ready for human approval and then RED tests.**
+
+The original Spec's Skill registry direction was sound, but its base-protocol model was not: it treated modern `2026-07-28` as a newer initialize-based session. The reviewed Spec now implements the minimum complete dual-era boundary, preserves legacy behavior and restricts modern exposure to stateless operations. No unresolved design question blocks TDD.
+
+## Round 1 — protocol facts and explicit correctness
+
+| ID | Severity | Finding | Resolution |
 |---|---|---|---|
-| R01 | High | PoC enabled `skills/list/get` by routing alone, even for a legacy session. Capability negotiation would be decorative. | S04 and T3.1 require `-32601` unless the Skills profile was negotiated. |
-| R02 | High | Exact-string-only logic did not define empty, malformed, older or future revisions. Lexical date comparison would imply unsupported future compatibility. | S03 and Design §3 define a closed supported-revision table and legacy fallback. |
-| R03 | High | PoC constructor panicked on an invalid built-in registry, which is difficult to test and produces weak startup diagnostics. | Design §5 and T2.3 require error-returning construction and startup propagation without partial service. |
-| R04 | High | Existing MCP Resource URIs expose local absolute paths. Rewriting them inside this feature could break persisted clients. | Proposal compatibility decision explicitly preserves them and requires a separate stable-URI migration Spec. |
-| R05 | Medium | Legacy `resources/list` gains one Resource; calling the entire old output byte-identical would be false. | S22/S27 define exact additive compatibility: previous entries/order unchanged, Skill appended, legacy field shape unchanged. |
-| R06 | Medium | Skill frontmatter metadata could become a second fact source. | S09 derives all advertised metadata from final served bytes and compares field-by-field. |
-| R07 | Medium | Prefix-only URI checks could accept query/fragment, encoded traversal, dot segments or backslashes. | S11 enumerates parsed-URI rejection cases and requires property tests. |
-| R08 | Medium | Returning internal slices/maps would let tests or handlers corrupt registry state. | S15 requires defensive copies for List/Get/Read/Resources. |
-| R09 | Medium | Digest verification could be misrepresented as trust verification. | S30–S31 and Design §8 separate Server consistency from Host trust/approval duties. |
-| R10 | Medium | Real Codex Resource reading could be overstated as native SEP-2640 support. | S35–S36 require explicit `Resource compatibility` labeling and `blocked_client_support` for native production Host support. |
-| R11 | Medium | Performance wording initially depended on p95 without a defined measurement tool. | T4.5 defines a persisted benchmark/harness, records ns/op/B/op/allocs and uses a conservative CI bound; bundle-side-effect count is the deterministic gate. |
-| R12 | Low | A generic plugin registry would over-design the first release. | Design §5 fixes one concrete immutable static registry; abstraction waits for a second real Skill. |
-| R13 | Low | Optional directory read, dynamic Skills and nested Skills increase risk without first-release value. | Explicit non-goals and S32 prevent capability advertisement or accidental publication. |
-| R14 | Low | Private cache choice lacked a formal reason. | Proposal and Design tie private scope to project/server context and prohibit claims that cache scope establishes integrity. |
+| R1-01 | Critical | `2026-07-28` removes initialize/session state; original S01–S05 negotiated it through initialize. | Replaced with modern per-request `_meta`, mandatory `server/discover`, direct modern calls and dual-era dispatch. |
+| R1-02 | Critical | Unknown modern versions were silently downgraded to legacy, contrary to required `UnsupportedProtocolVersionError`. | Added `-32022` with requested/supported data; only actual legacy initialize selects legacy. |
+| R1-03 | High | Client extension capability was not required for Skills calls. | Added per-request capability gate and `-32021 MissingRequiredClientCapability`. |
+| R1-04 | High | Original design added `resultType` only to selected list/read results. Modern protocol requires it on every successful result. | Added a common modern result envelope, including tools/call and non-cacheable results. |
+| R1-05 | High | Modern result serverInfo was absent. | Added `_meta.io.modelcontextprotocol/serverInfo` to every modern result. |
+| R1-06 | High | `server/discover`—mandatory for modern servers—was absent. | Added discovery DTO, method, caching fields, capabilities, versions and instructions. |
+| R1-07 | Medium | Modern stdio was described as also using Content-Length normatively. | Newline JSON is normative; Content-Length is an explicit OKF compatibility regression only. |
+| R1-08 | Medium | Empty/malformed modern metadata was grouped with unknown version fallback. | Missing/wrong-type metadata is `-32602`; unsupported non-empty version is `-32022`. |
+| R1-09 | Medium | Fixed p95 requirement was not reproducible with standard Go benchmarks. | Replaced with deterministic zero-I/O/O(1) gates plus recorded ns/op/B/op/allocs; timing threshold requires measured calibration. |
+| R1-10 | Low | Upstream base-protocol sources were not pinned in references. | Added official changelog/versioning/discovery/transport/method pages and superseded assumptions. |
 
-## 19-dimension compliance review
+## Round 2 — hidden state, compatibility and maintainability
 
-| # | Dimension | Result | Evidence / decision |
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| R2-01 | Critical | Existing `okf_load_bundle` mutates in-memory bundle state used by later tools. Exposing all 20 tools modernly violates stateless request semantics. | Modern catalog is exactly the 11 Service-backed Agent tools; legacy keeps all 20. Exact set and exclusion tests added. |
+| R2-02 | High | Existing Prompts instruct use of legacy in-memory-bundle tools. Advertising them modernly would reference unavailable/sessionful operations. | Modern discovery omits Prompts and modern prompt methods are not supported; legacy remains unchanged. |
+| R2-03 | High | Constructor auto-loads BundlePath before knowing the era, causing modern discovery/Skill requests to read knowledge storage. | BundlePath auto-load is deferred until successful legacy initialize; modern startup/operations have zero legacy bundle loads. |
+| R2-04 | High | Existing bundle/Concept Resource catalog varies with mutable bundle state. | Modern Resources contain only the static Skill; legacy keeps prior Resources and appended Skill. |
+| R2-05 | Medium | Interleaving modern and legacy requests in one stdio process could leak mutable legacy state into modern calls. | One era is selected per process; mixed-era request is rejected; restart resets selection. |
+| R2-06 | Medium | URI tests did not explicitly cover userinfo, port, scheme case, empty segment and integer overflow. | S11/S13 and T2.2 now enumerate them. |
+| R2-07 | Medium | The exact 512/16 MiB acceptance boundary was not clearly separated from rejection. | S14 now has explicit accepted and rejected GIVEN blocks. |
+| R2-08 | Medium | Race safety of defensive registry copies was implicit. | S15 requires concurrent read-only calls under the race detector. |
+| R2-09 | Medium | W01–W07 tool parity checked the global inventory but not the modern published subset. | S07/T3.3 require closure against the exact modern 11-tool inventory. |
+| R2-10 | Medium | Discovery initially listed the legacy initialize revision as a valid modern per-request version. | Discovery and `-32022.supported` now list only `2026-07-28`; legacy is documented as initialize fallback. |
+| R2-11 | Medium | MCP serverInfo version was a handler literal and could drift between legacy and modern responses. | T0.3 and S01 require a shared existing version source and cross-era parity test. |
+| R2-12 | Low | Skill/additive Resource behavior could be mistaken for identical catalogs across eras. | S22 explicitly defines legacy prior Resources + Skill versus modern Skill-only Resources. |
+
+## 19-dimension review after fixes
+
+| # | Dimension | Result | Reviewed outcome |
 |---:|---|---|---|
-| 1 | Context logic | Pass | Existing canonical workflow → portable renderer → immutable registry → existing MCP server; no parallel architecture. |
-| 2 | No empty claims | Pass | Every requirement has concrete inputs, outputs, errors and tests. |
-| 3 | No ambiguity | Pass | Versions, URI, TTL, cache scope, method gating, limits, error codes and additive legacy behavior are fixed. |
-| 4 | Model-readable semantics | Pass | Server, Host, Resource inspection and Skill activation are explicitly distinguished. |
-| 5 | SDD/TDD fit | Pass | P0 begins with wire/negotiation RED tests; each task lists RED fixtures before implementation. |
-| 6 | Minimal implementation | Pass | Two existing packages plus one focused registry; no command, daemon or plugin framework. |
-| 7 | Backward compatibility | Pass with declared additive change | Legacy shapes preserved; one Resource is appended; existing URI migration deferred. |
-| 8 | Existing behavior impact | Pass | All 20 Tools, Prompts, bundle reads, durable restart behavior and client adapters have regression gates. |
-| 9 | Runtime failure risk | Pass | Startup fail-closed, params/cursor errors, post-error recovery, route gating and stderr redaction are covered. |
-| 10 | Feasibility | Pass | PoC passed full build/vet/test, both stdio framings, legacy E2E and real Codex Resource use. |
-| 11 | Layered plan/tests/schedule | Pass | P0–P5, 5.5 person-days, exit criteria and S01–S38 matrix are explicit. |
-| 12 | Extensibility | Pass | Static registry can later be generalized, but current code does not pay that abstraction cost. |
-| 13 | Avoid over-design | Pass | No directory read, dynamic/nested Skill, HTTP, RBAC, signature or archive. |
-| 14 | Small/high-value change | Pass | Reuses Resources, YAML dependency, MCP entry point and canonical workflow. |
-| 15 | Continuous improvement | Pass | Eliminates metadata duplication, adds typed session profile and defensive immutable API. |
-| 16 | Architectural consistency | Pass | Existing `pkg/agentconfig` owns workflow rendering; `pkg/mcp` owns transport and registry. |
-| 17 | Every requirement wired/tested | Pass in plan | Matrix contains an automated test and real entry point for every Scenario. Completion gate prevents unchecked boxes. |
-| 18 | Priorities are dependencies only | Pass | Completion contract explicitly requires P0–P5. |
-| 19 | Spec/implementation consistency | Pass in plan | T5.2 mandates fresh `conformance.md`, no unexplained partial/gap, client-support blockers named honestly. |
+| 1 | Context logic | Pass | Dual-era base contract precedes Skills extension; no incompatible session assumptions remain. |
+| 2 | No empty claims | Pass | Every behavior has wire fields, error codes or observable side effects. |
+| 3 | No ambiguity | Pass | Era selection, modern metadata, catalogs, method support, URI rules and boundaries are fixed. |
+| 4 | Semantic precision | Pass | Modern/legacy, inspection/activation and consistency/trust are distinct terms. |
+| 5 | SDD/TDD fit | Pass | P0 starts with wire RED tests; superseded PoC cannot count as GREEN. |
+| 6 | Minimal implementation | Pass | Minimum modern base boundary plus Skills; no HTTP/subscriptions/MRTR/plugin framework. |
+| 7 | Backward compatibility | Pass with declared additive Resource | Legacy 20 tools, Prompts, ping and shapes preserved. |
+| 8 | Existing behavior impact | Pass | Exact per-era catalogs and regression suites are specified. |
+| 9 | Runtime risks | Pass | Invalid metadata, mixed era, state leakage, URI escape, startup failure and post-error recovery are covered. |
+| 10 | Feasibility | Pass | Registry/Resource feasibility proven; modern redesign uses official protocol facts and existing Service tools. |
+| 11 | Layered plan/test/schedule | Pass | P0–P5 updated to 7.0 person-days with exit criteria. |
+| 12 | Extensibility | Pass | Modern envelope/era boundary reusable; registry remains concrete until a second Skill. |
+| 13 | Avoid over-design | Pass | No Streamable HTTP, dynamic/nested Skills, directory reads, signatures or Host cache implementation. |
+| 14 | Small/high-value | Pass | 11 existing stateless tools reused; nine stateful tools are not rewritten. |
+| 15 | Continuous improvement | Pass | Removes metadata duplication and makes hidden legacy state explicit. |
+| 16 | Architectural consistency | Pass | Service-backed tools define modern path; legacy ToolRegistry state remains isolated. |
+| 17 | Every requirement wired/tested | Pass in plan | 38/38 matrix includes automated and real entry points. |
+| 18 | Priorities are dependencies only | Pass | Completion requires P0–P5 and both eras. |
+| 19 | Spec/implementation consistency | Pass in plan | Fresh conformance and evidence required after last edit. |
 
-## SDD/TDD execution obstacles and mitigation
+## TDD execution constraints
 
-1. **New worktree lacks gitignored ONNX assets**: MCP package build can fail before a test reaches new code. The implementation worktree must either reuse/copy the same local assets or rebuild them by the repository-supported mechanism; evidence must disclose this environment step.
-2. **Protocol goldens can become brittle**: compare canonical JSON structures, not encoder key order. Keep one raw-wire fixture to guard omission/presence semantics.
-3. **Timing tests can flake**: deterministic gates are zero bundle/embedding/index calls and bounded allocations. Performance numbers are recorded from a benchmark; the CI ceiling is deliberately loose.
-4. **Real Codex requires a live model channel**: direct protocol E2E remains mandatory. Codex is an additional compatibility proof and may be marked blocked only for external authentication/client availability, never as a replacement for a failing server test.
-5. **Experimental upstream protocol may change**: pin the reviewed commit in metadata/release notes; upgrading the protocol requires a new Spec amendment and refreshed goldens.
+1. Modern result-envelope tests must be written before handler adaptation; otherwise partial modern support can appear green.
+2. Tool catalog splitting must use one registration source with explicit era filtering, not two copied tool-definition lists.
+3. New worktrees may lack gitignored ONNX assets; setup must be disclosed and rebuilt/copied before the baseline run.
+4. Modern E2E uses normative newline framing. Content-Length is a separate compatibility suite and cannot substitute for it.
+5. Codex Resource compatibility remains supplementary. Direct modern protocol E2E cannot be marked blocked.
+6. Any semantic deviation from the reviewed S01–S38 requires a visible Spec amendment before changing test assertions.
 
-## Residual risks accepted for this release
+## Residual risks accepted
 
-- Native production Host interoperability may remain `blocked_client_support`; the direct protocol fixture proves Server conformance and real Codex proves ordinary Resource compatibility.
-- Existing absolute-path `okf://` Resources remain. This is known technical debt isolated from the new `skill://` namespace.
-- SHA-256 is unsigned and not an authenticity mechanism.
-- Hosts may misuse Resource reads as activation; OKF cannot enforce Host behavior and therefore documents the boundary precisely.
+- Native production Host Skills interoperability may be `blocked_client_support`; server conformance is still mandatory through direct modern protocol fixtures.
+- Existing absolute-path legacy `okf://` URIs remain technical debt.
+- Modern clients receive only the 11 stateless Agent tools and no Prompts; this is intentional protocol correctness, not a missing phase.
+- One-era-per-process is more restrictive than possible dual-era concurrency but avoids a broad state refactor outside this change.
+- SHA-256 remains unsigned and non-authoritative.
 
 ## Approval gate
 
-Implementation must not begin until the user approves this exact Spec set. After approval, any semantic change to S01–S38 requires an explicit Spec amendment before changing assertions or implementation.
+Implementation may start only after user approval of this revised dual-era Spec. Approval of the earlier `8d72343` content, if any, would not cover this materially revised contract.

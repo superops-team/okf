@@ -1,10 +1,10 @@
 id: add-mcp-skills-extension
-name: MCP Skills Extension
-summary: Publish the canonical OKF agent workflow as a static MCP Agent Skill through SEP-2640 while retaining legacy MCP and project-scoped agent adapters
+name: MCP Skills Extension and Dual-Era Compatibility
+summary: Publish the canonical OKF workflow as a static SEP-2640 Skill while adding the minimum modern 2026-07-28 stateless protocol boundary and retaining legacy MCP clients
 owner: okf-team
 status: proposed
 created: 2026-09-14
-updated: 2026-09-14
+updated: 2026-09-15
 protocol_sources:
   ext_skills_repository: https://github.com/modelcontextprotocol/ext-skills
   ext_skills_commit: d866efdba298b55b8156c7b7aa1bdebc1b625f4c
@@ -20,6 +20,6 @@ requires:
   - go >= 1.26.0
 impacts:
   - pkg/agentconfig: portable Agent Skill rendering from canonical W01-W07 clauses
-  - pkg/mcp: protocol negotiation, Skills data model, static Skill registry, methods and Resource registry
+  - pkg/mcp: dual-era dispatch, modern discovery and metadata, Skills data model, static Skill registry, methods, era-specific tool catalogs and Resource registry
   - cmd/okf: unchanged public command surface; existing mcp command serves the extension
   - tests: unit, protocol-shape, adversarial, stdio framing, legacy MCP and real Codex compatibility

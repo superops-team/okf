@@ -1,215 +1,226 @@
-# Design: MCP Skills Extension
+# Design: MCP Skills Extension and Dual-Era MCP Compatibility
 
 ## 1. Design principles
 
-1. **One workflow source**: `CanonicalClauses()` remains the semantic fact source. Renderers are projections, not independent workflow documents.
-2. **One MCP server entry**: extend `okf mcp`; add no daemon or sidecar.
-3. **Static first**: one immutable instructor Skill, one file, one digest. Avoid generic plugin discovery until a real second Skill requires it.
-4. **Negotiated behavior**: response shapes and methods depend on explicit session negotiation, not on request method alone.
-5. **Fail closed**: an invalid built-in Skill prevents server construction/startup; it is never partially advertised.
-6. **Backward compatible by construction**: legacy structs/JSON remain unchanged unless a field is explicitly emitted only for the new revision.
-7. **Server/Host boundary is explicit**: OKF serves bytes and consistent metadata; the Host owns trust, activation and execution policy.
+1. **Protocol facts before convenience**: modern `2026-07-28` behavior follows the modern stateless base protocol; it is not modeled as a newer legacy session.
+2. **One workflow source**: `CanonicalClauses()` remains the W01–W07 fact source.
+3. **One server entry**: extend `okf mcp`; no daemon or sidecar.
+4. **Static first**: one immutable instructor Skill and one file.
+5. **Per-request modern validation**: modern version/capabilities/identity come from each request `_meta`.
+6. **Fail closed**: invalid registry, version, capability or URI never yields partial Skill data.
+7. **Backward compatible by explicit era**: legacy clients keep the current wire path; modern responses use modern types.
+8. **Server/Host boundary is explicit**: OKF provides bytes and consistent metadata; the Host owns activation, trust and execution policy.
 
 ## 2. Architecture
 
 ```text
-pkg/agentconfig
-  CanonicalClauses() ──> RenderAgentSkill() ──┐
-  client wrappers ──> Cursor / Claude / Codex │
-                                               v
-pkg/mcp/skills.go
-  parse frontmatter -> validate URI/manifest -> immutable SkillRegistry
-       |                         |
-       |                         +-> sha256 + size + limits
-       v
-pkg/mcp/server.go
-  initialize -> negotiated SessionProfile
-       |              |
-       |              +-> capabilities.extensions
-       +-> skills/list / skills/get
-       +-> resources/list / resources/read compatibility
-       +-> existing tools/prompts unchanged
+stdio JSON-RPC line
+        |
+        v
+  classify opening/request era
+   |                     |
+legacy initialize     modern _meta
+   |                     |
+legacy handlers      validate version/capabilities
+                         |
+                   server/discover + modern handlers
+                         |
+         +---------------+----------------+
+         |               |                |
+   existing tools   resources/prompts   skills/list|get
+                                          |
+pkg/agentconfig CanonicalClauses -> RenderAgentSkill
+                                          |
+                           immutable SkillRegistry
 ```
 
-No knowledge bundle, embedding model, vector index or filesystem scan is involved in Skill construction.
+Content-Length input/output remains an OKF backward-compatibility framing extension. New modern conformance fixtures use newline-delimited JSON, the normative modern stdio framing.
 
-## 3. Session protocol profile
+## 3. Dual-era dispatch
 
-Introduce a closed `SessionProfile` chosen by an explicit table:
+### 3.1 Legacy era
 
-| Client requested revision | Server response revision | Skills extension | Cacheable list/read shape |
-|---|---|---:|---:|
-| empty, malformed or unsupported older/newer revision | legacy `2024-11-05` compatibility profile | no | no |
-| exact supported Skills revision `2026-07-28` | `2026-07-28` | yes | yes |
+An `initialize` opening selects legacy semantics for the process. Only after this selection may the server auto-load `ServerConfig.BundlePath` into the legacy in-memory ToolRegistry. This preserves:
 
-Rationale: the server currently supports two known schemas. Date string comparison is forbidden because it implies unimplemented compatibility with future base revisions. A future revision must be added to the table with tests.
+- protocol `2024-11-05`;
+- existing capabilities and instructions;
+- legacy response/result shapes;
+- legacy `notifications/initialized`, `notifications/cancelled` and `ping` behavior.
 
-Before successful initialize, the session uses the legacy profile. Re-initialization replaces the profile atomically for subsequent messages. This stdio server processes messages serially, so no additional lock is required.
+Modern methods are not exposed under legacy semantics. An unsupported requested legacy version is handled according to the existing legacy compatibility contract and is covered by regression tests; this change does not claim support for every pre-2026 revision.
 
-`skills/list` and `skills/get` are recognized only when the profile enables the extension; otherwise they return `-32601 Method not found`. This makes capability negotiation effective rather than decorative.
+### 3.2 Modern era
 
-## 4. Portable Agent Skill rendering
+Modern requests carry a `_meta` object inside `params`:
 
-`RenderAgentSkill()` outputs:
+- `io.modelcontextprotocol/protocolVersion`: required exact string `2026-07-28`;
+- `io.modelcontextprotocol/clientCapabilities`: required JSON object;
+- `io.modelcontextprotocol/clientInfo`: SHOULD be present; omission is accepted but produces an empty display identity.
 
-- Agent Skills YAML frontmatter with `name` and `description`;
-- a short heading and explanation;
-- exactly one rendering of each W01–W07 canonical clause;
-- only registered OKF tool names.
+There is no modern initialize state. Each request is validated independently. The server SHALL NOT remember client capabilities from one modern request and apply them to another. Server construction and modern opening SHALL NOT auto-load `BundlePath`; modern Agent tools resolve configured repository knowledge within each Service operation.
 
-It excludes:
+Unsupported versions return error `-32022` with:
 
-- client ownership markers;
-- project file installation/removal instructions;
-- secrets, tokens or absolute paths;
-- executable hooks, scripts and `allowed-tools`.
+```json
+{"supported":["2026-07-28"],"requested":"..."}
+```
 
-`RenderClaudeSkill()` continues to retain its existing ownership wrapper and calls the same canonical body renderer. Cursor and Codex projections continue unchanged.
+Missing required modern metadata returns `-32602`. Missing required extension capability for a Skills method returns `-32021` with the required extension identifier in error data.
 
-## 5. Immutable Skill registry
+### 3.3 Opening ambiguity and coexistence
 
-The first implementation uses a concrete immutable `SkillRegistry`, not a plugin interface.
+- `server/discover` with valid modern `_meta` identifies a modern request.
+- Any other request with valid modern `_meta` is processed directly as modern; discovery is optional.
+- An actual `initialize` request selects legacy behavior.
+- A request that is neither a valid modern envelope nor an initialize request is rejected; it is not guessed into an era.
+- Once a stdio process has successfully entered legacy mode, modern requests are rejected to avoid sharing legacy mutable session assumptions in one process. Modern mode is stateless but the process-level era choice keeps current OKF ToolRegistry bundle state semantics deterministic. Mixed-era parallel service is deferred until tool state is made explicitly request-scoped.
 
-Construction algorithm:
+This is a deliberate, documented subset of the dual-era permission to serve both eras concurrently: OKF serves either era per stdio process, not both interleaved in one process.
 
-1. render `SKILL.md` bytes once;
-2. parse YAML frontmatter verbatim into JSON-compatible data;
-3. create the single Resource at `skill://okf/SKILL.md`;
-4. compute SHA-256 over raw bytes and byte length;
-5. validate the complete entry/content set;
-6. freeze internal byte copies for the server lifetime.
+## 4. Modern `server/discover`
 
-Validation rules:
+The result contains:
 
-- URI parses successfully and scheme is `skill`;
-- URI explicitly ends in `/SKILL.md`;
-- final skill-path segment equals frontmatter `name`;
-- frontmatter has non-empty `name` and `description`;
-- manifest contains 1–512 unique Resources;
-- `SKILL.md` appears exactly once;
-- every Resource is inside the same `skill://okf/` subtree;
-- no `.`/`..`, encoded traversal, backslash path or query/fragment is accepted;
-- every manifest URI has exactly one readable byte sequence and no unlisted content exists;
-- digest format and value match raw bytes;
-- size matches raw byte length;
-- total advertised bytes do not exceed 16 MiB;
-- parsed frontmatter from the served `SKILL.md` equals the advertised object field-by-field.
+- `resultType: complete`;
+- `supportedVersions`: `["2026-07-28"]`; legacy `2024-11-05` is intentionally absent because it is not valid per-request `_meta` and is reached through initialize fallback;
+- modern capabilities: 11 service-backed Agent Tools, the static Skill Resource and `extensions.io.modelcontextprotocol/skills: {}`; Prompts are intentionally omitted;
+- instructions including `skill://okf/SKILL.md`;
+- `_meta.io.modelcontextprotocol/serverInfo` with existing server name/version;
+- `ttlMs: 300000`, `cacheScope: private`.
 
-Construction returns an error. `NewServer` propagates invalid built-in registry construction rather than panicking, so startup fails with an actionable error and test injection remains possible.
+`serverInfo` is display/debug metadata only and is not used for authorization or origin identity decisions.
 
-All registry reads return defensive copies. `List` and `Get` also clone nested maps/slices so callers cannot mutate server state.
+## 5. Portable Agent Skill
 
-## 6. MCP methods and result shapes
+`RenderAgentSkill()` produces minimum Agent Skills frontmatter, a short heading and exactly one rendering of W01–W07. It references only registered tools and excludes client ownership markers, installation text, secrets, hooks, scripts and `allowed-tools`.
 
-### `skills/list`
+Existing Claude/Cursor/Codex projections retain their wrappers and reuse the canonical body renderer.
 
-- requires negotiated Skills profile;
-- accepts an optional empty cursor;
-- current single-page registry rejects any non-empty cursor with `-32602`;
-- returns one atomic Skill entry, `resultType=complete`, no `nextCursor`, TTL 300000 ms, scope private.
+## 6. Immutable Skill registry
 
-### `skills/get`
+Construction:
 
-- requires negotiated Skills profile;
-- requires URI equal to the served `SKILL.md`;
-- unknown, directory or supporting-file URI returns `-32602`;
-- returns an entry identical in shape and meaning to `skills/list`.
+1. render bytes once;
+2. parse all YAML frontmatter fields into JSON-compatible values;
+3. create `skill://okf/SKILL.md`;
+4. compute lowercase SHA-256 and raw byte length;
+5. validate entry/content equality and limits;
+6. store immutable bytes and return defensive copies.
 
-### `resources/read`
+URI validation SHALL use parsed and canonicalized components, not a string prefix:
 
-- remains the only content-read path;
-- returns exact `SKILL.md` text for `skill://okf/SKILL.md`;
-- unknown Skill Resource returns `-32602` and is not delegated to bundle resolution;
-- new profile adds CacheableResult fields; legacy profile preserves the legacy result shape.
+- exact `skill` scheme and lowercase canonical scheme;
+- authority/path combine to the skill path whose final directory segment is `okf`;
+- required terminal path `SKILL.md`;
+- no userinfo, port, query, fragment, empty/`.`/`..` segment, backslash, percent-encoded slash/backslash/dot traversal or non-canonical equivalent;
+- every supporting URI, if support is later added, remains below the canonical Skill root.
 
-### `resources/list`
+Manifest constraints:
 
-A Resource for the Skill is appended after existing resources and populated from parsed frontmatter. For deterministic discovery, Resource order is:
+- 1–512 unique entries;
+- SKILL.md exactly once;
+- manifest URI set equals readable-content URI set;
+- digest string and value match;
+- size matches;
+- sum size ≤16,777,216 bytes without integer overflow;
+- parsed served frontmatter deep-equals advertised frontmatter.
 
-1. pre-existing bundle and Concept Resources in their current order;
-2. published Skill Resources sorted by URI.
+Construction returns an error; server startup propagates it without panic or partial service.
 
-This is additive compatibility. Existing URI strings are preserved in this change.
+## 7. Modern core surface and result envelope
 
-### Other list methods
+The modern Tools catalog contains exactly these 11 service-backed operations, sorted by name: `okf_ask`, `okf_context`, `okf_feedback`, `okf_init`, `okf_log`, `okf_manifest`, `okf_note`, `okf_query`, `okf_refresh`, `okf_resolve`, `okf_status`. They resolve the repository from immutable server startup configuration and explicit arguments. The nine legacy tools that depend on mutable `SetBundle`/`GetBundle` state—including `okf_load_bundle`—are omitted from modern discovery and rejected if called.
 
-For the Skills-compatible base revision, existing `tools/list`, `resources/list` and `prompts/list` include required CacheableResult fields. Legacy responses omit them. Tool call and prompt-get payloads remain unchanged.
+Modern Resources contain the static OKF Skill only. Modern Prompts are not advertised because the current prompts direct callers to legacy bundle-state tools. Modern `ping` is not implemented.
 
-## 7. Error contract
+All successful modern results include `resultType: complete`, not only list operations. Existing method-specific fields remain.
 
-| Condition | JSON-RPC code | Stable message category |
+Every modern result includes:
+
+```json
+"_meta": {
+  "io.modelcontextprotocol/serverInfo": {
+    "name": "okf-mcp-server",
+    "version": "<single version source>"
+  }
+}
+```
+
+CacheableResult additionally applies to:
+
+- `server/discover`;
+- `tools/list`;
+- `prompts/list`;
+- `resources/list`;
+- `resources/read`;
+- `skills/list`;
+- `skills/get`.
+
+These receive `ttlMs: 300000` and `cacheScope: private`. Non-cacheable results such as `tools/call` and `prompts/get` receive `resultType` and result `_meta`, but no TTL/scope.
+
+Errors do not contain success result fields.
+
+## 8. Skills methods
+
+`skills/list` and `skills/get` require:
+
+1. modern version metadata;
+2. client capabilities declaring `extensions.io.modelcontextprotocol/skills`.
+
+`skills/list` accepts an omitted or empty cursor and rejects non-empty cursors with `-32602`. `skills/get` accepts only the exact entry URI and returns `-32602` for unknown/directory/supporting-file URIs. List and Get Skill objects deep-equal.
+
+The server declares `directoryRead=false` by using an empty extension settings object and does not route `resources/directory/read`.
+
+## 9. Resources compatibility
+
+`skill://okf/SKILL.md` is appended to `resources/list` in both eras and can be read in both eras. Name/description come from parsed frontmatter.
+
+Skill namespace dispatch happens before bundle URI resolution. Any unknown `skill:` URI returns `-32602` without bundle or filesystem fallback.
+
+In the modern era, Resource results carry modern result fields. In the legacy era, prior result shape is retained. Existing path-bearing `okf://` URIs are unchanged.
+
+## 10. Security boundary
+
+OKF guarantees immutable process-lifetime Skill bytes, exact manifest consistency, URI confinement, count/size bounds, no executable/dynamic/nested content and no materialization.
+
+The Host remains responsible for origin labeling using a host-assigned server identity, treating content as untrusted, approval before activation/execution, permission gating, content-bound approval/reapproval, verification on read, cross-server read controls and isolated caching.
+
+## 11. Error contract
+
+| Condition | Code | Required data/category |
 |---|---:|---|
-| Skills method without negotiated capability | -32601 | method not found |
-| malformed params | -32602 | invalid params |
-| non-empty/unknown list cursor | -32602 | unknown skills cursor |
-| unknown Skill URI | -32602 | skill not served |
-| unknown Skill Resource | -32602 | resource not served |
-| invalid built-in registry at startup | process/startup error | invalid built-in skill |
-| unexpected registry/runtime failure | -32603 | internal error |
+| unsupported modern version | -32022 | `supported`, `requested` |
+| Skills capability missing | -32021 | required extension identifier |
+| malformed/missing modern metadata | -32602 | invalid request metadata |
+| non-empty list cursor | -32602 | unknown skills cursor |
+| unknown Skill/Resource URI | -32602 | not served, no local path |
+| method not implemented in selected era | -32601 | method not found |
+| invalid built-in registry | startup error | invalid built-in skill |
+| unexpected runtime failure | -32603 | internal error |
 
-Messages must not expose credentials, host home paths or Skill body content.
+## 12. Testing strategy
 
-## 8. Security model
+- dual-era wire goldens for discovery, modern `_meta`, modern result envelopes and unchanged legacy shapes;
+- direct modern calls without discovery;
+- unsupported version and missing capability errors;
+- actual initialize legacy path and modern rejection of mixed-era interleaving;
+- registry validation, defensive copy and no-side-effect tests;
+- newline-delimited modern E2E; separate Content-Length compatibility E2E;
+- existing legacy MCP E2E;
+- real Codex Resource compatibility;
+- race/shuffle and persisted mutants.
 
-OKF Server guarantees:
+## 13. Performance and maintainability
 
-- immutable static content for a process lifetime;
-- complete manifest, exact bytes, SHA-256 and byte size consistency;
-- Skill-root URI confinement;
-- bounded resource count and bytes;
-- no filesystem materialization, script execution or permission grant;
-- no dynamic/nested Skill in this release.
+Deterministic gates:
 
-The MCP Host remains responsible for:
+- zero knowledge filesystem, embedding and vector calls for Skill/discovery operations;
+- registry built once per server process;
+- benchmark reports ns/op, B/op and allocs/op;
+- list/get/read latency is recorded, with a conservative CI ceiling only after measuring the target CI baseline.
 
-- tagging the originating server with a host-assigned identity;
-- treating Skill text as untrusted model input;
-- explicit user approval before activation or execution;
-- ignoring/approval-gating `allowed-tools` and hooks;
-- binding cached approvals to `(server identity, skill URI, complete resources digest set)`;
-- re-approval when the resource set changes;
-- digest/size/frontmatter verification on read;
-- origin-scoped reads and cross-server approval;
-- isolated cache outside filesystem Skill discovery.
+The prior fixed “p95 <1 ms” requirement is removed because Go benchmark output does not provide p95 without a custom harness and a universal wall-clock threshold would be environment-dependent. The actionable budget is O(1) in bundle size with bounded copies and zero knowledge-runtime I/O.
 
-The release documentation must not say that OKF “installs” or “activates” a remote Skill, or that digest matching establishes trust.
+## 14. Rollout and rollback
 
-## 9. Compatibility strategy
-
-Three paths coexist:
-
-1. **Native extension path**: extension-capable hosts use capability negotiation plus `skills/list/get` and `resources/read`.
-2. **Ordinary Resource path**: resource-capable hosts discover/read `skill://okf/SKILL.md`; this is inspection/context, not protocol-defined activation.
-3. **Project adapter path**: existing `okf agent` writes managed project configuration for Cursor/Claude Code/Codex.
-
-No path silently replaces another. This allows incremental client adoption without breaking existing integrations.
-
-## 10. Testing strategy
-
-- pure registry tests for grammar, manifest, cloning, limits and mismatch errors;
-- protocol tests for negotiation, route gating, exact legacy/new JSON shapes, cursors and errors;
-- parity tests that W01–W07 and registered tools match all client/portable renderers;
-- stdio E2E over newline and Content-Length framing;
-- existing `test_mcp.py` regression;
-- real Codex test for ordinary Resource discovery/read and no mutation;
-- native extension client fixture that directly sends `skills/list/get` and verifies bytes/digest;
-- race and shuffled test suite;
-- persisted manual mutants for digest bypass, manifest incompleteness, route-gating bypass and client-wrapper leakage.
-
-## 11. Performance budgets
-
-Because one 1–2 KiB static Skill is built once:
-
-- registry construction: <5 ms in benchmark environment;
-- `skills/list`, `skills/get`, Resource read: p95 <1 ms in-process over 10,000 operations;
-- allocations: bounded by defensive output copies and independent of bundle size;
-- no filesystem, bundle, embedding or vector access during Skill operations.
-
-Budgets are enforced by Go benchmarks with `ReportAllocs` and by injected spies for forbidden subsystems. Wall-clock CI gating uses a conservative 20 ms operation threshold to avoid noisy failures; benchmark results are recorded, not overfitted.
-
-## 12. Rollout and rollback
-
-- release as an additive minor version feature marked experimental;
-- extension is always available when a supported new revision is negotiated; no redundant feature flag;
-- rollback is code rollback: legacy clients remain usable throughout;
-- Hosts can ignore the extension and continue using ordinary Tools/Resources or existing project adapters.
+Release as an experimental additive minor-version feature. Modern support is advertised only through discovery/modern metadata. Legacy clients remain usable. Rollback removes the modern/Skills paths without changing stored knowledge or project Agent configuration.
