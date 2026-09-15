@@ -135,6 +135,38 @@ func TestModernUnsupportedVersion(t *testing.T) {
 	if int(err["code"].(float64)) != -32022 {
 		t.Errorf("expected -32022, got %v", err["code"])
 	}
+	// S03: error data must contain requested and supported versions
+	data, ok := err["data"].(map[string]any)
+	if !ok {
+		t.Fatal("expected error data")
+	}
+	if data["requested"] != "2024-11-05" {
+		t.Errorf("expected requested=2024-11-05, got %v", data["requested"])
+	}
+	supported, ok := data["supported"].([]any)
+	if !ok || len(supported) != 1 || supported[0] != "2026-07-28" {
+		t.Errorf("expected supported=[2026-07-28], got %v", data["supported"])
+	}
+}
+
+func TestModernMissingCapabilityHasData(t *testing.T) {
+	s := newTestServer(t)
+	s.feed(`{"jsonrpc":"2.0","id":1,"method":"skills/list","params":` + modernMeta() + `}`)
+	resp := s.lastResponse()
+	err, ok := resp["error"].(map[string]any)
+	if !ok {
+		t.Fatal("expected error")
+	}
+	if int(err["code"].(float64)) != -32021 {
+		t.Errorf("expected -32021, got %v", err["code"])
+	}
+	data, ok := err["data"].(map[string]any)
+	if !ok {
+		t.Fatal("expected error data")
+	}
+	if data["requiredCapability"] != "io.modelcontextprotocol/skills" {
+		t.Errorf("expected requiredCapability, got %v", data["requiredCapability"])
+	}
 }
 
 func TestModernSkillsRequireCapability(t *testing.T) {

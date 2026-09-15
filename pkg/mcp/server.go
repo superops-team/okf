@@ -293,7 +293,11 @@ func (s *Server) handleModernMessage(method string, id json.RawMessage, params j
 		} else {
 			rpErr = &RPCError{Code: InvalidParamsCode, Message: err.Error()}
 		}
-		s.sendError(id, rpErr.Code, rpErr.Message)
+		if rpErr.Data != nil {
+			s.sendErrorWithData(id, rpErr.Code, rpErr.Message, rpErr.Data)
+		} else {
+			s.sendError(id, rpErr.Code, rpErr.Message)
+		}
 		return
 	}
 
@@ -545,6 +549,16 @@ func (s *Server) sendResponse(id json.RawMessage, result interface{}) {
 
 func (s *Server) sendError(id json.RawMessage, code int, message string) {
 	resp := NewErrorResponse(id, code, message)
+	s.writeMessage(resp)
+}
+
+// sendErrorWithData sends an error response with structured data (S03/S04).
+func (s *Server) sendErrorWithData(id json.RawMessage, code int, message string, data any) {
+	resp := &Response{
+		JSONRPC: JSONRPCVersion,
+		ID:      id,
+		Error:   &RPCError{Code: code, Message: message, Data: data},
+	}
 	s.writeMessage(resp)
 }
 

@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"sync"
 	"testing"
@@ -34,6 +36,16 @@ func TestSkillRegistryDigest(t *testing.T) {
 	}
 	if len(d) != 7+64 { // "sha256:" + 64 hex
 		t.Errorf("digest length wrong: %d", len(d))
+	}
+	// Verify digest matches actual content
+	content, err := r.Read("skill://okf/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualHash := sha256.Sum256([]byte(content.Text))
+	expected := "sha256:" + hex.EncodeToString(actualHash[:])
+	if d != expected {
+		t.Errorf("digest mismatch: got %s, expected %s", d, expected)
 	}
 }
 
@@ -134,6 +146,9 @@ func TestValidateSkillURI(t *testing.T) {
 		{"dotdot segment", "skill://okf/../SKILL.md", true},
 		{"missing SKILL.md", "skill://okf/OTHER.md", true},
 		{"wrong host", "skill://other/SKILL.md", true},
+		{"encoded dot traversal", "skill://okf/%2e%2e/SKILL.md", true},
+		{"encoded slash traversal", "skill://okf/..%2fSKILL.md", true},
+		{"encoded backslash", "skill://okf/%5cSKILL.md", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

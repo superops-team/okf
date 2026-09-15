@@ -144,7 +144,13 @@ okf mcp --repo /your/repo --dir .okf/knowledge
 
 ### Agent-facing MCP tools
 
-The MCP server exposes the repository knowledge service through `okf_status`, `okf_init`, `okf_refresh`, `okf_query`, and `okf_context`. Durable knowledge capture is available through `okf_note`, `okf_log`, and `okf_feedback`; `okf_ask` queries only those durable note/event/feedback concepts. Stable-ref resolution and metadata discovery are available through `okf_resolve` and `okf_manifest` (see [Stable Identity, Manifest & Agent Discovery](#stable-identity-manifest--agent-discovery)). Existing bundle/list/get/search/lint/document-import tools remain available.
+The MCP server supports **dual protocol eras** from the same `okf mcp` entry point:
+- **Legacy `2024-11-05`**: initialize-based, 20 tools, Prompts, Resources, ping — unchanged.
+- **Modern `2026-07-28`**: stateless, per-request `_meta` validation, `server/discover`, `resultType: complete` + serverInfo `_meta` on all success responses. One era per stdio process; mixed-era requests rejected.
+
+The modern era exposes exactly 11 service-backed tools: `okf_status`, `okf_init`, `okf_refresh`, `okf_query`, `okf_context`, `okf_note`, `okf_log`, `okf_feedback`, `okf_ask`, `okf_resolve`, `okf_manifest`. Legacy bundle-state tools (`okf_load_bundle`, `okf_search`, etc.) are not available in the modern era.
+
+A **portable Agent Skill** (`skill://okf/SKILL.md`) renders the canonical W01–W07 workflow. It is available as a Resource in both eras and via `skills/list`/`skills/get` in the modern era (client capability gate). The immutable registry provides SHA-256 digest, size validation, URI confinement, and zero knowledge-runtime I/O for Skill operations.
 
 Writes require a stable `idempotency_key`, use deterministic identities, reject unknown or incorrectly typed fields, and fail closed for path escape, symlink-root, size-limit, and credential-like metadata violations. The server persists only feedback explicitly submitted by the caller; it does not inspect a host application's private event bus. See [`docs/knowledge/mcp-server.md`](docs/knowledge/mcp-server.md) and [`docs/knowledge/durable-capture.md`](docs/knowledge/durable-capture.md).
 

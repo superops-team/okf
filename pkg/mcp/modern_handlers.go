@@ -186,7 +186,7 @@ func (s *Server) handleModernSkillsList(id json.RawMessage, meta *ModernRequestM
 	}
 	if !meta.HasSkillsCapability() {
 		rpcErr := NewMissingCapabilityError(SkillsExtensionID)
-		s.sendError(id, rpcErr.Code, rpcErr.Message)
+		s.sendErrorWithData(id, rpcErr.Code, rpcErr.Message, rpcErr.Data)
 		return
 	}
 	skills := s.skillList()
