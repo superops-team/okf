@@ -153,6 +153,22 @@ func RenderCodexBlock() string {
 	return b.String()
 }
 
+// RenderAgentSkill renders the portable canonical Agent Skill (SKILL.md).
+// It contains minimum YAML frontmatter (name, description) and exactly one
+// rendering of W01-W07. It excludes client ownership markers, install/remove
+// instructions, credentials, absolute paths, hooks, scripts and allowed-tools.
+func RenderAgentSkill() string {
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString("name: okf\n")
+	b.WriteString("description: Use the project OKF knowledge base to answer repository questions through the canonical workflow.\n")
+	b.WriteString("---\n\n")
+	b.WriteString("# OKF Project Knowledge Skill\n\n")
+	b.WriteString("Follow the canonical workflow below when using the project OKF knowledge base.\n\n")
+	b.WriteString(renderCore())
+	return b.String()
+}
+
 // RenderCodexMCPTOML renders the body that lives inside the TOML managed block
 // (markers themselves are added by the adapter). cmd is the resolved server
 // command, conventionally ["okf", "mcp", "--repo", "."].

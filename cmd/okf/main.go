@@ -694,7 +694,11 @@ func cmdMCP(args []string) {
 		KnowledgeDir: *knowledgeDir,
 	}
 
-	server := mcp.NewServer(config)
+	server, err := mcp.NewServer(config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "MCP server init error: %v\n", err)
+		os.Exit(1)
+	}
 	if err := server.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "MCP server error: %v\n", err)
 		os.Exit(1)

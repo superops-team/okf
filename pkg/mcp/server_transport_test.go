@@ -31,7 +31,10 @@ func TestServerRespondsUsingRequestFraming(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
-			server := NewServer(ServerConfig{RepoPath: t.TempDir(), Logger: log.New(io.Discard, "", 0)})
+			server, err := NewServer(ServerConfig{RepoPath: t.TempDir(), Logger: log.New(io.Discard, "", 0)})
+			if err != nil {
+				t.Fatalf("NewServer: %v", err)
+			}
 			server.reader = bufio.NewReader(strings.NewReader(tt.input))
 			server.writer = &out
 
@@ -60,7 +63,10 @@ func TestServerRejectsUnsafeContentLength(t *testing.T) {
 		{name: "oversized", header: "Content-Length: 16777217\r\n\r\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer(ServerConfig{RepoPath: t.TempDir(), Logger: log.New(io.Discard, "", 0)})
+			server, err := NewServer(ServerConfig{RepoPath: t.TempDir(), Logger: log.New(io.Discard, "", 0)})
+			if err != nil {
+				t.Fatalf("NewServer: %v", err)
+			}
 			server.reader = bufio.NewReader(strings.NewReader(tt.header))
 			if _, err := server.readMessage(); err == nil || !strings.Contains(err.Error(), "Content-Length") {
 				t.Fatalf("readMessage error = %v, want Content-Length rejection", err)
