@@ -1,6 +1,7 @@
 # Evidence — add-governed-agent-memory
 
 Spec commit: 8712bb7. Implementation branch: spec/governed-agent-memory.
+Implementation commit: df66533 (initial) + follow-up fixes (see git log).
 Verification date: 2026-09-16. Go version: go1.26.0 linux/amd64.
 
 ## 1. Golden memory_check set (S20-S27)
@@ -21,14 +22,13 @@ Measurement: `okf tool manifest --mode <m> --json --limit 500` stdout bytes (Go 
 
 | mode | stdout bytes | tokens (÷4) | vs full reduction |
 |---|---:|---:|---:|
-| full | 249,664 | 62,416 | baseline |
-| summary | 84,482 | 21,120 | **66.2%** (gate ≥50%) ✓ |
-| hit | 130,859 | 32,714 | **47.6%** (gate ≥40%) ✓ |
+| full | 266,341 | 66,585 | baseline (byte-identical to pre-change) |
+| summary | 84,482 | 21,120 | **68.3%** (gate ≥50%) ✓ |
+| hit | 130,859 | 32,714 | **50.9%** (gate ≥40%) ✓ |
 
-Item-only `estimated_item_tokens` (S34 definition: item bytes/4, no envelope):
-- full=47,106, summary=27,953 (40.7%↓), hit=32,611 (30.8%↓).
+**Implementation note**: Initial approach added `omitempty` to 9 existing ManifestItem fields, which reduced full-mode output for zero-valued fields (broke S30 byte-compatibility). Fixed via `MarshalJSON` + `projectionMode` unexported field: full mode uses type alias (byte-identical to original struct), summary/hit use dedicated `summaryProjection`/`hitProjection` DTOs. Full mode output = 266,341 bytes matches pre-change size.
 
-Note: initial implementation had summary 38.9% / hit 24.2% because `ManifestItem` fields lacked `omitempty`. Fixed by adding `omitempty` to identity_state/path/status/trust_tier/stale/source_count/file_size_bytes/estimated_tokens/estimate_kind. Full mode with populated concepts remains byte-identical (S30 test passes).
+Tests: `TestS28SummaryModeShape` (JSON key assertion), `TestS29HitModeShape`, `TestS30FullModeBackwardCompatible`, `TestS31ModeIDParity`, `TestS32TokenBudgetPipeline`, `TestS33BudgetTooSmall`, `TestS34TokenEstimateDefinition`.
 
 ## 3. For-path precision/recall (S11-S15)
 
@@ -52,7 +52,9 @@ Go benchmark: `BenchmarkCheckMemory1000Miss` / `BenchmarkCheckMemory1000Hit` in 
 | 1000 miss | 21,914,476 (~21.9ms) | 9,157,697 | 257,083 |
 | 1000 hit | 24,159,495 (~24.2ms) | 9,252,386 | 258,020 |
 
-E2E CLI: `okf tool query -q "test" --memory-check` on 1000 durable notes → ~68ms wall time (3 runs: 68/67/70ms).
+E2E CLI: `okf tool query -q "test" --memory-check` on 1000 durable notes → ~68ms wall time.
+
+**Known cost**: ~9MB/op, ~257K allocs/op dominated by tokenizing 1000 bodies for per-call BM25 build. Spec has no hard performance threshold. Acceptable for v1; future optimization could cache BM25 index.
 
 ## 5. Race test
 
@@ -81,48 +83,86 @@ No test-order coupling.
 - `python3 test_mcp.py` (legacy 2024-11-05): 13/13 PASS. tools/list = 20 legacy tools.
 - `python3 test_ext_skills.py` (modern 2026-07-28 + skills): 8/8 PASS. tools/list = 11 modern tools.
 - Both eras: okf_manifest/okf_query/okf_context gain new optional params; no tool removed.
+- `TestMCPQuerySharedAcrossEras`: modern and legacy tools/list both contain okf_query with `reflect.DeepEqual` schema.
 
 ## 8. Real Codex governed flow (S39)
 
-Isolated `CODEX_HOME=/tmp/codex_home`, config registers `[mcp_servers.okf]` → `okf mcp --repo . --dir .okf/knowledge`. sandbox=read-only, approval=never, model=gpt-5.6-sol__dev (xeart channel).
+Persistent harness: `tools/verify-governed-memory-codex.sh` (fail-closed, sanitized output, temp cleanup).
 
-4 read-only tasks, 0 mutating calls:
-1. tools/list → 21 okf tools visible.
-2. `okf_manifest(mode=summary, limit=5)` → 5/327 items returned.
-3. `okf_manifest(for_path=pkg/memorymeta/duplicate.go, mode=hit)` → 0 matches (329 corpus has no code_refs-declaring concepts; independent fixture in §3 verifies matching).
-4. `okf_query(q="memory check duplicate", memory_check=true)` → `no_similar`, 0 candidates @ threshold 0.20.
+Fixture: isolated git repo with 2 concepts — `notes/redis.md` (code_refs: ["pkg/cache/*.go"]) and `notes/redis-dup.md` (near-duplicate for memory_check).
 
-All calls ok=true, mutating=false. No note/log/feedback/import/refresh/init invoked. Raw event stream not committed (contains model output); safe summary above.
+4 read-only tasks, **5 MCP tool calls, 0 mutating**:
 
-## 9. Full test suite
+| Task | Tool calls | Assertion | Result |
+|---|---|---|---|
+| A. manifest summary limit=3 | okf_manifest ×1 | items returned | PASS |
+| B. for_path=pkg/cache/redis.go hit | okf_manifest ×1 | redis concept matched | PASS |
+| C. context refs=<redis_id> | okf_manifest ×1 + okf_context ×1 | body contains CANARY | PASS |
+| D. query memory_check=true | okf_query ×1 | status=possible_duplicate | PASS |
+
+**Tools count clarification**: OKF MCP server exposes 20 tools (legacy era) or 11 tools (modern era). Codex CLI has 9 built-in function tools (exec, wait, etc.). Previous "21" was model's miscount from system prompt (20 OKF + 1 generic MCP mechanism). No 21st OKF tool exists.
+
+All calls ok=true, mutating=false. No note/log/feedback/import/refresh/init invoked. Raw JSONL not committed; safe summary above.
+
+## 9. New targeted tests (follow-up audit)
+
+| Test | File | Scenario |
+|---|---|---|
+| `TestToolQueryMemoryCheckFlags` | cmd/okf/cmd_tool_governed_test.go | S39 CLI dedicated envelope, no results mix |
+| `TestToolQueryMemoryCheckEmptyQ` | cmd/okf/cmd_tool_governed_test.go | S39 empty q → invalid_query |
+| `TestToolQueryMemoryCheckTypeSingular` | cmd/okf/cmd_tool_governed_test.go | S22 --type singular |
+| `TestToolQueryMemoryCheckDupThreshold` | cmd/okf/cmd_tool_governed_test.go | S27 --dup-threshold |
+| `TestMCPQueryMemoryCheckSchema` | pkg/mcp/tools_governed_test.go | S39 schema has memory_check/dup_threshold, no types |
+| `TestMCPQueryMemoryCheckHandler` | pkg/mcp/tools_governed_test.go | S39 MCP JSON true → dedicated result, read-only |
+| `TestMCPQuerySharedAcrossEras` | pkg/mcp/tools_governed_test.go | S36 modern+legacy schema DeepEqual |
+| `TestStaleRefsScanEntryLimit` | pkg/manifest/manifest_governed_test.go | S18 50k bound (injectable limit=3) |
+| `TestS37CustomFieldsParseRoundTrip` | pkg/memorymeta/customfields_roundtrip_test.go | S37 parser→CustomFields→serialize preserves all fields |
+| `TestS37ConceptHasNoGovernedStructFields` | pkg/memorymeta/customfields_roundtrip_test.go | S37 reflection: Concept has no Governance/CodeRefs fields |
+| `TestDocumentationContracts` | pkg/agentconfig/documentation_contract_test.go | advisory/no-block/no-audit/no-allow-duplicate |
+| `TestDocumentationClausesOnceInAgentSkill` | pkg/agentconfig/documentation_contract_test.go | W01-W07 exact-once |
+
+## 10. Mutation testing (S38)
+
+Persistent runner: `tools/mutants-governed-memory.sh` (8 mutants, all killed). Gauntlet L9c.
+
+| Mutant | Change | Killed by |
+|---|---|---|
+| M-GM1 | unknown governance returns raw instead of context | TestGovernanceUnknownNonStrict |
+| M-GM2 | hold rank = 2 (not first) | TestS06GovernanceSortActivation |
+| M-GM3 | `*` treated as recursive `**` | TestMatchCodeRefsSingleGlob |
+| M-GM4 | `**` span 8→100 | TestMatchCodeRefsRecursiveDepth |
+| M-GM5 | threshold hardcoded to 0 | TestCheckMemoryThresholdConfigurable |
+| M-GM6 | typeFilter doesn't narrow candidates | TestCheckMemoryTypeFilter |
+| M-GM7 | summary mode keeps full projection | TestS28SummaryModeShape |
+| M-GM8 | context refs loop emptied | TestServiceContextRefsReadsConceptBody |
+
+All 8 killed, source restored byte-identical (cmp -s verified).
+
+## 11. Full gauntlet
 
 ```
-go build ./... → PASS
-go test -count=1 ./pkg/... ./cmd/... → all PASS
-go vet ./... → clean
-gofmt -l → clean (after fix)
+GAUNTLET PASS: build/vet/staticcheck/tests/tests(-race)/coverage(70%)/shuffle/
+  new-package/property(20)/secret-scan/mod-verify/mutation(18/18)/
+  agent-mutation(5/5)/governed-mutation(8/8)/real-exec
 ```
 
-Packages: memorymeta, manifest, tool, mcp, agentconfig, cmd/okf, identity, lexical, query, vectorindex, eval, git, convert, okf, parser, chunk, lint, dashboard.
+## 12. Code review
 
-## 10. Post-code review
+See `code-review.md` for full two-round review with 18 findings (1 high fixed via DTO, 5 medium dispatched/fixed, 2 low fixed, 10 info verified).
 
-Round 1 (explicit): compilation, interfaces, logic, error handling, naming, data flow — no critical/high issues found. Token reduction gap (summary 38.9%/hit 24.2%) identified and fixed via omitempty.
-
-Round 2 (implicit): boundary conditions, protocol understanding, resource handling, spec compliance, security, state — no critical/high issues. Governance default=context verified; hold advisory-only verified; for_path lexical-no-FS verified; stale-refs fail-closed verified; memory_check read-only verified; Concept struct unchanged verified.
-
-## 11. Hard constraints compliance
+## 13. Hard constraints compliance
 
 | Constraint | Status |
 |---|---|
-| Concept struct unchanged | ✓ (governance/code_refs in CustomFields only) |
-| No second index/fact source | ✓ (reuses existing BM25 per-call, manifest existing scan) |
+| Concept struct unchanged | ✓ (reflection test + CustomFields only) |
+| No second index/fact source | ✓ (per-call BM25, existing manifest scan) |
 | Default governance=context, no path inference | ✓ |
-| Hold advisory only, no server block | ✓ |
+| Hold advisory only, no server block | ✓ (doc contract test) |
 | CLI hyphen / MCP underscore | ✓ |
-| memory_check read-only, no conflict/allow_duplicate/audit | ✓ |
+| memory_check read-only, no conflict/allow_duplicate/audit | ✓ (doc contract test) |
 | for_path lexical, no FS, no EvalSymlinks | ✓ |
-| stale-refs only FS scan, fail-closed | ✓ |
-| W01-W07 each exactly once | ✓ (TestCanonicalWorkflowCoverage) |
-| Modern 11 / legacy 20 tools | ✓ (E2E verified) |
-| No push/PR/merge | ✓ (local commit only) |
+| stale-refs only FS scan, fail-closed | ✓ (incomplete+warnings) |
+| W01-W07 each exactly once | ✓ |
+| Modern 11 / legacy 20 tools | ✓ (E2E + shared schema test) |
+| Full mode byte-compatible | ✓ (MarshalJSON DTO, 266,341 bytes) |
+| No push/PR/merge | ✓ (local commits only) |

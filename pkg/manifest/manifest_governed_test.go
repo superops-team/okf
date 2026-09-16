@@ -301,11 +301,23 @@ func TestS28SummaryModeShape(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 	for _, it := range res.Items {
-		if it.Path != "" || it.Ref != "" || it.Tags != nil || it.CodeRefs != nil {
-			t.Fatalf("summary item leaked fields: %+v", it)
+		data, err := json.Marshal(it)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
 		}
-		if it.OKFID == "" && it.Title == "" && it.Governance == "" {
-			t.Fatal("summary item missing required fields")
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		// Must NOT contain legacy full-mode fields
+		for _, forbidden := range []string{"path", "ref", "tags", "code_refs", "status", "trust_tier", "stale", "source_count", "file_size_bytes", "estimated_tokens", "estimate_kind", "identity_state"} {
+			if _, ok := m[forbidden]; ok {
+				t.Fatalf("summary JSON leaked field %q: %s", forbidden, string(data))
+			}
+		}
+		// Must contain at least one identifying field
+		if m["okf_id"] == nil && m["title"] == nil {
+			t.Fatalf("summary item missing required fields: %s", string(data))
 		}
 		if len([]rune(it.Description)) > 80 {
 			t.Fatalf("description longer than 80 runes: %q", it.Description)
@@ -326,11 +338,25 @@ func TestS29HitModeShape(t *testing.T) {
 		t.Fatalf("items = %d", len(res.Items))
 	}
 	it := res.Items[0]
-	if len(it.Tags) != 2 || len(it.CodeRefs) != 1 || it.Status != "stable" || it.StaleAfter != "2027-01-01" {
-		t.Fatalf("hit item missing fields: %+v", it)
+	data, err := json.Marshal(it)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
 	}
-	if it.Path != "" {
-		t.Fatalf("hit mode must not include path: %+v", it)
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Hit mode must include these
+	for _, required := range []string{"tags", "code_refs", "status", "stale_after"} {
+		if _, ok := m[required]; !ok {
+			t.Fatalf("hit JSON missing field %q: %s", required, string(data))
+		}
+	}
+	// Hit mode must NOT include full-mode-only fields
+	for _, forbidden := range []string{"path", "ref", "trust_tier", "stale", "source_count", "file_size_bytes", "estimated_tokens", "estimate_kind", "identity_state"} {
+		if _, ok := m[forbidden]; ok {
+			t.Fatalf("hit JSON leaked full-mode field %q: %s", forbidden, string(data))
+		}
 	}
 }
 
@@ -542,5 +568,59 @@ func mkRepoFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// S18: the --stale-refs walk is bounded by an injectable entry cap. With a
+// tiny injected cap the walk completes exactly at the boundary but marks
+// incomplete with a warning once entries exceed it; it never visits more than
+// the cap (no 50k-file fixture required).
+func TestStaleRefsScanEntryLimit(t *testing.T) {
+	old := maxStaleScanEntries
+	maxStaleScanEntries = 3
+	defer func() { maxStaleScanEntries = old }()
+
+	// Entry accounting: the repo root itself is entry #1; each file after it
+	// counts one. So cap=3 admits root + 2 files before the 4th entry trips
+	// the cap.
+	//
+	// (a) Exactly at the boundary: 2 files => 3 entries visited, walk finishes
+	//     naturally => complete, no warning.
+	atLimit := t.TempDir()
+	mkRepoFile(t, filepath.Join(atLimit, "a.txt"), "a")
+	mkRepoFile(t, filepath.Join(atLimit, "b.txt"), "b")
+	files, incomplete, warnings := walkStaleScan(atLimit)
+	if incomplete {
+		t.Fatalf("at-limit walk must be complete, got warnings=%v", warnings)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("at-limit walk must have no warnings, got %v", warnings)
+	}
+	if len(files) != 2 {
+		t.Fatalf("at-limit files = %d, want 2 (root is not a file): %v", len(files), files)
+	}
+
+	// (b) Over the boundary: 5 files => root + a + b processed, c trips the
+	//     cap. The walk stops, marks incomplete with a warning, and never
+	//     observes files beyond the cap.
+	overLimit := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt", "c.txt", "d.txt", "e.txt"} {
+		mkRepoFile(t, filepath.Join(overLimit, name), name)
+	}
+	files, incomplete, warnings = walkStaleScan(overLimit)
+	if !incomplete {
+		t.Fatal("over-limit walk must be marked incomplete")
+	}
+	if len(warnings) == 0 {
+		t.Fatal("over-limit walk must carry at least one warning")
+	}
+	// Only root + a + b were observed; c/d/e must never have been read.
+	for _, late := range []string{"c.txt", "d.txt", "e.txt"} {
+		if _, ok := files[late]; ok {
+			t.Fatalf("walk visited %q beyond the entry cap; files=%v", late, files)
+		}
+	}
+	if len(files) != 2 {
+		t.Fatalf("over-limit observed %d files, want exactly 2 (a,b): %v", len(files), files)
 	}
 }

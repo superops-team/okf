@@ -23,7 +23,7 @@ Spec commit: 8712bb7 (latest approved). Implementation branch: spec/governed-age
 | S15 | for_path supports not-yet-created paths (lexical, no FS) | `memorymeta.MatchCodeRefs()` | `TestMatchCodeRefsNoFS`, `TestS15ForPathLexicalNoFS` | fully |
 | S16 | code_refs pattern bounds (16/256 bytes/32 segments/2 **) | `memorymeta.CodeRefs()` | `TestCodeRefsBounds` | fully |
 | S17 | stale-refs FS scan, fail-closed on symlink escape/unreadable | `manifest.Build()` stale-refs mode | `TestS17StaleRefsScan`, `TestServiceManifestStaleRefsSymlinkEscape`, `TestServiceManifestStaleRefsAnnotatesItems` | fully |
-| S18 | stale-refs scan bound 50k entries | `manifest.Build()` | `TestS17StaleRefsScan` (bound check) | fully |
+| S18 | stale-refs scan bound 50k entries | `manifest.Build()` (injectable `maxStaleScanEntries`) | `TestStaleRefsScanEntryLimit` (exact limit complete, over limit incomplete+warning, access ≤ limit) | fully |
 | S19 | code_refs does not duplicate code_file concepts | `manifest.Build()` | `TestS19NoDuplicateCodeFileBinding` | fully |
 | S20 | memory_check returns no_similar for novel content | `memorymeta.CheckMemory()`, `Service.Query()` | `TestCheckMemoryNoSimilar` | fully |
 | S21 | memory_check returns possible_duplicate | `memorymeta.CheckMemory()` | `TestCheckMemoryPossibleDuplicate`, `TestCheckMemoryGolden` | fully |
@@ -42,9 +42,9 @@ Spec commit: 8712bb7 (latest approved). Implementation branch: spec/governed-age
 | S34 | Token estimate = Go encoding/json default item bytes/4 ceil, no envelope | `manifest.Build()` | `TestS34TokenEstimateDefinition` | fully |
 | S35 | Follow-up via okf_context refs (query OR refs at least one) | `Service.Context()` | `TestServiceContextRefsReadsConceptBody`, `TestServiceContextRequiresQueryOrRefs`, `TestServiceContextUnknownRefOmitted`, `TestMCPContextRefsHandler`, `TestToolContextRefsFlag` | fully |
 | S36 | Existing concepts without new fields work unchanged | `memorymeta.Governance()`, `CodeRefs()` defaults | existing test suite + `TestCodeRefsEmpty` | fully |
-| S37 | CustomFields preserved alongside new fields | Concept parser (CustomFields inline) | existing parser tests + `TestSetGovernance`/`TestSetCodeRefs` round-trip | fully |
-| S38 | Strict validation catches malformed new fields | `memorymeta.Validate(strict=true)`, `okf lint` | `TestValidateGovernanceStrict`, `TestCodeRefsBounds` | fully |
-| S39 | Real CLI/MCP entry points verified | `cmd/okf/cmd_tool.go`, `pkg/mcp/tools.go` | `TestToolManifestGovernedFlags`, `TestToolContextRefsFlag`, `TestMCPManifestGovernedSchema`, `TestMCPManifestGovernedHandler`, `TestMCPContextRefsSchema`, `TestMCPContextRefsHandler` | fully |
+| S37 | CustomFields preserved alongside new fields | Concept parser (CustomFields inline), memorymeta accessors | `TestS37CustomFieldsParseRoundTrip` (parser→CustomFields→serialize preserves governance/code_refs/my_custom), `TestS37ConceptHasNoGovernedStructFields` (reflection: no Governance/CodeRefs on Concept) | fully |
+| S38 | Strict validation catches malformed new fields; mutation coverage | `memorymeta.Validate(strict=true)`, `okf lint`, `tools/mutants-governed-memory.sh` | `TestValidateGovernanceStrict`, `TestCodeRefsBounds`, 8/8 mutants killed (M-GM1..M-GM8) | fully |
+| S39 | Real CLI/MCP entry points verified; Codex real agent flow | `cmd/okf/cmd_tool.go`, `pkg/mcp/tools.go`, `tools/verify-governed-memory-codex.sh` | `TestToolManifestGovernedFlags`, `TestToolContextRefsFlag`, `TestToolQueryMemoryCheckFlags`, `TestToolQueryMemoryCheckEmptyQ`, `TestToolQueryMemoryCheckTypeSingular`, `TestToolQueryMemoryCheckDupThreshold`, `TestMCPManifestGovernedSchema/Handler`, `TestMCPQueryMemoryCheckSchema/Handler`, `TestMCPQuerySharedAcrossEras`, `TestMCPContextRefsSchema/Handler`, Codex harness 4/4 PASS 0 mutating | fully |
 
 ## Coverage summary
 

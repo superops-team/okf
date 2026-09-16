@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path"
@@ -95,36 +96,101 @@ const (
 
 // ManifestItem is one concept's bounded metadata. It NEVER carries Markdown
 // body content (S20).
+//
+// Original pre-governed-memory fields retain their non-omitempty JSON tags so
+// that --mode full (the default) serializes byte-identically to before this
+// change. Summary/hit projections use dedicated DTOs via MarshalJSON (S28-S30).
 type ManifestItem struct {
 	OKFID           string   `json:"okf_id,omitempty"`
 	Ref             string   `json:"ref,omitempty"`
-	IdentityState   string   `json:"identity_state,omitempty"`
-	Path            string   `json:"path,omitempty"`
+	IdentityState   string   `json:"identity_state"`
+	Path            string   `json:"path"`
 	Title           string   `json:"title,omitempty"`
 	Description     string   `json:"description,omitempty"`
 	Type            string   `json:"type,omitempty"`
 	Tags            []string `json:"tags,omitempty"`
-	Status          string   `json:"status,omitempty"`
-	TrustTier       string   `json:"trust_tier,omitempty"`
-	Stale           bool     `json:"stale,omitempty"`
+	Status          string   `json:"status"`
+	TrustTier       string   `json:"trust_tier"`
+	Stale           bool     `json:"stale"`
 	StaleAfter      string   `json:"stale_after,omitempty"`
 	GeneratedAt     string   `json:"generated_at,omitempty"`
 	VerifiedAt      string   `json:"verified_at,omitempty"`
-	SourceCount     int      `json:"source_count,omitempty"`
+	SourceCount     int      `json:"source_count"`
 	SourceResources []string `json:"source_resources,omitempty"`
-	FileSizeBytes   int64    `json:"file_size_bytes,omitempty"`
-	EstimatedTokens int64    `json:"estimated_tokens,omitempty"`
-	EstimateKind    string   `json:"estimate_kind,omitempty"`
+	FileSizeBytes   int64    `json:"file_size_bytes"`
+	EstimatedTokens int64    `json:"estimated_tokens"`
+	EstimateKind    string   `json:"estimate_kind"`
 
-	// Governed-agent-memory extension fields. Governance is the effective
-	// level (context by default). CodeRefs are the normalized, validated
-	// patterns declared on the concept. MatchedCodeRef is the pattern hit by
-	// for_path (S11). StaleCodeRefs are code_refs matching no file on disk
-	// (populated only with --stale-refs, S17).
+	// Governed-agent-memory extension fields. All zero values omitted so the
+	// default request serializes byte-identically to the pre-change shape.
 	Governance     string   `json:"governance,omitempty"`
 	CodeRefs       []string `json:"code_refs,omitempty"`
 	MatchedCodeRef string   `json:"matched_code_ref,omitempty"`
 	StaleCodeRefs  []string `json:"stale_code_refs,omitempty"`
+
+	// projectionMode is set by projectItem and read by MarshalJSON. It is never
+	// serialized (json:"-"). Empty/full means the original struct shape is used.
+	projectionMode string `json:"-"`
+}
+
+// summaryProjection is the JSON shape for --mode summary (S28): minimal fields
+// only — okf_id, title, type, governance, ≤80-char one-line description.
+type summaryProjection struct {
+	OKFID         string   `json:"okf_id,omitempty"`
+	Title         string   `json:"title,omitempty"`
+	Type          string   `json:"type,omitempty"`
+	Governance    string   `json:"governance,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	StaleCodeRefs []string `json:"stale_code_refs,omitempty"`
+}
+
+// hitProjection is the JSON shape for --mode hit (S29): summary plus tags,
+// code_refs, status, stale_after.
+type hitProjection struct {
+	OKFID         string   `json:"okf_id,omitempty"`
+	Title         string   `json:"title,omitempty"`
+	Type          string   `json:"type,omitempty"`
+	Governance    string   `json:"governance,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	StaleCodeRefs []string `json:"stale_code_refs,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	CodeRefs      []string `json:"code_refs,omitempty"`
+	Status        string   `json:"status,omitempty"`
+	StaleAfter    string   `json:"stale_after,omitempty"`
+}
+
+// MarshalJSON serializes a ManifestItem according to its projectionMode.
+// Full mode (empty) uses the original struct shape byte-identically; summary
+// and hit modes use their minimal DTOs (S28-S30).
+func (m ManifestItem) MarshalJSON() ([]byte, error) {
+	switch m.projectionMode {
+	case ModeSummary:
+		return json.Marshal(summaryProjection{
+			OKFID:         m.OKFID,
+			Title:         m.Title,
+			Type:          m.Type,
+			Governance:    m.Governance,
+			Description:   m.Description,
+			StaleCodeRefs: m.StaleCodeRefs,
+		})
+	case ModeHit:
+		return json.Marshal(hitProjection{
+			OKFID:         m.OKFID,
+			Title:         m.Title,
+			Type:          m.Type,
+			Governance:    m.Governance,
+			Description:   m.Description,
+			StaleCodeRefs: m.StaleCodeRefs,
+			Tags:          m.Tags,
+			CodeRefs:      m.CodeRefs,
+			Status:        m.Status,
+			StaleAfter:    m.StaleAfter,
+		})
+	default:
+		// Use alias to avoid infinite recursion in MarshalJSON.
+		type alias ManifestItem
+		return json.Marshal(alias(m))
+	}
 }
 
 // ManifestWarning records one omitted file and its stable warning code.
@@ -704,26 +770,20 @@ func govRank(level string) int {
 }
 
 // projectItem applies the progressive-disclosure projection (S28/S29/S30).
+// It sets projectionMode so MarshalJSON emits the minimal DTO shape.
 // StaleCodeRefs survives projection whenever it is set (S17).
 func projectItem(it ManifestItem, mode string) ManifestItem {
 	switch mode {
 	case ModeSummary:
-		return ManifestItem{
-			OKFID:         it.OKFID,
-			Title:         it.Title,
-			Type:          it.Type,
-			Governance:    it.Governance,
-			Description:   oneLineDescription(it.Description),
-			StaleCodeRefs: it.StaleCodeRefs,
-		}
+		it.Description = oneLineDescription(it.Description)
+		it.projectionMode = ModeSummary
+		return it
 	case ModeHit:
-		out := projectItem(it, ModeSummary)
-		out.Tags = it.Tags
-		out.CodeRefs = it.CodeRefs
-		out.Status = it.Status
-		out.StaleAfter = it.StaleAfter
-		return out
+		it.Description = oneLineDescription(it.Description)
+		it.projectionMode = ModeHit
+		return it
 	default:
+		it.projectionMode = ""
 		return it
 	}
 }
@@ -750,8 +810,9 @@ func estimateItemTokens(it ManifestItem) int {
 }
 
 // maxStaleScanEntries caps the --stale-refs repo walk (S18: entries, not
-// patterns).
-const maxStaleScanEntries = 50000
+// patterns). It is a package var (not a const) so tests can inject a small cap
+// without building tens of thousands of files.
+var maxStaleScanEntries = 50000
 
 // errStaleScanCap stops the bounded walk once the entry cap is reached.
 var errStaleScanCap = errors.New("stale-refs entry cap reached")
@@ -817,7 +878,7 @@ func walkStaleScan(repoRoot string) (map[string]struct{}, bool, []string) {
 	})
 	switch {
 	case errors.Is(err, errStaleScanCap):
-		markIncomplete("stale-refs scan stopped after 50000 entries")
+		markIncomplete(fmt.Sprintf("stale-refs scan stopped after %d entries", maxStaleScanEntries))
 	case err != nil:
 		markIncomplete("stale-refs scan aborted: " + err.Error())
 	}
