@@ -1,8 +1,8 @@
 # Evidence — add-governed-agent-memory
 
 Spec commit: 8712bb7. Implementation branch: spec/governed-agent-memory.
-Implementation commit: df66533 (initial) + follow-up fixes (see git log).
-Verification date: 2026-09-16. Go version: go1.26.0 linux/amd64.
+Implementation commits: df66533 (P0-P4), ad56bd8 (targeted coverage and compatibility fixes), 3af326c (current-source legacy E2E hardening and final audit corrections).
+Final GAUNTLET source state: 3af326c. Verification date: 2026-09-16. Go version: go1.26.0 linux/amd64.
 
 ## 1. Golden memory_check set (S20-S27)
 
