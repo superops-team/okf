@@ -73,7 +73,7 @@ func TestCheckMemoryAllocationBudget(t *testing.T) {
 	allocs := testing.AllocsPerRun(10, func() {
 		_ = CheckMemory(corpus, query, "", "", "", 0.20)
 	})
-	const maxAllocs = 150000 // generous ceiling; optimized target is ~80-100K
+	const maxAllocs = 20000 // ceiling after string interning (~9K actual); 2x headroom
 	if allocs > maxAllocs {
 		t.Fatalf("CheckMemory 1000-concept allocs/op = %.0f, exceeds budget %d", allocs, maxAllocs)
 	}

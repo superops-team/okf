@@ -137,11 +137,20 @@ Spec commit: 8712bb7.
 - **Test**: `TestTokenizeBM25FreqParity` — 10 representative inputs (ASCII, CJK, camelCase, snake_case, kebab, acronyms, mixed, empty) compared frequency map + docLen with `lexical.Tokenize`, all exact match. Added 6 identifier positive golden cases (ParseConfig/parse config, load_config/load config, cache_invalidation/cache invalidation, forward+reverse), all pass.
 - **Impact**: Subword expansion adds ~46K allocs/op (54K→100K) but restores recall parity with lexical.Tokenize. Still 61% below original baseline.
 
+### Finding 23: "remaining cost requires global interning" was incorrect — request-scoped interning works (fixed)
+- **Severity**: medium (performance, incorrect prior conclusion)
+- **File**: `pkg/memorymeta/duplicate.go`
+- **Issue**: Prior evidence stated "eliminating token string allocations requires string interning (shared mutable state — forbidden)". This is incorrect: a `map[string]string` interner can be created per `CheckMemory` call (request-scoped), with no global state and no persistence. Each concurrent call has its own map, so it is concurrency-safe.
+- **Fix**: Added `internToken(interner, rs []rune)` that UTF-8 encodes into a `[]byte` buffer and uses the Go compiler's zero-allocation `m[string(buf)]` lookup optimization. Only previously-unseen tokens allocate; duplicates across 1000 documents reuse the interned string. The interner map is created in `CheckMemory` and discarded after the call.
+- **Test**: `TestCheckMemoryAllocationBudget` ceiling lowered to 20K (actual ~9.1K). `TestTokenizeBM25FreqParity` still passes (interning doesn't change token values). Golden 50 cases unchanged.
+- **Result**: allocs/op 100K→9.1K (**91% reduction**), B/op 3.62MB→2.83MB (**22% reduction**). Latency ~11-13ms (within run-to-run variance; independent retest of prior commit measured 19.4ms miss under different load).
+- **Constraints**: No unsafe, no sync.Pool, no global cache, no persistent state, no token parity change. Remaining ~9K allocs/op from 1000 tf maps + map growth; eliminating would require map pooling (sync.Pool — forbidden).
+
 ## Summary
 
 | Round | Findings | High | Medium | Low | Info |
 |---|---|---|---|---|---|
 | Round 1 (explicit) | 10 | 1 | 6 | 2 | 1 |
-| Round 2 (implicit) | 12 | 2 | 1 (perf) | 0 | 9 |
+| Round 2 (implicit) | 13 | 2 | 2 (perf) | 0 | 9 |
 
 All high and medium findings were fixed and verified by the tests named above. No critical issues, unresolved security vulnerabilities, or known Spec violations remain.

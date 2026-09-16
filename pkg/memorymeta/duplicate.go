@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/superops-team/okf/pkg/identity"
 	"github.com/superops-team/okf/pkg/lexical"
@@ -96,6 +97,7 @@ func CheckMemory(concepts []*okf.Concept, content, typeFilter, project, tag stri
 	// for top-10 Jaccard re-ranking and double FromConcept calls).
 	entries := make([]candidateEntry, len(pool))
 	bm25 := lexical.NewBM25()
+	interner := make(map[string]string, 256) // request-scoped string dedup
 	for i, c := range pool {
 		ident := identity.FromConcept(c)
 		entries[i] = candidateEntry{
@@ -105,7 +107,7 @@ func CheckMemory(concepts []*okf.Concept, content, typeFilter, project, tag stri
 			ident:   ident,
 		}
 		tf := make(map[string]int, 32)
-		docLen := tokenizeBM25Freq(entries[i].text, tf)
+		docLen := tokenizeBM25Freq(entries[i].text, tf, interner)
 		bm25.AddFromFreq(entries[i].key, tf, docLen)
 	}
 	bm25.Finalize()
@@ -259,7 +261,12 @@ func firstNRunes(s string, n int) string {
 // the []string intermediate and strings.FieldsFunc allocation that lexical
 // uses, while producing identical frequency maps and document lengths (verified
 // by TestTokenizeBM25FreqParity).
-func tokenizeBM25Freq(text string, tf map[string]int) int {
+//
+// interner is a request-scoped string deduplication map: duplicate token
+// strings across documents reuse the same string object, reducing allocations.
+// It is call-scoped (no global state, no persistence, concurrency-safe because
+// each CheckMemory call has its own map).
+func tokenizeBM25Freq(text string, tf map[string]int, interner map[string]string) int {
 	docLen := 0
 	var latin []rune     // lowercased runes (for whole token)
 	var latinOrig []rune // original-case runes (for subword boundary detection)
@@ -269,10 +276,10 @@ func tokenizeBM25Freq(text string, tf map[string]int) int {
 		if len(latin) == 0 {
 			return
 		}
-		whole := string(latin) // latin is already lowercased
+		whole := internToken(interner, latin)
 		tf[whole]++
 		docLen++
-		docLen += addSubwords(latinOrig, whole, tf)
+		docLen += addSubwords(latinOrig, whole, tf, interner)
 		latin = latin[:0]
 		latinOrig = latinOrig[:0]
 	}
@@ -280,11 +287,11 @@ func tokenizeBM25Freq(text string, tf map[string]int) int {
 		switch {
 		case len(cjk) == 0:
 		case len(cjk) == 1:
-			tf[string(cjk)]++
+			tf[internToken(interner, cjk)]++
 			docLen++
 		default:
 			for i := 0; i+1 < len(cjk); i++ {
-				tf[string(cjk[i:i+2])]++
+				tf[internToken(interner, cjk[i:i+2])]++
 				docLen++
 			}
 		}
@@ -310,10 +317,34 @@ func tokenizeBM25Freq(text string, tf map[string]int) int {
 	return docLen
 }
 
+// internToken deduplicates a rune sequence as a string within a request-scoped
+// interner map. It lowercases the runes (matching lexical.Tokenize behavior),
+// UTF-8 encodes into a []byte buffer, and uses the Go compiler's zero-allocation
+// map lookup optimization (m[string(bytes)]). Only previously unseen tokens
+// allocate a new string; duplicates return the interned copy.
+func internToken(interner map[string]string, rs []rune) string {
+	byteLen := 0
+	for _, r := range rs {
+		byteLen += utf8.RuneLen(unicode.ToLower(r))
+	}
+	buf := make([]byte, byteLen)
+	n := 0
+	for _, r := range rs {
+		n += utf8.EncodeRune(buf[n:], unicode.ToLower(r))
+	}
+	// Compiler optimizes interner[string(buf)] to avoid allocating for lookup.
+	if v, ok := interner[string(buf)]; ok {
+		return v
+	}
+	s := string(buf)
+	interner[s] = s
+	return s
+}
+
 // addSubwords splits original-case runes into identifier subwords (mirrors
 // lexical.splitIdentifier) and adds each lowercased subword that differs from
 // whole. Returns the number of subwords added (for docLen accounting).
-func addSubwords(original []rune, whole string, tf map[string]int) int {
+func addSubwords(original []rune, whole string, tf map[string]int, interner map[string]string) int {
 	if len(original) == 0 {
 		return 0
 	}
@@ -327,7 +358,7 @@ func addSubwords(original []rune, whole string, tf map[string]int) int {
 		// Process segment [segStart, segEnd).
 		if segEnd > segStart {
 			seg := original[segStart:segEnd]
-			added += addCamelSubwords(seg, whole, tf)
+			added += addCamelSubwords(seg, whole, tf, interner)
 		}
 		segStart = segEnd + 1
 	}
@@ -337,7 +368,7 @@ func addSubwords(original []rune, whole string, tf map[string]int) int {
 // addCamelSubwords detects camelCase and acronym boundaries in a delimiter-free
 // segment and adds each lowercased subword that differs from whole. Mirrors
 // lexical.splitIdentifier's inner loop.
-func addCamelSubwords(seg []rune, whole string, tf map[string]int) int {
+func addCamelSubwords(seg []rune, whole string, tf map[string]int, interner map[string]string) int {
 	if len(seg) == 0 {
 		return 0
 	}
@@ -348,27 +379,18 @@ func addCamelSubwords(seg []rune, whole string, tf map[string]int) int {
 		lowerToUpper := (unicode.IsLower(prev) || unicode.IsDigit(prev)) && unicode.IsUpper(cur)
 		acronymEnd := i+1 < len(seg) && unicode.IsUpper(prev) && unicode.IsUpper(cur) && unicode.IsLower(seg[i+1])
 		if lowerToUpper || acronymEnd {
-			if sub := lowerRunes(seg[start:i]); sub != "" && sub != whole {
+			if sub := internToken(interner, seg[start:i]); sub != "" && sub != whole {
 				tf[sub]++
 				added++
 			}
 			start = i
 		}
 	}
-	if sub := lowerRunes(seg[start:]); sub != "" && sub != whole {
+	if sub := internToken(interner, seg[start:]); sub != "" && sub != whole {
 		tf[sub]++
 		added++
 	}
 	return added
-}
-
-// lowerRunes lowercases a rune slice and returns it as a string (no intermediate
-// []rune allocation beyond the input slice).
-func lowerRunes(rs []rune) string {
-	for i := range rs {
-		rs[i] = unicode.ToLower(rs[i])
-	}
-	return string(rs)
 }
 
 // isCJKRune reports whether r is a CJK ideograph (same range as lexical.isCJK).

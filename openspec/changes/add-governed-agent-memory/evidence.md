@@ -47,47 +47,52 @@ All 10 queries: P=1.0, R=1.0. Covers `**` recursion, `*` segment match, `*_test.
 
 Go benchmark: `BenchmarkCheckMemory1000Miss` / `BenchmarkCheckMemory1000Hit` in `pkg/memorymeta/duplicate_benchmark_test.go`. Allocation regression guard: `TestCheckMemoryAllocationBudget` (ceiling 150K allocs/op).
 
-### After optimization (current, with streaming subword expansion)
+### After optimization (current, with streaming subword expansion + request-scoped string interning)
 
-| benchmark | ns/op | B/op | allocs/op |
+20x stable run (AMD EPYC 9Y24, Go 1.26.0):
+
+| benchmark | ns/op range | B/op | allocs/op |
 |---|---:|---:|---:|
-| 1000 miss | ~10,100,000 (~10.1ms) | 3,615,000 | 100,075 |
-| 1000 hit | ~13,100,000 (~13.1ms) | 3,690,000 | 100,960 |
+| 1000 miss | 11.0–12.3ms | 2,831,700 | 9,105 |
+| 1000 hit | 12.7–13.3ms | 2,906,500 | 9,991 |
+
+Note: latency has run-to-run variance (independent retest of prior commit measured miss 19.4ms / hit 17.1ms on the same hardware under different load). B/op and allocs/op are stable across runs.
 
 ### Before optimization (baseline, lexical.Tokenize + []rune truncate)
 
 | benchmark | ns/op | B/op | allocs/op |
 |---|---:|---:|---:|
-| 1000 miss | ~26,400,000 (~26.4ms) | 9,158,000 | 257,090 |
-| 1000 hit | ~25,800,000 (~25.8ms) | 9,252,000 | 258,020 |
+| 1000 miss | ~26.4ms | 9,158,000 | 257,090 |
+| 1000 hit | ~25.8ms | 9,252,000 | 258,020 |
 
-### Improvement
+### Improvement (stable metrics: B/op and allocs/op)
 
 | metric | before | after | reduction |
 |---|---:|---:|---:|
-| latency (miss) | 26.4ms | 10.1ms | **62%** (2.6x faster) |
-| latency (hit) | 25.8ms | 13.1ms | **49%** (2.0x faster) |
-| B/op (miss) | 9.16MB | 3.62MB | **61%** |
-| allocs/op (miss) | 257K | 100K | **61%** |
+| B/op (miss) | 9.16MB | 2.83MB | **69%** |
+| allocs/op (miss) | 257,090 | 9,105 | **96%** |
+| allocs/op (hit) | 258,020 | 9,991 | **96%** |
 
-### Optimization method (pprof-guided)
+### Optimization method (pprof-guided, two rounds)
 
-pprof (`-alloc_objects`) showed 95% of allocations in `lexical.Tokenize`:
-- `flushLatin` (`string(latin)` + `strings.ToLower`): 33%
-- `splitIdentifier` (subword expansion via `strings.FieldsFunc`): 33%
-- `strings.FieldsFunc`: 21%
+**Round 1** (commit af08f93): pprof `-alloc_objects` showed 95% in `lexical.Tokenize` (splitIdentifier 33% + flushLatin 33% + FieldsFunc 21%). Applied: custom streaming tokenizer, 0-alloc truncation, pre-computed entries, inline ToLower, linear lookup.
 
-Optimizations applied:
-1. **Custom streaming BM25 tokenizer** (`tokenizeBM25Freq`): mirrors `lexical.Tokenize` exactly — latin whole-token lowercasing, **streaming identifier subword expansion** (camelCase / snake_case / kebab-case / acronym boundaries, no `strings.FieldsFunc` or `[]string` intermediate), CJK overlapping bigrams. Uses new `lexical.BM25.AddFromFreq` API. Verified by `TestTokenizeBM25FreqParity` (10 representative inputs, frequency+docLen exact match with `lexical.Tokenize`).
-2. **0-alloc truncation** (`firstNRunes`): finds byte offset after N runes via `for i := range s` (rune iteration is allocation-free), slices original string. Replaces `[]rune(body)` + `string(r)` (2 allocs per concept × 1000).
-3. **Pre-computed candidate entries**: text/key/identity computed once per concept (`keyFromIdentity` derives key from pre-computed `identity.Ref`, eliminating a second `FromConcept` call).
-4. **Inline ToLower in jaccardTokens**: `unicode.ToLower(r)` per-rune in the tokenization loop, avoiding `strings.ToLower(s)` intermediate string.
-5. **Linear entry lookup** replaces 1000-entry map: top-10 hits against ≤1000 entries is cheaper than a map per call.
-6. **Defensive copy** for `CandidateTypes` (`slices.Clone`, only 3 strings): prevents caller mutation from polluting the global `defaultDurableTypes`. Verified by `TestCheckMemoryCandidateTypesDefensiveCopy`.
+**Round 2** (commit 04f5f81): independent review found the round-1 tokenizer skipped `splitIdentifier`, causing document/query token asymmetry. Restored streaming subword expansion (camelCase/snake_case/kebab/acronym boundaries, no FieldsFunc/[]string) matching `lexical.Tokenize` exactly. Also fixed `CandidateTypes` aliasing global and double `FromConcept`.
 
-**Behavior unchanged**: 50-case golden (TP=27/FP=0/TN=23/FN=0, P=1.0/R=1.0/FPR=0.0), deterministic tie-break, threshold 0.20, only no_similar/possible_duplicate, read-only. BM25 document token set is semantically identical to `lexical.Tokenize` (parity test). Identifier positive cases (ParseConfig/parse config, load_config/load config, cache_invalidation/cache invalidation, camel/snake/kebab forward+reverse) all pass.
+**Round 3** (this commit): pprof showed 87% of remaining allocs in token string creation (`lowerRunes` 50% + `flushLatin` 37%). Applied **request-scoped string interning**: a `map[string]string` created per `CheckMemory` call (no global state, no persistence, concurrency-safe because each call has its own map). `internToken` UTF-8 encodes runes into a `[]byte` buffer and uses the Go compiler's zero-allocation `m[string(buf)]` lookup optimization; only previously-unseen tokens allocate. Duplicate tokens across 1000 documents reuse the same string object.
 
-**Remaining cost**: ~3.6MB/op, ~100K allocs/op from per-concept tf maps (1000 maps) and token strings (map keys). Eliminating would require string interning (shared mutable state — forbidden) or persistent cache (forbidden). No persistent cache, no second index, no global mutable state.
+**candidateText evaluation**: pprof showed `candidateText` (title+space+body concat) at 2% allocs / 9% bytes — below threshold, left unchanged.
+
+### Tests
+
+- `TestCheckMemoryAllocationBudget`: ceiling 20,000 allocs/op (actual ~9,100), 2x headroom
+- `TestTokenizeBM25FreqParity`: 10 inputs, frequency+docLen exact match with `lexical.Tokenize`
+- `TestCheckMemoryCandidateTypesDefensiveCopy`: global not polluted by caller mutation
+- Golden 50 cases: TP=27, FP=0, TN=23, FN=0, P=1.0, R=1.0, FPR=0.0
+
+### Remaining cost
+
+~2.8MB/op, ~9K allocs/op. Dominated by 1000 per-concept tf maps (~1 each) and map growth. Eliminating would require map pooling (sync.Pool — forbidden) or persistent cache (forbidden). No unsafe, no sync.Pool, no global mutable state, no persistent state. Token parity with `lexical.Tokenize` is exact (verified by parity test).
 
 ## 5. Race test
 

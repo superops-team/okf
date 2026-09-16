@@ -487,9 +487,10 @@ func TestTokenizeBM25FreqParity(t *testing.T) {
 				refFreq[tok]++
 			}
 
-			// Under test: streaming tokenizer.
+			// Under test: streaming tokenizer with request-scoped interner.
 			gotFreq := make(map[string]int, len(refTokens))
-			gotLen := tokenizeBM25Freq(in, gotFreq)
+			interner := make(map[string]string, len(refTokens))
+			gotLen := tokenizeBM25Freq(in, gotFreq, interner)
 
 			if gotLen != len(refTokens) {
 				t.Errorf("docLen = %d, want %d (ref tokens: %v)", gotLen, len(refTokens), refTokens)
