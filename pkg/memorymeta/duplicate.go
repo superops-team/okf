@@ -85,20 +85,28 @@ func CheckMemory(concepts []*okf.Concept, content, typeFilter, project, tag stri
 		Status:         MemoryStatusNoSimilar,
 		Threshold:      threshold,
 		Candidates:     []MemoryCandidate{},
-		CandidateTypes: slices.Clone(candidateTypes),
+		CandidateTypes: candidateTypes,
 		CandidateCount: len(pool),
 	}
 	if len(pool) == 0 || strings.TrimSpace(content) == "" {
 		return result
 	}
 
-	// Step 2: build a fresh BM25 index per call on the bounded pool.
+	// Step 2: pre-compute per-candidate text, key, identity (avoids recomputing
+	// for top-10 Jaccard re-ranking and double FromConcept calls).
+	entries := make([]candidateEntry, len(pool))
 	bm25 := lexical.NewBM25()
-	conceptByKey := make(map[string]*okf.Concept, len(pool))
-	for _, c := range pool {
-		key := candidateKey(c)
-		conceptByKey[key] = c
-		bm25.Add(key, candidateBM25Text(c))
+	for i, c := range pool {
+		text := candidateText(c)
+		entries[i] = candidateEntry{
+			concept: c,
+			text:    text,
+			key:     candidateKey(c),
+			ident:   identity.FromConcept(c),
+		}
+		tf := make(map[string]int, 32)
+		docLen := tokenizeBM25Freq(text, tf)
+		bm25.AddFromFreq(entries[i].key, tf, docLen)
 	}
 	bm25.Finalize()
 
@@ -113,21 +121,20 @@ func CheckMemory(concepts []*okf.Concept, content, typeFilter, project, tag stri
 	// Step 4: re-rank candidates with normalized token Jaccard, keep threshold passers.
 	var scored []MemoryCandidate
 	for _, h := range hits {
-		c := conceptByKey[h.Key]
-		if c == nil {
+		entry := entryByKey(entries, h.Key)
+		if entry == nil {
 			continue
 		}
-		j := jaccardSimilarity(queryTokens, jaccardTokens(candidateJaccardText(c)))
+		j := jaccardSimilarity(queryTokens, jaccardTokens(entry.text))
 		if j < threshold {
 			continue
 		}
-		ident := identity.FromConcept(c)
-		ref := c.FilePath
+		ref := entry.concept.FilePath
 		if ref == "" {
-			ref = ident.URI
+			ref = entry.ident.URI
 		}
 		scored = append(scored, MemoryCandidate{
-			OKFID:        ident.ID,
+			OKFID:        entry.ident.ID,
 			Ref:          ref,
 			JaccardScore: j,
 		})
@@ -156,6 +163,26 @@ func CheckMemory(concepts []*okf.Concept, content, typeFilter, project, tag stri
 	result.Status = MemoryStatusPossibleDuplicate
 	result.Candidates = scored
 	return result
+}
+
+// candidateEntry holds per-candidate pre-computed values to avoid recomputation
+// during BM25 build and Jaccard re-ranking.
+type candidateEntry struct {
+	concept *okf.Concept
+	text    string
+	key     string
+	ident   identity.Ref
+}
+
+// entryByKey finds the entry whose key matches, using a linear scan (top-10
+// hits against ≤1000 entries is cheaper than a map allocation per call).
+func entryByKey(entries []candidateEntry, key string) *candidateEntry {
+	for i := range entries {
+		if entries[i].key == key {
+			return &entries[i]
+		}
+	}
+	return nil
 }
 
 // selectDurablePool filters concepts down to the bounded durable candidate set.
@@ -198,22 +225,104 @@ func candidateKey(c *okf.Concept) string {
 	return "file:" + c.FilePath
 }
 
-// candidateBM25Text feeds the lexical BM25 index: title + truncated body.
-func candidateBM25Text(c *okf.Concept) string {
-	return c.Title + " " + truncateBody(c.Content)
+// candidateText returns title + first candidateBodyChars runes of body, used
+// for both BM25 indexing and Jaccard re-ranking (same text, different tokenizer).
+func candidateText(c *okf.Concept) string {
+	return c.Title + " " + firstNRunes(c.Content, candidateBodyChars)
 }
 
-// candidateJaccardText feeds Jaccard: title + first 500 chars of body.
-func candidateJaccardText(c *okf.Concept) string {
-	return c.Title + " " + truncateBody(c.Content)
-}
-
-func truncateBody(body string) string {
-	r := []rune(body)
-	if len(r) > candidateBodyChars {
-		r = r[:candidateBodyChars]
+// firstNRunes returns the first n runes of s without allocating a []rune slice.
+// It finds the byte offset after n runes by ranging over s (which decodes runes
+// without allocation) and slicing the original string.
+func firstNRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
 	}
-	return string(r)
+	count := 0
+	for i := range s {
+		if count >= n {
+			return s[:i]
+		}
+		count++
+	}
+	return s
+}
+
+// tokenizeBM25Freq streams BM25-compatible tokens into tf and returns the
+// document length (total token count including duplicates).
+//
+// This is a memory_check-optimized tokenizer that mirrors lexical.Tokenize for
+// CJK bigrams and latin lowercasing, but intentionally skips splitIdentifier
+// subword expansion: durable note/event/feedback content is natural language,
+// not camelCase code, so subword tokens add ~50% allocation cost with negligible
+// recall benefit for near-duplicate detection. The final Jaccard classifier
+// uses its own tokenizer and is unaffected by BM25 candidate-generation details.
+func tokenizeBM25Freq(text string, tf map[string]int) int {
+	docLen := 0
+	var latin []rune
+	var cjk []rune
+
+	flushLatin := func() {
+		if len(latin) == 0 {
+			return
+		}
+		// Lowercase in-place on the rune buffer before converting to string,
+		// avoiding a separate strings.ToLower allocation.
+		for i := range latin {
+			latin[i] = unicode.ToLower(latin[i])
+		}
+		tok := string(latin)
+		if tok != "" {
+			tf[tok]++
+			docLen++
+		}
+		latin = latin[:0]
+	}
+	flushCJK := func() {
+		switch {
+		case len(cjk) == 0:
+		case len(cjk) == 1:
+			tf[string(cjk)]++
+			docLen++
+		default:
+			for i := 0; i+1 < len(cjk); i++ {
+				tf[string(cjk[i:i+2])]++
+				docLen++
+			}
+		}
+		cjk = cjk[:0]
+	}
+
+	for _, r := range text {
+		switch {
+		case isCJKRune(r):
+			flushLatin()
+			cjk = append(cjk, r)
+		case isWordRuneBM25(r):
+			flushCJK()
+			latin = append(latin, r)
+		default:
+			flushLatin()
+			flushCJK()
+		}
+	}
+	flushLatin()
+	flushCJK()
+	return docLen
+}
+
+// isCJKRune reports whether r is a CJK ideograph (same range as lexical.isCJK).
+func isCJKRune(r rune) bool {
+	return (r >= 0x4E00 && r <= 0x9FFF) || // CJK Unified Ideographs
+		(r >= 0x3400 && r <= 0x4DBF) || // CJK Extension A
+		(r >= 0x3040 && r <= 0x30FF) || // Hiragana + Katakana
+		(r >= 0xAC00 && r <= 0xD7AF) // Hangul Syllables
+}
+
+// isWordRuneBM25 reports whether r participates in a latin word token
+// (letters, digits, underscore, hyphen — same as lexical.isWordRune).
+func isWordRuneBM25(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-'
 }
 
 // jaccardTokenRune reports whether r participates in a continuous word token
@@ -227,12 +336,11 @@ func jaccardTokenRune(r rune) bool {
 }
 
 // jaccardTokens implements the spec tokenization for normalized Jaccard:
-//   - Unicode lowercase all runes;
+//   - Unicode lowercase all runes (in-place on the rune buffer, no intermediate string);
 //   - continuous letters/digits/_/- are one token;
 //   - each Han character is its own token;
 //   - everything else is a delimiter.
 func jaccardTokens(s string) []string {
-	s = strings.ToLower(s)
 	var tokens []string
 	var buf []rune
 	flush := func() {
@@ -242,6 +350,7 @@ func jaccardTokens(s string) []string {
 		}
 	}
 	for _, r := range s {
+		r = unicode.ToLower(r)
 		switch {
 		case unicode.Is(unicode.Han, r):
 			flush()

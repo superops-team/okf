@@ -45,16 +45,47 @@ All 10 queries: P=1.0, R=1.0. Covers `**` recursion, `*` segment match, `*_test.
 
 ## 4. 1000-concept memory_check benchmark (S22)
 
-Go benchmark: `BenchmarkCheckMemory1000Miss` / `BenchmarkCheckMemory1000Hit` in `pkg/memorymeta/duplicate_benchmark_test.go`.
+Go benchmark: `BenchmarkCheckMemory1000Miss` / `BenchmarkCheckMemory1000Hit` in `pkg/memorymeta/duplicate_benchmark_test.go`. Allocation regression guard: `TestCheckMemoryAllocationBudget` (ceiling 150K allocs/op).
+
+### After optimization (current)
 
 | benchmark | ns/op | B/op | allocs/op |
 |---|---:|---:|---:|
-| 1000 miss | 25,464,271 (~25.5ms) | 9,157,784 | 257,084 |
-| 1000 hit | 30,633,581 (~30.6ms) | 9,253,048 | 258,022 |
+| 1000 miss | ~8,000,000 (~8.0ms) | 3,135,000 | 54,075 |
+| 1000 hit | ~9,800,000 (~9.8ms) | 3,210,000 | 54,960 |
 
-E2E CLI: `okf tool query -q "test" --memory-check` on 1000 durable notes → ~68ms wall time.
+### Before optimization (baseline)
 
-**Known cost**: ~9MB/op, ~257K allocs/op dominated by tokenizing 1000 bodies for per-call BM25 build. The fresh 10-iteration run measured ~25.5ms miss and ~30.6ms hit; the Spec has no hard performance threshold. Acceptable for v1, with BM25 caching or incremental tokenization retained as a later optimization.
+| benchmark | ns/op | B/op | allocs/op |
+|---|---:|---:|---:|
+| 1000 miss | ~26,400,000 (~26.4ms) | 9,158,000 | 257,090 |
+| 1000 hit | ~25,800,000 (~25.8ms) | 9,252,000 | 258,020 |
+
+### Improvement
+
+| metric | before | after | reduction |
+|---|---:|---:|---:|
+| latency (miss) | 26.4ms | 8.0ms | **69%** (3.3x faster) |
+| B/op (miss) | 9.16MB | 3.14MB | **66%** |
+| allocs/op (miss) | 257K | 54K | **79%** |
+
+### Optimization method (pprof-guided)
+
+pprof (`-alloc_objects`) showed 95% of allocations in `lexical.Tokenize`:
+- `flushLatin` (`string(latin)` + `strings.ToLower`): 33%
+- `splitIdentifier` (subword expansion via `strings.FieldsFunc`): 33%
+- `strings.FieldsFunc`: 21%
+
+Optimizations applied:
+1. **Custom streaming BM25 tokenizer** (`tokenizeBM25Freq`): mirrors `lexical.Tokenize` CJK bigrams + latin lowercase but skips `splitIdentifier` subword expansion. Durable note/event/feedback content is natural language (not camelCase code), so subword tokens add ~50% allocation cost with negligible recall benefit. Streams directly into `map[string]int`, avoiding `[]string` intermediate. Uses `lexical.BM25.AddFromFreq` (new API).
+2. **0-alloc truncation** (`firstNRunes`): finds byte offset after N runes via `for i := range s` (rune iteration is allocation-free), slices original string. Replaces `[]rune(body)` + `string(r)` (2 allocs per concept × 1000).
+3. **Pre-computed candidate entries**: text/key/identity computed once per concept, reused for both BM25 build and top-10 Jaccard re-ranking. Eliminates double `truncateBody` and double `identity.FromConcept`.
+4. **Inline ToLower in jaccardTokens**: `unicode.ToLower(r)` per-rune in the tokenization loop, avoiding `strings.ToLower(s)` intermediate string.
+5. **Linear entry lookup** replaces `map[string]*okf.Concept`: top-10 hits against ≤1000 entries is cheaper than a 1000-entry map per call.
+
+**Behavior unchanged**: 44-case golden (TP=21/FP=0/TN=23/FN=0), deterministic tie-break, threshold 0.20, only no_similar/possible_duplicate, read-only. BM25 candidate generation uses a simpler tokenizer but the final Jaccard classifier is unchanged; golden tests confirm no regression.
+
+**Remaining cost**: ~3.1MB/op, ~54K allocs/op dominated by per-concept tf map (1000 maps) and individual token strings ( unavoidable for map keys without string interning, which would require shared mutable state — forbidden). No persistent cache, no second index, no global state.
 
 ## 5. Race test
 

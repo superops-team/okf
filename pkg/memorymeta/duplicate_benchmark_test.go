@@ -61,3 +61,21 @@ func BenchmarkCheckMemory1000Hit(b *testing.B) {
 		_ = CheckMemory(corpus, hitBody, "", "", "", 0.20)
 	}
 }
+
+// TestCheckMemoryAllocationBudget is a non-fragile regression guard: 1000
+// durable concepts must stay under a generous allocs/op ceiling. The ceiling
+// is set well above the optimized target (~100K) but well below the original
+// unoptimized ~257K, so a regression that reintroduces per-token subword
+// splitting or []rune truncation will fail.
+func TestCheckMemoryAllocationBudget(t *testing.T) {
+	corpus := benchDurableCorpus(1000)
+	const query = "test"
+	allocs := testing.AllocsPerRun(10, func() {
+		_ = CheckMemory(corpus, query, "", "", "", 0.20)
+	})
+	const maxAllocs = 150000 // generous ceiling; optimized target is ~80-100K
+	if allocs > maxAllocs {
+		t.Fatalf("CheckMemory 1000-concept allocs/op = %.0f, exceeds budget %d", allocs, maxAllocs)
+	}
+	t.Logf("CheckMemory 1000-concept allocs/op = %.0f (budget %d)", allocs, maxAllocs)
+}

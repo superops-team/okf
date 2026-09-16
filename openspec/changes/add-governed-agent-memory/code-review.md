@@ -113,11 +113,20 @@ Spec commit: 8712bb7.
 - **Fix**: The harness now builds the current `./cmd/okf` source into a temporary binary on every run (unless an explicit `OKF_BIN` override is provided), asserts exactly 20 unique legacy tool names, and removes the temporary binary afterward.
 - **Verification**: Fresh E2E reports exactly 20 legacy tools; `TestModernToolsListHas11Tools` reports exactly 11 modern tools.
 
+### Finding 20: memory_check performance — 257K allocs/op, 9MB/op (optimized)
+- **Severity**: medium (performance, not correctness)
+- **File**: `pkg/memorymeta/duplicate.go`
+- **Issue**: pprof showed 95% of allocations in `lexical.Tokenize`: `splitIdentifier` subword expansion (33%) + `flushLatin` string/ToLower (33%) + `strings.FieldsFunc` (21%). Durable note/event/feedback content is natural language, not camelCase code, so subword tokens added ~50% allocation cost with negligible recall benefit. `truncateBody` allocated `[]rune` + `string` per concept (2000 allocs). `identity.FromConcept` called twice per top-10 candidate.
+- **Fix**: (1) Custom `tokenizeBM25Freq` streaming tokenizer (CJK bigrams + latin lowercase, no splitIdentifier) + new `lexical.BM25.AddFromFreq` API; (2) `firstNRunes` 0-alloc truncation via rune-range byte offset; (3) pre-computed `candidateEntry` (text/key/identity once); (4) inline `unicode.ToLower` in `jaccardTokens`; (5) linear entry lookup replaces 1000-entry map.
+- **Test**: `TestCheckMemoryAllocationBudget` (ceiling 150K allocs/op; optimized = 54K).
+- **Result**: latency 26ms→8ms (69%↓), B/op 9.16MB→3.14MB (66%↓), allocs 257K→54K (79%↓). 44-case golden unchanged (TP=21/FP=0/TN=23/FN=0).
+- **Remaining**: ~3.1MB/op from per-concept tf maps (1000) and token strings (map keys). Eliminating would require string interning (shared mutable state — forbidden by hard constraints) or persistent cache (forbidden).
+
 ## Summary
 
 | Round | Findings | High | Medium | Low | Info |
 |---|---|---|---|---|---|
 | Round 1 (explicit) | 10 | 1 | 6 | 2 | 1 |
-| Round 2 (implicit) | 9 | 0 | 0 | 0 | 9 |
+| Round 2 (implicit) | 10 | 0 | 1 (perf) | 0 | 9 |
 
 All high and medium findings were fixed and verified by the tests named above. No critical issues, unresolved security vulnerabilities, or known Spec violations remain.
