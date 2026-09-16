@@ -59,8 +59,8 @@ All S01–S39 map to implementation entries and automated tests. Every scenario 
 
 ## Golden set (memory_check)
 
-- 44 test cases (≥40 required)
-- TP=21, FP=0, TN=23, FN=0
+- 50 test cases (≥40 required; includes 6 identifier-form positives)
+- TP=27, FP=0, TN=23, FN=0
 - Precision=1.000 (gate ≥0.85) ✓
 - Recall=1.000 (gate ≥0.70) ✓
 - FPR=0.000 (gate ≤0.15) ✓

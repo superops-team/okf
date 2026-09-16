@@ -1,18 +1,18 @@
 # Evidence — add-governed-agent-memory
 
 Spec commit: 8712bb7. Implementation branch: spec/governed-agent-memory.
-Implementation commits: df66533 (P0-P4), ad56bd8 (targeted coverage and compatibility fixes), 3af326c (current-source legacy E2E hardening and final audit corrections).
-Final GAUNTLET source state: 3af326c. Verification date: 2026-09-16. Go version: go1.26.0 linux/amd64.
+Implementation chain: df66533 (P0-P4), ad56bd8 (targeted tests/mutants/Codex), 3af326c (current-source legacy E2E), af08f93 + 04f5f81 + c8fb8f8 (profile-driven performance and correctness closure), 746f789 (deterministic Codex context harness and final audit corrections).
+Final executable GAUNTLET source state: 746f789919caad75c065782aa1e593dbcc08120c. Verification date: 2026-09-17. Go version: go1.26.0 linux/amd64.
 
 ## 1. Golden memory_check set (S20-S27)
 
 - Test: `TestCheckMemoryGolden` in `pkg/memorymeta/duplicate_golden_test.go`
-- Cases: 44 (≥40 required)
-- Confusion matrix: TP=21, FP=0, TN=23, FN=0
+- Cases: 50 (≥40 required; includes 6 identifier-form positive cases)
+- Confusion matrix: TP=27, FP=0, TN=23, FN=0
 - Precision=1.000 (gate ≥0.85) ✓
 - Recall=1.000 (gate ≥0.70) ✓
 - FPR=0.000 (gate ≤0.15) ✓
-- Covers: rephrase, partial overlap, cross-language (Chinese per-character tokens), common-word negatives, code-identifier negatives, single-character high-frequency negatives.
+- Covers: rephrase, partial overlap, cross-language (Chinese per-character tokens), common-word negatives, code-identifier negatives, and camelCase/snake_case/kebab-case positive retrieval in both identifier/prose directions.
 - Each case prints expected/predicted/status/score for auditability.
 
 ## 2. Token regression (S28-S34)

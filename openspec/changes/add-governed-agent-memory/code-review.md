@@ -118,7 +118,7 @@ Spec commit: 8712bb7.
 - **File**: `pkg/memorymeta/duplicate.go`
 - **Issue**: pprof showed 95% of allocations in `lexical.Tokenize`: `splitIdentifier` subword expansion (33%) + `flushLatin` string/ToLower (33%) + `strings.FieldsFunc` (21%). `truncateBody` allocated `[]rune` + `string` per concept (2000 allocs). `identity.FromConcept` called twice per top-10 candidate.
 - **Fix**: (1) Custom `tokenizeBM25Freq` streaming tokenizer with in-place subword expansion (no FieldsFunc/[]string) + `lexical.BM25.AddFromFreq`; (2) `firstNRunes` 0-alloc truncation; (3) pre-computed `candidateEntry` + `keyFromIdentity` (single FromConcept); (4) inline ToLower in jaccardTokens; (5) linear entry lookup replaces map; (6) `slices.Clone` defensive copy for CandidateTypes.
-- **Test**: `TestCheckMemoryAllocationBudget` (150K ceiling, actual 100K), `TestTokenizeBM25FreqParity` (10 inputs exact frequency+docLen match with lexical.Tokenize), `TestCheckMemoryCandidateTypesDefensiveCopy`.
+- **Intermediate test state**: `TestCheckMemoryAllocationBudget` initially used a 150K ceiling and measured about 100K allocs/op; Finding 23 later tightened the final ceiling to 20K with about 9.1K actual. Tokenizer parity and defensive-copy tests remained green throughout.
 - **Intermediate result before request-scoped interning**: latency 26.4ms→10.1ms in that run, B/op 9.16MB→3.62MB, allocs 257K→100K; 50-case golden remained TP=27/FP=0/TN=23/FN=0.
 - **Superseded remainder**: the then-remaining token-string allocations were subsequently reduced by request-scoped interning in Finding 23; no global mutable state or persistent cache was required.
 
