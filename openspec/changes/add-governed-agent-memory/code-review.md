@@ -30,34 +30,34 @@ Spec commit: 8712bb7.
 - **Severity**: medium
 - **File**: `cmd/okf/cmd_tool_governed_test.go`
 - **Issue**: Only manifest/context CLI tests existed; no `okf tool query --memory-check` test.
-- **Fix**: Dispatched to tests agent (TestToolQueryMemoryCheckFlags, TestToolQueryMemoryCheckEmptyQ, TestToolQueryMemoryCheckTypeSingular, TestToolQueryMemoryCheckDupThreshold).
+- **Fix**: Added `TestToolQueryMemoryCheckFlags`, `TestToolQueryMemoryCheckEmptyQ`, `TestToolQueryMemoryCheckTypeSingular`, and `TestToolQueryMemoryCheckDupThreshold`; all pass in the final targeted run.
 
 ### Finding 5: MCP query governed schema/handler missing test
 - **Severity**: medium
 - **File**: `pkg/mcp/tools_governed_test.go`
 - **Issue**: No okf_query memory_check schema/handler test.
-- **Fix**: Dispatched to tests agent (TestMCPQueryMemoryCheckSchema, TestMCPQueryMemoryCheckHandler).
+- **Fix**: Added `TestMCPQueryMemoryCheckSchema`, `TestMCPQueryMemoryCheckHandler`, and `TestMCPQuerySharedAcrossEras`; the final targeted run passes.
 
 ### Finding 6: S18 50k entry bound no independent test
 - **Severity**: medium
 - **File**: `pkg/manifest/manifest.go` walkStaleScan
 - **Issue**: maxStaleScanEntries was a const; no test verified the bound behavior.
-- **Fix**: Dispatched to tests agent (convert to var, TestStaleRefsScanEntryLimit with small injected limit).
+- **Fix**: Made `maxStaleScanEntries` injectable and added `TestStaleRefsScanEntryLimit`, covering exact-limit completion and over-limit `incomplete+warning` behavior without constructing 50,000 files.
 
 ### Finding 7: S37 CustomFields round-trip only map-level, no parser round-trip
 - **Severity**: medium
 - **Issue**: SetCodeRefs writes to map, but no test verifies parser→Concept→CustomFields→serialize round-trip preserves governance/code_refs/my_custom.
-- **Fix**: Dispatched to tests agent.
+- **Fix**: Added `TestS37CustomFieldsParseRoundTrip` and `TestS37ConceptHasNoGovernedStructFields`; the parser/serializer round-trip preserves governance, code_refs, and unrelated custom fields while the core Concept type remains unchanged.
 
 ### Finding 8: No governed-memory mutation runner
 - **Severity**: medium
 - **Issue**: Existing mutants.sh covers chunking/lexical; no mutants for governance/for_path/memory_check/projection/context refs.
-- **Fix**: Dispatched to mutants agent (tools/mutants-governed-memory.sh, 6-8 mutants, gauntlet L9c).
+- **Fix**: Added `tools/mutants-governed-memory.sh` with 8 targeted mutants and wired it into Gauntlet L9c; all 8 are killed and byte-for-byte restoration is verified.
 
 ### Finding 9: Codex evidence not persistent, for_path 0 results in real corpus
 - **Severity**: medium
 - **Issue**: Previous Codex run used the 329-concept corpus which has no code_refs, so for_path returned 0 matches — doesn't prove the feature works. No persistent harness script.
-- **Fix**: Dispatched to Codex agent (tools/verify-governed-memory-codex.sh with dedicated fixture containing code_refs and durable duplicate).
+- **Fix**: Added persistent `tools/verify-governed-memory-codex.sh` with a dedicated code_refs and durable-duplicate fixture. The final run verifies summary, for_path hit, context refs body retrieval, and possible_duplicate with zero mutating calls.
 
 ## Round 2 — Implicit review (protocol, boundaries, security, performance, compatibility)
 
@@ -79,7 +79,7 @@ Spec commit: 8712bb7.
 
 ### Finding 13: Codex tools count = 21 investigation
 - **Severity**: info
-- **Verification**: OKF MCP server modern era has 11 tools. Codex CLI may wrap MCP tools in a namespace (e.g., `mcp__okf__toolname`) and also expose built-in tools. The "21" count likely includes Codex built-ins + OKF tools. Dispatched to Codex agent to distinguish OKF MCP tools vs Codex namespace wrapper in output.
+- **Verification**: Direct E2E catalog checks prove the OKF MCP server exposes 20 legacy tools and 11 modern tools. Codex 0.153.4 uses the legacy era and separately exposes 9 built-in function tools; MCP calls are routed through the `okf` namespace. The prior "21" value was a model self-report from prompt-visible names, not a server catalog count. The persistent Codex harness now reports these scopes separately.
 
 ### Finding 14: Governance hold advisory — verified no server block
 - **Severity**: info
@@ -99,18 +99,25 @@ Spec commit: 8712bb7.
 ### Finding 17: Concept struct unchanged — verified
 - **Severity**: info
 - **File**: `pkg/okf/types.go`
-- **Verification**: governance/code_refs stored in `Concept.CustomFields` (inline YAML map). `pkg/memorymeta` accessors read/write CustomFields only. No fields added to Concept struct. Tests agent will add compile-time/reflection assertion.
+- **Verification**: governance/code_refs are stored only in `Concept.CustomFields` (inline YAML map). `pkg/memorymeta` accessors read/write CustomFields only. `TestS37ConceptHasNoGovernedStructFields` reflects over the core type and `TestS37CustomFieldsParseRoundTrip` verifies parser/serializer preservation.
 
 ### Finding 18: Dual-era MCP compatibility — verified
 - **Severity**: info
 - **File**: `pkg/mcp/tools.go`
 - **Verification**: okf_manifest/okf_query/okf_context use shared registration function; both modern (11 tools) and legacy (20 tools) eras get the updated schemas. `test_mcp.py` (legacy) and `test_ext_skills.py` (modern) both pass.
 
+### Finding 19: Legacy MCP E2E used a stale prebuilt binary and did not assert the exact catalog
+- **Severity**: medium
+- **File**: `test_mcp.py`
+- **Issue**: The harness launched repository-local `okf-bin`, which could lag the current source. It also checked only eight required names, allowing an 18-tool stale binary to pass despite the legacy contract requiring exactly 20 tools.
+- **Fix**: The harness now builds the current `./cmd/okf` source into a temporary binary on every run (unless an explicit `OKF_BIN` override is provided), asserts exactly 20 unique legacy tool names, and removes the temporary binary afterward.
+- **Verification**: Fresh E2E reports exactly 20 legacy tools; `TestModernToolsListHas11Tools` reports exactly 11 modern tools.
+
 ## Summary
 
 | Round | Findings | High | Medium | Low | Info |
 |---|---|---|---|---|---|
-| Round 1 (explicit) | 9 | 1 | 5 | 2 | 1 |
+| Round 1 (explicit) | 10 | 1 | 6 | 2 | 1 |
 | Round 2 (implicit) | 9 | 0 | 0 | 0 | 9 |
 
-All high/medium findings fixed or dispatched. No critical issues. No security vulnerabilities. No spec violations.
+All high and medium findings were fixed and verified by the tests named above. No critical issues, unresolved security vulnerabilities, or known Spec violations remain.

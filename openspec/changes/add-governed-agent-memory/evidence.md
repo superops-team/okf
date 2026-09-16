@@ -49,12 +49,12 @@ Go benchmark: `BenchmarkCheckMemory1000Miss` / `BenchmarkCheckMemory1000Hit` in 
 
 | benchmark | ns/op | B/op | allocs/op |
 |---|---:|---:|---:|
-| 1000 miss | 21,914,476 (~21.9ms) | 9,157,697 | 257,083 |
-| 1000 hit | 24,159,495 (~24.2ms) | 9,252,386 | 258,020 |
+| 1000 miss | 25,464,271 (~25.5ms) | 9,157,784 | 257,084 |
+| 1000 hit | 30,633,581 (~30.6ms) | 9,253,048 | 258,022 |
 
 E2E CLI: `okf tool query -q "test" --memory-check` on 1000 durable notes → ~68ms wall time.
 
-**Known cost**: ~9MB/op, ~257K allocs/op dominated by tokenizing 1000 bodies for per-call BM25 build. Spec has no hard performance threshold. Acceptable for v1; future optimization could cache BM25 index.
+**Known cost**: ~9MB/op, ~257K allocs/op dominated by tokenizing 1000 bodies for per-call BM25 build. The fresh 10-iteration run measured ~25.5ms miss and ~30.6ms hit; the Spec has no hard performance threshold. Acceptable for v1, with BM25 caching or incremental tokenization retained as a later optimization.
 
 ## 5. Race test
 
@@ -80,7 +80,7 @@ No test-order coupling.
 
 ## 7. MCP E2E (S36-S39)
 
-- `python3 test_mcp.py` (legacy 2024-11-05): 13/13 PASS. tools/list = 20 legacy tools.
+- `python3 test_mcp.py` (legacy 2024-11-05): 13/13 PASS. The harness now builds the current source into a temporary binary and asserts exactly 20 unique legacy tools; this prevents stale `okf-bin` artifacts from producing false-green results.
 - `python3 test_ext_skills.py` (modern 2026-07-28 + skills): 8/8 PASS. tools/list = 11 modern tools.
 - Both eras: okf_manifest/okf_query/okf_context gain new optional params; no tool removed.
 - `TestMCPQuerySharedAcrossEras`: modern and legacy tools/list both contain okf_query with `reflect.DeepEqual` schema.
@@ -148,7 +148,7 @@ GAUNTLET PASS: build/vet/staticcheck/tests/tests(-race)/coverage(70%)/shuffle/
 
 ## 12. Code review
 
-See `code-review.md` for full two-round review with 18 findings (1 high fixed via DTO, 5 medium dispatched/fixed, 2 low fixed, 10 info verified).
+See `code-review.md` for the complete two-round review with 19 findings (1 high fixed via projection DTO, 6 medium fixed including current-source legacy E2E, 2 low fixed, and 10 informational verifications).
 
 ## 13. Hard constraints compliance
 
