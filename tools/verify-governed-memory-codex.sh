@@ -156,12 +156,12 @@ RUN_TASK "task_b" \
 Do NOT read any files, do NOT use shell, do NOT run okf CLI. \
 After the tool returns, report which concept titles matched."
 
-# Task C: okf_context refs=<redis_okf_id>
+# Task C: okf_context with a known stable ref. The fixture deliberately has
+# two similar Redis concepts, so model-driven ref discovery would test model
+# choice rather than deterministic OKF context-ref behavior.
 RUN_TASK "task_c" \
-  "Step 1: Call OKF MCP tool 'okf_manifest' with {\"mode\":\"summary\",\"limit\":5} to list concepts. \
-Find the okf_id of the concept titled 'Redis Cache'. \
-Step 2: Call OKF MCP tool 'okf_context' with refs set to that okf_id. \
-Do NOT read any files, do NOT use shell, do NOT run okf CLI. \
+  "You MUST call the OKF MCP tool named 'okf_context' with EXACTLY these arguments: {\"refs\":[\"${REDIS_OKF_ID}\"],\"budget_tokens\":1000}. \
+Do NOT call okf_manifest first. Do NOT read any files, do NOT use shell, do NOT run okf CLI. \
 After the tool returns, report whether body content was returned."
 
 # Task D: okf_query memory_check=true
@@ -216,6 +216,12 @@ for task_label, fname in task_files.items():
             continue
         server = item.get("server", "")
         tool = item.get("tool", "")
+        arguments = item.get("arguments", {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {}
         # Extract result text
         result_text = ""
         result = item.get("result", {})
@@ -225,13 +231,14 @@ for task_label, fname in task_files.items():
                 result_text += c.get("text", "")
         if canary in result_text:
             has_canary = True
-        calls.append((server, tool, result_text))
-        all_calls.append((task_label, server, tool, canary in result_text))
+        calls.append((server, tool, arguments, result_text))
+        all_calls.append((task_label, server, tool, arguments, canary in result_text))
 
     task_results[task_label] = {
         "calls": len(calls),
         "has_canary": has_canary,
         "tools": [c[1] for c in calls],
+        "arguments": [c[2] for c in calls],
     }
 
 # --- Per-task assertions ---
@@ -289,11 +296,16 @@ else:
     if not found_redis_hit:
         errors.append("B: for_path=hit did not match redis concept")
 
-# Task C: must have okf_context call, result must contain canary
+# Task C: must have exactly one okf_context call with the expected stable ref
+# and explicit budget; its result must contain the body canary.
 c_calls = task_results.get("C_context_refs", {})
 c_tools = c_calls.get("tools", [])
-if "okf_context" not in c_tools:
-    errors.append(f"C: no okf_context call (got {c_tools})")
+if c_tools != ["okf_context"]:
+    errors.append(f"C: expected exactly one okf_context call (got {c_tools})")
+c_args = c_calls.get("arguments", [])
+expected_refs = ["okf_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"]
+if len(c_args) != 1 or c_args[0].get("refs") != expected_refs or c_args[0].get("budget_tokens") != 1000:
+    errors.append(f"C: unexpected okf_context arguments (got {c_args})")
 if not c_calls.get("has_canary", False):
     errors.append("C: okf_context result did not contain canary")
 
@@ -323,7 +335,7 @@ else:
 
 # --- Global: zero mutating calls ---
 mutating_found = []
-for task, server, tool, _ in all_calls:
+for task, server, tool, _, _ in all_calls:
     for pat in MUTATING_PATTERNS:
         if tool == pat or tool.startswith(pat):
             mutating_found.append(f"{task}:{tool}")

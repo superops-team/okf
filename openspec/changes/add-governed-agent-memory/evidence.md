@@ -45,7 +45,7 @@ All 10 queries: P=1.0, R=1.0. Covers `**` recursion, `*` segment match, `*_test.
 
 ## 4. 1000-concept memory_check benchmark (S22)
 
-Go benchmark: `BenchmarkCheckMemory1000Miss` / `BenchmarkCheckMemory1000Hit` in `pkg/memorymeta/duplicate_benchmark_test.go`. Allocation regression guard: `TestCheckMemoryAllocationBudget` (ceiling 150K allocs/op).
+Go benchmark: `BenchmarkCheckMemory1000Miss` / `BenchmarkCheckMemory1000Hit` in `pkg/memorymeta/duplicate_benchmark_test.go`. Allocation regression guard: `TestCheckMemoryAllocationBudget` (ceiling 20K allocs/op).
 
 ### After optimization (current, with streaming subword expansion + request-scoped string interning)
 
@@ -53,10 +53,10 @@ Go benchmark: `BenchmarkCheckMemory1000Miss` / `BenchmarkCheckMemory1000Hit` in 
 
 | benchmark | ns/op range | B/op | allocs/op |
 |---|---:|---:|---:|
-| 1000 miss | 11.0–12.3ms | 2,831,700 | 9,105 |
-| 1000 hit | 12.7–13.3ms | 2,906,500 | 9,991 |
+| 1000 miss | 11.0–12.3ms | 2,831,634–2,831,700 | 9,105 |
+| 1000 hit | 12.7–18.1ms | 2,906,500–2,906,586 | 9,991 |
 
-Note: latency has run-to-run variance (independent retest of prior commit measured miss 19.4ms / hit 17.1ms on the same hardware under different load). B/op and allocs/op are stable across runs.
+Latency varies with host load; two independent final 20x runs observed miss 11.0–12.3ms and hit 12.7–18.1ms. B/op and allocs/op were stable to rounding across both runs and are the primary regression metrics.
 
 ### Before optimization (baseline, lexical.Tokenize + []rune truncate)
 
@@ -129,14 +129,16 @@ Persistent harness: `tools/verify-governed-memory-codex.sh` (fail-closed, saniti
 
 Fixture: isolated git repo with 2 concepts — `notes/redis.md` (code_refs: ["pkg/cache/*.go"]) and `notes/redis-dup.md` (near-duplicate for memory_check).
 
-4 read-only tasks, **5 MCP tool calls, 0 mutating**:
+4 read-only tasks, **4 MCP tool calls, 0 mutating**:
 
 | Task | Tool calls | Assertion | Result |
 |---|---|---|---|
 | A. manifest summary limit=3 | okf_manifest ×1 | items returned | PASS |
 | B. for_path=pkg/cache/redis.go hit | okf_manifest ×1 | redis concept matched | PASS |
-| C. context refs=<redis_id> | okf_manifest ×1 + okf_context ×1 | body contains CANARY | PASS |
+| C. context refs=<redis_id>, budget=1000 | okf_context ×1 | exact stable ref and budget arguments; body contains CANARY | PASS |
 | D. query memory_check=true | okf_query ×1 | status=possible_duplicate | PASS |
+
+The harness asserts the actual `mcp_tool_call` arguments for Context (`refs=[known stable id]`, `budget_tokens=1000`) instead of asking the model to choose between two intentionally similar Redis concepts. This keeps the Agent invocation real while making the OKF capability check deterministic.
 
 **Tools count clarification**: OKF MCP server exposes 20 tools (legacy era) or 11 tools (modern era). Codex CLI has 9 built-in function tools (exec, wait, etc.). Previous "21" was model's miscount from system prompt (20 OKF + 1 generic MCP mechanism). No 21st OKF tool exists.
 

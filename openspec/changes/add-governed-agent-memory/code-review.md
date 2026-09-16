@@ -71,11 +71,11 @@ Spec commit: 8712bb7.
 - **File**: `pkg/manifest/manifest.go:850-882`
 - **Verification**: Unreadable directory entry → markIncomplete. Symlink escape → markIncomplete. Entry cap → markIncomplete. Walk error → markIncomplete. Never silently returns empty. `TestServiceManifestStaleRefsSymlinkEscape` locks symlink case.
 
-### Finding 12: memory_check benchmark cost — documented
-- **Severity**: info
+### Finding 12: memory_check benchmark cost — identified and closed by Findings 20–23
+- **Severity**: info at discovery; later promoted to an optimization task
 - **File**: `pkg/memorymeta/duplicate.go`
-- **Data**: 1000 concepts → ~22-24ms/op, ~9.1MB/op, ~257K allocs/op. Dominated by tokenizing 1000 bodies for BM25. Spec has no hard performance threshold. Acceptable for v1; future optimization could cache BM25 index or use incremental tokenization.
-- **Decision**: Document as known cost; no blocking issue.
+- **Original data**: 1000 concepts measured about 22–24ms/op, 9.1MB/op, and 257K allocs/op, dominated by per-call tokenization.
+- **Final resolution**: Findings 20–23 added streaming parity-preserving tokenization, defensive result isolation, single identity derivation, and request-scoped token interning. Final repeated runs are documented in Evidence; allocation is now about 9.1K–10.0K/op and bytes about 2.83–2.91MB/op without persistent/global state.
 
 ### Finding 13: Codex tools count = 21 investigation
 - **Severity**: info
@@ -119,8 +119,8 @@ Spec commit: 8712bb7.
 - **Issue**: pprof showed 95% of allocations in `lexical.Tokenize`: `splitIdentifier` subword expansion (33%) + `flushLatin` string/ToLower (33%) + `strings.FieldsFunc` (21%). `truncateBody` allocated `[]rune` + `string` per concept (2000 allocs). `identity.FromConcept` called twice per top-10 candidate.
 - **Fix**: (1) Custom `tokenizeBM25Freq` streaming tokenizer with in-place subword expansion (no FieldsFunc/[]string) + `lexical.BM25.AddFromFreq`; (2) `firstNRunes` 0-alloc truncation; (3) pre-computed `candidateEntry` + `keyFromIdentity` (single FromConcept); (4) inline ToLower in jaccardTokens; (5) linear entry lookup replaces map; (6) `slices.Clone` defensive copy for CandidateTypes.
 - **Test**: `TestCheckMemoryAllocationBudget` (150K ceiling, actual 100K), `TestTokenizeBM25FreqParity` (10 inputs exact frequency+docLen match with lexical.Tokenize), `TestCheckMemoryCandidateTypesDefensiveCopy`.
-- **Result**: latency 26.4ms→10.1ms (62%↓), B/op 9.16MB→3.62MB (61%↓), allocs 257K→100K (61%↓). 50-case golden unchanged (TP=27/FP=0/TN=23/FN=0).
-- **Remaining**: ~3.6MB/op from 1000 tf maps + token strings. Eliminating requires string interning (shared mutable state — forbidden) or persistent cache (forbidden).
+- **Intermediate result before request-scoped interning**: latency 26.4ms→10.1ms in that run, B/op 9.16MB→3.62MB, allocs 257K→100K; 50-case golden remained TP=27/FP=0/TN=23/FN=0.
+- **Superseded remainder**: the then-remaining token-string allocations were subsequently reduced by request-scoped interning in Finding 23; no global mutable state or persistent cache was required.
 
 ### Finding 21: CandidateTypes aliased global defaultDurableTypes (fixed)
 - **Severity**: high (correctness/concurrency)
