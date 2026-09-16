@@ -57,6 +57,27 @@ An uninitialized repository returns `knowledge_not_initialized`; `okf_status` do
 
 `okf_ask` fixes the type filter to `note`, `event`, and `feedback`. Optional `project` filtering is applied inside `Service.Query` before ranking; `limit` is honored and ordering is deterministic for identical inputs.
 
+### Governed Agent Memory parameters
+
+`okf_manifest` accepts these additional JSON fields (all optional):
+
+- `for_path` (string): repo-relative path; lexical match against each concept's `code_refs`. File need not exist.
+- `governance` (string array): filter by effective governance level (`constraint`, `hold`, `context`).
+- `mode` (string): `summary` | `hit` | `full` (default `full`, backward compatible).
+- `max_tokens` (integer): token budget applied after filter/sort/offset/limit; item tokens = Go `encoding/json` bytes / 4, excluding envelope.
+- `stale_refs` (boolean): scan filesystem (max 50k entries) for code_refs matching no file; returns `incomplete` + `scan_warnings` on symlink escape or unreadable dirs.
+
+`okf_query` accepts:
+
+- `memory_check` (boolean): when true, returns a dedicated `MemoryCheckResult` (`no_similar` | `possible_duplicate` with top-3 candidates and Jaccard scores), skipping normal query ranking. Read-only.
+- `dup_threshold` (float): Jaccard threshold for `possible_duplicate` classification (default 0.20).
+
+`okf_context` accepts:
+
+- `refs` (string array): stable concept IDs to read full body for. Either `query` or `refs` must be non-empty.
+
+All MCP/JSON fields use underscores; the equivalent CLI flags use hyphens (`--for-path`, `--max-tokens`, `--stale-refs`, `--memory-check`, `--dup-threshold`, `--refs`).
+
 ### Durable writes and idempotency
 
 `okf_note` and `okf_log` accept:

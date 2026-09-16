@@ -101,6 +101,8 @@ func cmdToolQuery(args []string) int {
 	includeTrace := flags.Bool("include-trace", false, "Include compact retrieval trace")
 	groupBy := flags.String("group-by", "", "Project results into chunk|concept|source|folder groups (omit keeps ungrouped output)")
 	includeGroupMembers := flags.Bool("include-group-members", false, "Include per-member hit lists inside each projected group")
+	memoryCheck := flags.Bool("memory-check", false, "Read-only duplicate check against durable note/event/feedback concepts (skips normal ranking)")
+	dupThreshold := flags.Float64("dup-threshold", 0, "Jaccard threshold for --memory-check (default 0.20)")
 	if err := parseToolFlags(flags, args); err != nil {
 		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationQuery, toolsvc.ErrInvalidRequest, sanitizeFlagParseError(err), "Fix the invalid flag values and try again."), *jsonOut || hasJSONFlag(args))
 	}
@@ -125,6 +127,8 @@ func cmdToolQuery(args []string) int {
 		IncludeTrace:        *includeTrace,
 		GroupBy:             *groupBy,
 		IncludeGroupMembers: *includeGroupMembers,
+		MemoryCheck:         *memoryCheck,
+		DupThreshold:        *dupThreshold,
 	}), *jsonOut)
 }
 
@@ -135,11 +139,12 @@ func cmdToolContext(args []string) int {
 	budgetTokens := flags.Int("budget-tokens", 4000, "Estimated token budget")
 	includeRelations := flags.Bool("include-relations", false, "Include relation expansion")
 	includeTrace := flags.Bool("include-trace", false, "Include compact retrieval trace")
+	refs := flags.String("refs", "", "Comma-separated stable refs (okf_id or okf://concept/<id>) whose concept bodies are included")
 	if err := parseToolFlags(flags, args); err != nil {
 		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationContext, toolsvc.ErrInvalidRequest, sanitizeFlagParseError(err), "Fix the invalid flag values and try again."), *jsonOut || hasJSONFlag(args))
 	}
-	if strings.TrimSpace(*query) == "" {
-		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationContext, toolsvc.ErrInvalidQuery, "query must not be empty", "Pass --q with a non-empty query string."), *jsonOut)
+	if strings.TrimSpace(*query) == "" && *refs == "" {
+		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationContext, toolsvc.ErrInvalidQuery, "query or refs must not both be empty", "Pass --q and/or --refs with at least one value."), *jsonOut)
 	}
 	if *budgetTokens <= 0 {
 		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationContext, toolsvc.ErrInvalidRequest, "budget-tokens must be positive", "Pass --budget-tokens with a positive integer."), *jsonOut)
@@ -149,6 +154,7 @@ func cmdToolContext(args []string) int {
 		BudgetTokens:     *budgetTokens,
 		IncludeRelations: *includeRelations,
 		IncludeTrace:     *includeTrace,
+		Refs:             splitListFlag(*refs),
 	}), *jsonOut)
 }
 
@@ -163,6 +169,11 @@ func cmdToolManifest(args []string) int {
 	stale := flags.Bool("stale", false, "Filter by staleness (omit to match all)")
 	folderPrefix := flags.String("folder-prefix", "", "Bundle-relative folder prefix filter")
 	includeTrace := flags.Bool("include-trace", false, "Include deterministic scan trace")
+	forPath := flags.String("for-path", "", "Lexical code-path filter; matches declared code_refs")
+	governance := flags.String("governance", "", "Comma-separated governance filter (constraint|hold|context)")
+	mode := flags.String("mode", "", "Projection mode: summary|hit|full (default full)")
+	maxTokens := flags.Int("max-tokens", 0, "If > 0, cap returned items by an approximate token budget")
+	staleRefs := flags.Bool("stale-refs", false, "Scan the repo FS for code_refs matching no file")
 	if err := parseToolFlags(flags, args); err != nil {
 		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationManifest, toolsvc.ErrInvalidRequest, sanitizeFlagParseError(err), "Fix the invalid flag values and try again."), *jsonOut || hasJSONFlag(args))
 	}
@@ -174,6 +185,11 @@ func cmdToolManifest(args []string) int {
 		Statuses:     splitListFlag(*statuses),
 		FolderPrefix: *folderPrefix,
 		IncludeTrace: *includeTrace,
+		ForPath:      *forPath,
+		Governance:   splitListFlag(*governance),
+		Mode:         *mode,
+		MaxTokens:    *maxTokens,
+		StaleRefs:    *staleRefs,
 	}
 	// Preserve omitted-vs-explicit presence: a limit flag that was not provided
 	// stays nil (→100); an explicit value is pointer-backed and range-validated.

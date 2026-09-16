@@ -259,6 +259,64 @@ okf agent remove --client cursor --yes
 
 所有权用非秘密的 `OKF_MANAGED=agentconfig-v1` 标记。对已存在但格式错误、无所有权标记或标记不平衡的条目，状态报 `conflict` 且文件字节不变——没有 `--force`。Cursor 使用 `.cursor/mcp.json` + `.cursor/rules/okf.md`；Claude Code 使用 `.mcp.json` + `.claude/skills/okf/SKILL.md`；Codex 使用 `.codex/config.toml` + 受管 `AGENTS.md` 块。`--client all`（默认）即同时处理三者。
 
+## 治理型 Agent 记忆
+
+governance 与 code_refs 作为扩展字段（`governance`、`code_refs`）存在于每个概念的 Markdown frontmatter 中，保存在 `Concept.CustomFields`——核心 `Concept` struct 不变。`pkg/memorymeta` 包提供类型化访问器、规范化器和验证器。
+
+### 治理级别
+
+| 级别 | 含义 |
+|---|---|
+| `constraint` | 强制约束；agent 必须遵守。 |
+| `hold` | 执行冻结；agent 应请求用户确认（仅 advisory warning；服务端不阻断写入）。 |
+| `context` | 参考性领域知识（未指定时的默认值）。 |
+
+未知值在非严格模式下降级为 `context` 并产生 warning，在 `okf lint --strict` 中被拒绝。
+
+### 代码引用与 `--for-path`
+
+`code_refs` 是仓库相对路径模式列表。边界：最多 16 个 pattern、每个 256 字节、32 个路径段、2 个 `**` 操作符（每个最多匹配 8 段）。绝对路径、`..` 逃逸、NUL、反斜杠均被拒绝。
+
+```bash
+# 查找治理特定文件的概念（词法匹配；文件无需存在）
+okf tool manifest --for-path pkg/mcp/server.go --mode hit
+# 按治理级别过滤
+okf tool manifest --governance constraint,hold
+```
+
+`--stale-refs` 执行唯一的文件系统扫描（最多 50,000 条目），报告匹配不到磁盘文件的 code_refs；symlink 逃逸或不可读目录返回 `incomplete` + warnings，而非静默空结果。
+
+### 渐进式披露
+
+```bash
+okf tool manifest --mode summary    # okf_id, title, type, governance, ≤80字符描述
+okf tool manifest --mode hit        # summary + tags, code_refs, status, stale_after
+okf tool manifest --mode full       # 全部元数据（默认，向后兼容）
+okf tool manifest --max-tokens 4000 # token 预算：item bytes/4（Go encoding/json），不含 envelope
+```
+
+设置 `--max-tokens` 时，管线为 filter → sort → offset → limit → budget。结果包含 `next_offset`、`omitted_count`（budget_omitted 与 total_remaining 区分）、`truncated`。预算小于首个符合条件项时返回 `budget_too_small` 及 `min_required_tokens`。
+
+### 记忆检查（只读重复检测）
+
+```bash
+okf tool query -q "redis cache invalidation" --memory-check
+okf tool query -q "..." --memory-check --dup-threshold 0.25
+```
+
+`--memory-check` 返回专用 `MemoryCheckResult`（`no_similar` 或 `possible_duplicate`，含 top-3 候选和 Jaccard 分数），跳过普通 query 排序。它在最多 1,000 个 durable 概念（默认 note/event/feedback；`--type` 限定单一类型）上构建 BM25 索引，取 top-10，再按确定性 Unicode token Jaccard 重排。只读——不写入、不阻断。
+
+### Context refs
+
+```bash
+# 按稳定 ID 读取特定概念全文（query 或 refs 至少一个）
+okf tool context --refs okf_abc123,okf_def456 --budget-tokens 2000
+```
+
+### CLI 与 MCP 命名
+
+CLI flags 使用连字符（`--for-path`、`--max-tokens`、`--stale-refs`、`--memory-check`、`--dup-threshold`、`--refs`）。MCP/JSON 字段使用下划线（`for_path`、`max_tokens`、`stale_refs`、`memory_check`、`dup_threshold`、`refs`）。
+
 ## 文档
 
 - [知识库索引](docs/knowledge/index.md) — 模块总览

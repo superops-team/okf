@@ -20,6 +20,7 @@ import (
 	"github.com/superops-team/okf/pkg/git"
 	"github.com/superops-team/okf/pkg/identity"
 	"github.com/superops-team/okf/pkg/manifest"
+	"github.com/superops-team/okf/pkg/memorymeta"
 	"github.com/superops-team/okf/pkg/okf"
 	querypkg "github.com/superops-team/okf/pkg/query"
 )
@@ -153,6 +154,13 @@ type QueryRequest struct {
 	// ungrouped output byte-for-byte (S27).
 	GroupBy             string `json:"group_by,omitempty"`
 	IncludeGroupMembers bool   `json:"include_group_members,omitempty"`
+	// MemoryCheck enables read-only search-before-write duplicate detection
+	// (S20-S27). When true the response carries a dedicated MemoryCheckResult
+	// envelope instead of the normal ranked Query output. Query must be non-empty.
+	MemoryCheck bool `json:"memory_check,omitempty"`
+	// DupThreshold overrides the default Jaccard threshold (0.20) when MemoryCheck
+	// is true. A value <= 0 falls back to memorymeta.DefaultDuplicateThreshold.
+	DupThreshold float64 `json:"dup_threshold,omitempty"`
 }
 
 type ContextRequest struct {
@@ -160,6 +168,10 @@ type ContextRequest struct {
 	BudgetTokens     int    `json:"budget_tokens,omitempty"`
 	IncludeRelations bool   `json:"include_relations,omitempty"`
 	IncludeTrace     bool   `json:"include_trace,omitempty"`
+	// Refs is the governed-agent-memory extension (S35): stable refs (okf_id
+	// or okf://concept/<id>) whose concept bodies are included verbatim under
+	// the same token budget. Query OR Refs must be non-empty.
+	Refs []string `json:"refs,omitempty"`
 }
 
 // ResolveRequest resolves a stable okf://concept/<id> ref to its current path.
@@ -478,6 +490,24 @@ func (s *Service) Query(ctx stdctx.Context, req QueryRequest) ToolEnvelope {
 		return failure(OperationQuery, resolved.repoRoot, resolved.knowledgeDir, freshness, err)
 	}
 
+	// memory_check (S20-S27): read-only, per-call duplicate detection. It returns a
+	// dedicated MemoryCheckResult envelope and skips the normal ranked Query output.
+	// The empty-query guard above already enforces that query is required.
+	if req.MemoryCheck {
+		check := memorymeta.CheckMemory(bundle.Concepts, req.Query, req.Type, req.Project, req.Tag, req.DupThreshold)
+		return ToolEnvelope{
+			SchemaVersion: SchemaVersion,
+			Operation:     OperationQuery,
+			OK:            true,
+			Mutating:      isMutatingOperation(OperationQuery),
+			RepoRoot:      resolved.repoRoot,
+			KnowledgeDir:  resolved.knowledgeDir,
+			Freshness:     freshness,
+			Warnings:      append(staleWarnings(freshness), loadMeta.Warnings...),
+			Result:        check,
+		}
+	}
+
 	trace := []TraceStep(nil)
 	traceWarnings := append([]string{}, loadMeta.Warnings...)
 	traceWarnings = append(traceWarnings, staleWarnings(freshness)...)
@@ -590,11 +620,11 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 			knowledgeNotInitialized(resolved.repoRoot),
 		)
 	}
-	if strings.TrimSpace(req.Query) == "" {
+	if strings.TrimSpace(req.Query) == "" && len(req.Refs) == 0 {
 		return failure(OperationContext, resolved.repoRoot, resolved.knowledgeDir, freshness, toolError{
 			code:        ErrInvalidQuery,
-			message:     "query must not be empty",
-			remediation: "Pass a non-empty query string.",
+			message:     "query or refs must not both be empty",
+			remediation: "Pass a non-empty query string and/or one or more stable refs.",
 		})
 	}
 	if err := checkContext(ctx); err != nil {
@@ -610,9 +640,12 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 	if budget <= 0 {
 		budget = defaultContextBudgetTokens
 	}
-	hits := rankConcepts(bundle.Concepts, req.Query, queryFilters{})
-	if len(hits) > maxContextCandidates {
-		hits = hits[:maxContextCandidates]
+	var hits []QueryHit
+	if strings.TrimSpace(req.Query) != "" {
+		hits = rankConcepts(bundle.Concepts, req.Query, queryFilters{})
+		if len(hits) > maxContextCandidates {
+			hits = hits[:maxContextCandidates]
+		}
 	}
 	items := []ContextItem{}
 	omissions := []ContextOmission{}
@@ -648,6 +681,50 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 	}
 	candidates = mergeContextCandidates(candidates, req.IncludeTrace, &trace)
 	sourceCache := map[string][]byte{}
+	// S35 (P3): refs are packed first, under the same token budget as query
+	// hits. Each ref resolves via the existing identity registry and its concept
+	// body is included verbatim.
+	for _, ref := range req.Refs {
+		if err := checkContext(ctx); err != nil {
+			return failure(OperationContext, resolved.repoRoot, resolved.knowledgeDir, freshness, err)
+		}
+		concept, resolveErr := identity.Resolve(bundle.Concepts, ref)
+		if resolveErr != nil {
+			warnings = append(warnings, "unresolvable ref: "+ref)
+			omissions = append(omissions, ContextOmission{Reason: "ref_unresolved", Count: 1})
+			omitted++
+			continue
+		}
+		data, readErr := readContextSourceFile(conceptBodyPath(concept, resolved.knowledgeDir))
+		if readErr != nil {
+			warnings = append(warnings, "ref body unreadable: "+ref)
+			omissions = append(omissions, ContextOmission{Reason: "ref_body_missing", Count: 1})
+			omitted++
+			continue
+		}
+		text := strings.TrimSpace(string(data))
+		tokens := estimateTokens(text)
+		if tokens <= 0 {
+			omissions = append(omissions, ContextOmission{Reason: "zero_token_snippet", Title: concept.Title, Count: 1})
+			omitted++
+			continue
+		}
+		if usedTokens+tokens > budget {
+			omissions = append(omissions, ContextOmission{Reason: "budget_exceeded", Title: concept.Title, Count: 1})
+			omitted++
+			continue
+		}
+		usedTokens += tokens
+		items = append(items, ContextItem{
+			Title:         concept.Title,
+			Type:          concept.Type,
+			SourcePath:    concept.FilePath,
+			Snippet:       text,
+			TokenEstimate: tokens,
+			Reason:        "ref",
+			Provenance:    "concept.body",
+		})
+	}
 	for i, candidate := range candidates {
 		if err := checkContext(ctx); err != nil {
 			return failure(OperationContext, resolved.repoRoot, resolved.knowledgeDir, freshness, err)
@@ -911,6 +988,9 @@ func (s *Service) Manifest(ctx stdctx.Context, req manifest.ManifestRequest) Too
 		return failure(OperationManifest, resolved.repoRoot, resolved.knowledgeDir, freshness, err)
 	}
 
+	// Inject the repo root so --stale-refs can walk the code tree; the
+	// parameter is not part of the CLI/MCP surface (S17/S18).
+	req.RepoRoot = resolved.repoRoot
 	vectorDir := filepath.Join(filepath.Dir(resolved.knowledgeDir), "vector")
 	result, err := manifest.Build(
 		ctx,
@@ -2288,6 +2368,16 @@ func estimateTokens(text string) int {
 		return 0
 	}
 	return int(math.Ceil(float64(len(runes)) / 4.0))
+}
+
+// conceptBodyPath resolves a loaded concept's markdown file on disk. Concepts
+// loaded from an overlay read path carry that path in CustomFields["knowledge_path"].
+func conceptBodyPath(c *okf.Concept, knowledgeDir string) string {
+	base := knowledgeDir
+	if kp, _ := c.CustomFields["knowledge_path"].(string); kp != "" {
+		base = kp
+	}
+	return filepath.Join(base, filepath.FromSlash(c.FilePath))
 }
 
 func nonEmptyLines(lines []string) []string {
