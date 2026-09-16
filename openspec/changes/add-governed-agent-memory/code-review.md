@@ -116,17 +116,32 @@ Spec commit: 8712bb7.
 ### Finding 20: memory_check performance — 257K allocs/op, 9MB/op (optimized)
 - **Severity**: medium (performance, not correctness)
 - **File**: `pkg/memorymeta/duplicate.go`
-- **Issue**: pprof showed 95% of allocations in `lexical.Tokenize`: `splitIdentifier` subword expansion (33%) + `flushLatin` string/ToLower (33%) + `strings.FieldsFunc` (21%). Durable note/event/feedback content is natural language, not camelCase code, so subword tokens added ~50% allocation cost with negligible recall benefit. `truncateBody` allocated `[]rune` + `string` per concept (2000 allocs). `identity.FromConcept` called twice per top-10 candidate.
-- **Fix**: (1) Custom `tokenizeBM25Freq` streaming tokenizer (CJK bigrams + latin lowercase, no splitIdentifier) + new `lexical.BM25.AddFromFreq` API; (2) `firstNRunes` 0-alloc truncation via rune-range byte offset; (3) pre-computed `candidateEntry` (text/key/identity once); (4) inline `unicode.ToLower` in `jaccardTokens`; (5) linear entry lookup replaces 1000-entry map.
-- **Test**: `TestCheckMemoryAllocationBudget` (ceiling 150K allocs/op; optimized = 54K).
-- **Result**: latency 26ms→8ms (69%↓), B/op 9.16MB→3.14MB (66%↓), allocs 257K→54K (79%↓). 44-case golden unchanged (TP=21/FP=0/TN=23/FN=0).
-- **Remaining**: ~3.1MB/op from per-concept tf maps (1000) and token strings (map keys). Eliminating would require string interning (shared mutable state — forbidden by hard constraints) or persistent cache (forbidden).
+- **Issue**: pprof showed 95% of allocations in `lexical.Tokenize`: `splitIdentifier` subword expansion (33%) + `flushLatin` string/ToLower (33%) + `strings.FieldsFunc` (21%). `truncateBody` allocated `[]rune` + `string` per concept (2000 allocs). `identity.FromConcept` called twice per top-10 candidate.
+- **Fix**: (1) Custom `tokenizeBM25Freq` streaming tokenizer with in-place subword expansion (no FieldsFunc/[]string) + `lexical.BM25.AddFromFreq`; (2) `firstNRunes` 0-alloc truncation; (3) pre-computed `candidateEntry` + `keyFromIdentity` (single FromConcept); (4) inline ToLower in jaccardTokens; (5) linear entry lookup replaces map; (6) `slices.Clone` defensive copy for CandidateTypes.
+- **Test**: `TestCheckMemoryAllocationBudget` (150K ceiling, actual 100K), `TestTokenizeBM25FreqParity` (10 inputs exact frequency+docLen match with lexical.Tokenize), `TestCheckMemoryCandidateTypesDefensiveCopy`.
+- **Result**: latency 26.4ms→10.1ms (62%↓), B/op 9.16MB→3.62MB (61%↓), allocs 257K→100K (61%↓). 50-case golden unchanged (TP=27/FP=0/TN=23/FN=0).
+- **Remaining**: ~3.6MB/op from 1000 tf maps + token strings. Eliminating requires string interning (shared mutable state — forbidden) or persistent cache (forbidden).
+
+### Finding 21: CandidateTypes aliased global defaultDurableTypes (fixed)
+- **Severity**: high (correctness/concurrency)
+- **File**: `pkg/memorymeta/duplicate.go`
+- **Issue**: `CandidateTypes: candidateTypes` set the result field to the global `defaultDurableTypes` slice directly. A caller mutating `result.CandidateTypes[0]` would pollute the global, affecting all subsequent calls and causing data races under concurrent use.
+- **Fix**: Restored `slices.Clone(candidateTypes)` (only 3 strings, negligible cost).
+- **Test**: `TestCheckMemoryCandidateTypesDefensiveCopy` — mutate first result's CandidateTypes, verify second call returns pristine [note event feedback]; also covers explicit type filter.
+
+### Finding 22: tokenizeBM25Freq skipped splitIdentifier, causing document/query token asymmetry (fixed)
+- **Severity**: high (recall regression)
+- **File**: `pkg/memorymeta/duplicate.go`
+- **Issue**: The initial optimized tokenizer skipped `splitIdentifier` subword expansion, but `BM25.Search` still uses `lexical.Tokenize` for queries (which does subword expansion). Documents indexed "ParseConfig" as only "parseconfig" while queries "parse config" produced ["parse","config"], reducing candidate recall. Also `isWordRuneBM25` incorrectly included `-` as a word character (lexical.isWordRune only has `_`), so "cache-invalidation" was one token instead of two.
+- **Fix**: Implemented streaming subword expansion in `tokenizeBM25Freq` (camelCase / snake_case / kebab-case / acronym boundaries, no FieldsFunc or []string), matching `lexical.splitIdentifier` semantics exactly. Fixed `isWordRuneBM25` to match lexical (letters, digits, `_` only).
+- **Test**: `TestTokenizeBM25FreqParity` — 10 representative inputs (ASCII, CJK, camelCase, snake_case, kebab, acronyms, mixed, empty) compared frequency map + docLen with `lexical.Tokenize`, all exact match. Added 6 identifier positive golden cases (ParseConfig/parse config, load_config/load config, cache_invalidation/cache invalidation, forward+reverse), all pass.
+- **Impact**: Subword expansion adds ~46K allocs/op (54K→100K) but restores recall parity with lexical.Tokenize. Still 61% below original baseline.
 
 ## Summary
 
 | Round | Findings | High | Medium | Low | Info |
 |---|---|---|---|---|---|
 | Round 1 (explicit) | 10 | 1 | 6 | 2 | 1 |
-| Round 2 (implicit) | 10 | 0 | 1 (perf) | 0 | 9 |
+| Round 2 (implicit) | 12 | 2 | 1 (perf) | 0 | 9 |
 
 All high and medium findings were fixed and verified by the tests named above. No critical issues, unresolved security vulnerabilities, or known Spec violations remain.

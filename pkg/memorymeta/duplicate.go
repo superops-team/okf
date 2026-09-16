@@ -85,7 +85,7 @@ func CheckMemory(concepts []*okf.Concept, content, typeFilter, project, tag stri
 		Status:         MemoryStatusNoSimilar,
 		Threshold:      threshold,
 		Candidates:     []MemoryCandidate{},
-		CandidateTypes: candidateTypes,
+		CandidateTypes: slices.Clone(candidateTypes),
 		CandidateCount: len(pool),
 	}
 	if len(pool) == 0 || strings.TrimSpace(content) == "" {
@@ -97,15 +97,15 @@ func CheckMemory(concepts []*okf.Concept, content, typeFilter, project, tag stri
 	entries := make([]candidateEntry, len(pool))
 	bm25 := lexical.NewBM25()
 	for i, c := range pool {
-		text := candidateText(c)
+		ident := identity.FromConcept(c)
 		entries[i] = candidateEntry{
 			concept: c,
-			text:    text,
-			key:     candidateKey(c),
-			ident:   identity.FromConcept(c),
+			text:    candidateText(c),
+			key:     keyFromIdentity(ident, c.FilePath),
+			ident:   ident,
 		}
 		tf := make(map[string]int, 32)
-		docLen := tokenizeBM25Freq(text, tf)
+		docLen := tokenizeBM25Freq(entries[i].text, tf)
 		bm25.AddFromFreq(entries[i].key, tf, docLen)
 	}
 	bm25.Finalize()
@@ -217,12 +217,14 @@ func conceptProject(c *okf.Concept) string {
 	return v
 }
 
-// candidateKey returns a stable, unique key for BM25 Add/Search round-trip.
-func candidateKey(c *okf.Concept) string {
-	if id := identity.FromConcept(c).ID; id != "" {
-		return id
+// keyFromIdentity derives a stable BM25 key from a pre-computed identity.Ref,
+// avoiding a second identity.FromConcept call. Falls back to file path when the
+// concept has no stable ID.
+func keyFromIdentity(ident identity.Ref, filePath string) string {
+	if ident.ID != "" {
+		return ident.ID
 	}
-	return "file:" + c.FilePath
+	return "file:" + filePath
 }
 
 // candidateText returns title + first candidateBodyChars runes of body, used
@@ -251,32 +253,28 @@ func firstNRunes(s string, n int) string {
 // tokenizeBM25Freq streams BM25-compatible tokens into tf and returns the
 // document length (total token count including duplicates).
 //
-// This is a memory_check-optimized tokenizer that mirrors lexical.Tokenize for
-// CJK bigrams and latin lowercasing, but intentionally skips splitIdentifier
-// subword expansion: durable note/event/feedback content is natural language,
-// not camelCase code, so subword tokens add ~50% allocation cost with negligible
-// recall benefit for near-duplicate detection. The final Jaccard classifier
-// uses its own tokenizer and is unaffected by BM25 candidate-generation details.
+// It mirrors lexical.Tokenize exactly: latin whole-token lowercasing,
+// splitIdentifier subword expansion (camelCase / snake_case / kebab-case /
+// acronym boundaries), and CJK overlapping bigrams. The streaming form avoids
+// the []string intermediate and strings.FieldsFunc allocation that lexical
+// uses, while producing identical frequency maps and document lengths (verified
+// by TestTokenizeBM25FreqParity).
 func tokenizeBM25Freq(text string, tf map[string]int) int {
 	docLen := 0
-	var latin []rune
+	var latin []rune     // lowercased runes (for whole token)
+	var latinOrig []rune // original-case runes (for subword boundary detection)
 	var cjk []rune
 
 	flushLatin := func() {
 		if len(latin) == 0 {
 			return
 		}
-		// Lowercase in-place on the rune buffer before converting to string,
-		// avoiding a separate strings.ToLower allocation.
-		for i := range latin {
-			latin[i] = unicode.ToLower(latin[i])
-		}
-		tok := string(latin)
-		if tok != "" {
-			tf[tok]++
-			docLen++
-		}
+		whole := string(latin) // latin is already lowercased
+		tf[whole]++
+		docLen++
+		docLen += addSubwords(latinOrig, whole, tf)
 		latin = latin[:0]
+		latinOrig = latinOrig[:0]
 	}
 	flushCJK := func() {
 		switch {
@@ -300,7 +298,8 @@ func tokenizeBM25Freq(text string, tf map[string]int) int {
 			cjk = append(cjk, r)
 		case isWordRuneBM25(r):
 			flushCJK()
-			latin = append(latin, r)
+			latin = append(latin, unicode.ToLower(r))
+			latinOrig = append(latinOrig, r)
 		default:
 			flushLatin()
 			flushCJK()
@@ -309,6 +308,67 @@ func tokenizeBM25Freq(text string, tf map[string]int) int {
 	flushLatin()
 	flushCJK()
 	return docLen
+}
+
+// addSubwords splits original-case runes into identifier subwords (mirrors
+// lexical.splitIdentifier) and adds each lowercased subword that differs from
+// whole. Returns the number of subwords added (for docLen accounting).
+func addSubwords(original []rune, whole string, tf map[string]int) int {
+	if len(original) == 0 {
+		return 0
+	}
+	added := 0
+	// Split by delimiters _ - . (same as lexical.splitIdentifier FieldsFunc).
+	segStart := 0
+	for segEnd := 0; segEnd <= len(original); segEnd++ {
+		if segEnd < len(original) && original[segEnd] != '_' && original[segEnd] != '-' && original[segEnd] != '.' {
+			continue
+		}
+		// Process segment [segStart, segEnd).
+		if segEnd > segStart {
+			seg := original[segStart:segEnd]
+			added += addCamelSubwords(seg, whole, tf)
+		}
+		segStart = segEnd + 1
+	}
+	return added
+}
+
+// addCamelSubwords detects camelCase and acronym boundaries in a delimiter-free
+// segment and adds each lowercased subword that differs from whole. Mirrors
+// lexical.splitIdentifier's inner loop.
+func addCamelSubwords(seg []rune, whole string, tf map[string]int) int {
+	if len(seg) == 0 {
+		return 0
+	}
+	added := 0
+	start := 0
+	for i := 1; i < len(seg); i++ {
+		prev, cur := seg[i-1], seg[i]
+		lowerToUpper := (unicode.IsLower(prev) || unicode.IsDigit(prev)) && unicode.IsUpper(cur)
+		acronymEnd := i+1 < len(seg) && unicode.IsUpper(prev) && unicode.IsUpper(cur) && unicode.IsLower(seg[i+1])
+		if lowerToUpper || acronymEnd {
+			if sub := lowerRunes(seg[start:i]); sub != "" && sub != whole {
+				tf[sub]++
+				added++
+			}
+			start = i
+		}
+	}
+	if sub := lowerRunes(seg[start:]); sub != "" && sub != whole {
+		tf[sub]++
+		added++
+	}
+	return added
+}
+
+// lowerRunes lowercases a rune slice and returns it as a string (no intermediate
+// []rune allocation beyond the input slice).
+func lowerRunes(rs []rune) string {
+	for i := range rs {
+		rs[i] = unicode.ToLower(rs[i])
+	}
+	return string(rs)
 }
 
 // isCJKRune reports whether r is a CJK ideograph (same range as lexical.isCJK).
@@ -320,9 +380,10 @@ func isCJKRune(r rune) bool {
 }
 
 // isWordRuneBM25 reports whether r participates in a latin word token
-// (letters, digits, underscore, hyphen — same as lexical.isWordRune).
+// (letters, digits, underscore — exactly lexical.isWordRune). Hyphen is a
+// delimiter, not a word character, matching lexical.Tokenize behavior.
 func isWordRuneBM25(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-'
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
 }
 
 // jaccardTokenRune reports whether r participates in a continuous word token

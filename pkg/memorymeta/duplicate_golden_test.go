@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/superops-team/okf/pkg/lexical"
 	"github.com/superops-team/okf/pkg/okf"
 )
 
@@ -100,6 +101,14 @@ func memoryCheckCorpus() []*okf.Concept {
 			"Naming conventions code style",
 			"Use mixedCaps for exported functions like ParseConfig and loadConfig internally. Keep names short but unambiguous in small scopes. Avoid hungarian notation and do not abbreviate standard words into cryptic identifiers.",
 			nil),
+		mkConcept("okf_67676767676767676767676767676767", "note",
+			"Cache invalidation patterns",
+			"We use cache_invalidation hooks on every write path. The HTTPServer middleware calls cache_invalidation before responding. A stale cache is worse than no cache, so every mutation triggers cache_invalidation synchronously.",
+			nil),
+		mkConcept("okf_78787878787878787878787878787878", "note",
+			"Config loading guide",
+			"To parse config from yaml, call load_config at startup. The load_config function validates required fields and returns an error if a key is missing. Never parse config ad-hoc in request handlers.",
+			nil),
 	}
 }
 
@@ -138,6 +147,13 @@ func goldenCases() []goldenCase {
 		{"p_cn_backup", "数据库每天凌晨自动备份到对象存储，备份保留三十天，每周做恢复演练并校验文件完整性。", true},
 		{"p_cn_backup_partial", "备份保留三十天，每周一次恢复演练，失败时告警值班人员。", true},
 		{"p_cross_lang_redis", "Redis cache frequent read responses with TTL and jitter; the 缓存 strategy populates from Postgres on a miss.", true},
+		// ---- positives: identifier subword matching (camelCase/snake_case/kebab) ----
+		{"p_ident_camel_forward", "parse config from yaml at startup and validate required fields", true},
+		{"p_ident_snake_forward", "cache invalidation happens on every write path before responding", true},
+		{"p_ident_load_forward", "load config validates required keys and returns error on missing field", true},
+		{"p_ident_camel_reverse", "ParseConfig validates required fields and returns error on missing key", true},
+		{"p_ident_snake_reverse", "cache_invalidation hooks run on every write path synchronously", true},
+		{"p_ident_kebab_forward", "naming conventions use mixed caps for exported functions like parse config; keep names short and avoid hungarian notation", true},
 		// ---- negatives: unrelated common words ----
 		{"n_common_fox", "the quick brown fox jumps over the lazy dog near a quiet riverbank this morning", false},
 		{"n_common_weather", "today the weather is sunny and we should go for a walk in the park after lunch", false},
@@ -402,5 +418,95 @@ func TestCheckMemoryProjectTagFilter(t *testing.T) {
 		if c.OKFID == "okf_77777777777777777777777777777778" {
 			t.Fatalf("project=beta should exclude the alpha note, but it appears: %+v", c)
 		}
+	}
+}
+
+// TestCheckMemoryCandidateTypesDefensiveCopy verifies that the returned
+// CandidateTypes slice is a defensive copy: mutating it does not affect the
+// global defaultDurableTypes or subsequent calls. This guards against the
+// regression where CandidateTypes was set to the global slice directly.
+func TestCheckMemoryCandidateTypesDefensiveCopy(t *testing.T) {
+	corpus := memoryCheckCorpus()
+
+	// First call: default types.
+	r1 := CheckMemory(corpus, "test", "", "", "", 0)
+	if len(r1.CandidateTypes) != 3 || r1.CandidateTypes[0] != "note" {
+		t.Fatalf("first call CandidateTypes = %v, want [note event feedback]", r1.CandidateTypes)
+	}
+
+	// Mutate the returned slice — must not pollute the global or later calls.
+	r1.CandidateTypes[0] = "MUTATED"
+	r1.CandidateTypes = append(r1.CandidateTypes, "extra")
+
+	// Second call: must still return the pristine defaults.
+	r2 := CheckMemory(corpus, "test", "", "", "", 0)
+	if len(r2.CandidateTypes) != 3 {
+		t.Fatalf("after mutation, CandidateTypes len = %d, want 3", len(r2.CandidateTypes))
+	}
+	if r2.CandidateTypes[0] != "note" || r2.CandidateTypes[1] != "event" || r2.CandidateTypes[2] != "feedback" {
+		t.Fatalf("after mutation, CandidateTypes = %v, want [note event feedback]", r2.CandidateTypes)
+	}
+
+	// Explicit type filter also returns a defensive copy.
+	r3 := CheckMemory(corpus, "test", "note", "", "", 0)
+	if len(r3.CandidateTypes) != 1 || r3.CandidateTypes[0] != "note" {
+		t.Fatalf("type-filtered CandidateTypes = %v, want [note]", r3.CandidateTypes)
+	}
+	r3.CandidateTypes[0] = "MUTATED2"
+	r4 := CheckMemory(corpus, "test", "note", "", "", 0)
+	if r4.CandidateTypes[0] != "note" {
+		t.Fatalf("after type-filter mutation, CandidateTypes[0] = %q, want note", r4.CandidateTypes[0])
+	}
+}
+
+// TestTokenizeBM25FreqParity verifies that tokenizeBM25Freq produces the same
+// term frequencies and document length as lexical.Tokenize for representative
+// inputs: ASCII prose, CJK, camelCase, snake_case, kebab-case, acronyms, and
+// mixed content. This guards against the regression where the custom tokenizer
+// skipped splitIdentifier subword expansion, causing document/query token
+// asymmetry and reduced recall.
+func TestTokenizeBM25FreqParity(t *testing.T) {
+	inputs := []string{
+		"hello world",
+		"ParseConfig loads the config",
+		"load_config from yaml",
+		"cache-invalidation on write",
+		"HTTPServer timeout settings",
+		"my_variable_name is set",
+		"数据库备份策略每天凌晨执行",
+		"Use ParseConfig and load_config together",
+		"a_b-c.d mixed delimiters",
+		"",
+	}
+	for _, in := range inputs {
+		t.Run(in, func(t *testing.T) {
+			// Reference: lexical.Tokenize builds a frequency map.
+			refTokens := lexical.Tokenize(in)
+			refFreq := make(map[string]int, len(refTokens))
+			for _, tok := range refTokens {
+				refFreq[tok]++
+			}
+
+			// Under test: streaming tokenizer.
+			gotFreq := make(map[string]int, len(refTokens))
+			gotLen := tokenizeBM25Freq(in, gotFreq)
+
+			if gotLen != len(refTokens) {
+				t.Errorf("docLen = %d, want %d (ref tokens: %v)", gotLen, len(refTokens), refTokens)
+			}
+			if len(gotFreq) != len(refFreq) {
+				t.Errorf("distinct terms = %d, want %d\ngot: %v\nwant: %v", len(gotFreq), len(refFreq), gotFreq, refFreq)
+			}
+			for tok, wantCount := range refFreq {
+				if gotFreq[tok] != wantCount {
+					t.Errorf("term %q: got count %d, want %d", tok, gotFreq[tok], wantCount)
+				}
+			}
+			for tok := range gotFreq {
+				if _, ok := refFreq[tok]; !ok {
+					t.Errorf("extra term %q not in reference", tok)
+				}
+			}
+		})
 	}
 }
