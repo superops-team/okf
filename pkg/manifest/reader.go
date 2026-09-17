@@ -117,6 +117,11 @@ type Frontmatter struct {
 	OKFID       string
 	ParentOKFID string
 	SourcePath  string
+	// Custom holds the inline frontmatter keys not modeled above (e.g.
+	// governance, code_refs). It is surfaced on FileReport so manifest.Build
+	// can project it through pkg/memorymeta typed accessors without ever
+	// allocating a full *okf.Concept or reading the body.
+	Custom map[string]any
 }
 
 // rawFrontmatter is the YAML decode target. Verified stays interface{} so a
@@ -142,6 +147,8 @@ type FileReport struct {
 	Size    int64  // file size in bytes, from Stat
 	Meta    *Frontmatter
 	Warning string
+	// Custom mirrors Meta.Custom for convenience when Meta may be nil.
+	Custom map[string]any
 }
 
 // ScanKnowledgeFiles walks root recursively, decodes only the bounded
@@ -204,6 +211,7 @@ func ScanKnowledgeFiles(ctx context.Context, root string, fr FileReader) ([]File
 			return nil
 		}
 		report.Meta = meta
+		report.Custom = meta.Custom
 		reports = append(reports, report)
 		return nil
 	})
@@ -323,13 +331,20 @@ func decodeFrontmatter(content []byte) (*Frontmatter, error) {
 		Sources:     raw.Sources,
 		Generated:   raw.Generated,
 		Verified:    normalizeVerified(raw.Verified),
-	}
-	if raw.Custom != nil {
-		fm.OKFID, _ = raw.Custom["okf_id"].(string)
-		fm.ParentOKFID, _ = raw.Custom["parent_okf_id"].(string)
-		fm.SourcePath, _ = raw.Custom["source_path"].(string)
+		OKFID:       stringCustomField(raw.Custom, "okf_id"),
+		ParentOKFID: stringCustomField(raw.Custom, "parent_okf_id"),
+		SourcePath:  stringCustomField(raw.Custom, "source_path"),
+		Custom:      raw.Custom,
 	}
 	return fm, nil
+}
+
+func stringCustomField(custom map[string]any, key string) string {
+	if custom == nil {
+		return ""
+	}
+	s, _ := custom[key].(string)
+	return s
 }
 
 // normalizeVerified accepts nil, a single {by,at} mapping, or a list of

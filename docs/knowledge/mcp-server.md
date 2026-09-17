@@ -13,17 +13,19 @@ Agent-facing repository operations delegate to one shared `pkg/tool.Service`; ha
 
 ## Protocol and startup
 
-- **Transport**: stdio, JSON-RPC 2.0 with byte-accurate `Content-Length` framing
-- **Protocol version**: `2024-11-05`
+- **Transport**: stdio, JSON-RPC 2.0. Modern era uses newline-delimited JSON (normative); legacy `Content-Length` framing remains for backward compatibility.
+- **Dual protocol eras**:
+  - **Legacy `2024-11-05`**: initialize-based, 20 tools, Prompts, Resources, ping.
+  - **Modern `2026-07-28`**: stateless, per-request `_meta` validation, `server/discover`, `resultType: complete` + serverInfo `_meta` on all success responses. One era per stdio process.
 - **Server name**: `okf-mcp-server`
-- **Server version**: `0.4.1`
+- **Server version**: from `pkg/okf/meta` (single source, shared by both eras)
 
 ```bash
 okf mcp --repo /path/to/repository --dir .okf/knowledge
 ```
 
 `--repo` selects the repository root. A relative `--dir` resolves under the canonical repository root; an absolute `--dir` remains absolute.
-`--bundle` remains available to preload a legacy bundle for the original bundle/list/get/search/lint/resource operations.
+`--bundle` remains available to preload a legacy bundle for the original bundle/list/get/search/lint/resource operations (loaded only after legacy initialize).
 
 ## Agent-facing repository tools
 
@@ -54,6 +56,27 @@ An uninitialized repository returns `knowledge_not_initialized`; `okf_status` do
 `okf_query` and `okf_context` use the same service as the `okf tool` command. They do not run an independent contains-search implementation. `okf_context` guarantees `used_tokens <= budget_tokens` and reports omitted items structurally.
 
 `okf_ask` fixes the type filter to `note`, `event`, and `feedback`. Optional `project` filtering is applied inside `Service.Query` before ranking; `limit` is honored and ordering is deterministic for identical inputs.
+
+### Governed Agent Memory parameters
+
+`okf_manifest` accepts these additional JSON fields (all optional):
+
+- `for_path` (string): repo-relative path; lexical match against each concept's `code_refs`. File need not exist.
+- `governance` (string array): filter by effective governance level (`constraint`, `hold`, `context`).
+- `mode` (string): `summary` | `hit` | `full` (default `full`, backward compatible).
+- `max_tokens` (integer): token budget applied after filter/sort/offset/limit; item tokens = Go `encoding/json` bytes / 4, excluding envelope.
+- `stale_refs` (boolean): scan filesystem (max 50k entries) for code_refs matching no file; returns `incomplete` + `scan_warnings` on symlink escape or unreadable dirs.
+
+`okf_query` accepts:
+
+- `memory_check` (boolean): when true, returns a dedicated `MemoryCheckResult` (`no_similar` | `possible_duplicate` with top-3 candidates and Jaccard scores), skipping normal query ranking. Read-only.
+- `dup_threshold` (float): Jaccard threshold for `possible_duplicate` classification (default 0.20).
+
+`okf_context` accepts:
+
+- `refs` (string array): stable concept IDs to read full body for. Either `query` or `refs` must be non-empty.
+
+All MCP/JSON fields use underscores; the equivalent CLI flags use hyphens (`--for-path`, `--max-tokens`, `--stale-refs`, `--memory-check`, `--dup-threshold`, `--refs`).
 
 ### Durable writes and idempotency
 
@@ -125,11 +148,35 @@ The following existing tools remain available and preserve their contracts:
 
 For durable note/event/feedback capture, isolated knowledge directories, idempotent retries, and restart verification, see `docs/knowledge/durable-capture.md`.
 
+## Portable Agent Skill (modern era)
+
+The server exposes a canonical Agent Skill at `skill://okf/SKILL.md`:
+
+- **Content**: W01–W07 workflow (status check, mutation consent, discovery/retrieval, stable refs, task focus, controlled persistence, no secrets).
+- **Access paths**:
+  - **Resource** (both eras): `resources/list` includes it; `resources/read` returns the Markdown bytes.
+  - **Skill** (modern era only): `skills/list`/`skills/get` return the Skill object; requires client capability `extensions.io.modelcontextprotocol/skills`.
+- **Integrity**: immutable registry, SHA-256 digest, size validation, URI confinement, defensive copies. Zero knowledge-runtime I/O for Skill operations.
+
+## Modern tool catalog
+
+The modern `2026-07-28` era exposes exactly 11 service-backed tools (sorted): `okf_ask`, `okf_context`, `okf_feedback`, `okf_init`, `okf_log`, `okf_manifest`, `okf_note`, `okf_query`, `okf_refresh`, `okf_resolve`, `okf_status`. Legacy bundle-state tools (`okf_load_bundle`, `okf_search`, `okf_semantic_search`, etc.) are not available in the modern era.
+
+## Security and trust boundaries
+
+- Digests and sizes prove advertised/served byte consistency only; they do not imply authorship, safety, approval or trust.
+- The Host is responsible for origin labeling, untrusted-input treatment, content-bound approval/reapproval, permission gating, origin-scoped reads and isolated caching.
+- The OKF server does not perform Host trust actions, does not execute Skill content, and does not persist approval state.
+
 ## Architecture
 
 - `pkg/tool/service.go` — shared repository status/init/refresh/query/context semantics
 - `pkg/tool/write.go` — validated, idempotent, atomic note/event/feedback persistence
 - `pkg/mcp/protocol.go` — JSON-RPC and MCP types, including tool annotations
+- `pkg/mcp/modern_protocol.go` — modern 2026-07-28 metadata, errors (-32022/-32021), result envelope
+- `pkg/mcp/modern_handlers.go` — modern server/discover, tools, resources, skills handlers
+- `pkg/mcp/skills.go` — immutable Skill registry (digest, URI validation, defensive copies)
 - `pkg/mcp/tools.go` — tool registry and thin MCP projections
-- `pkg/mcp/server.go` — stdio loop and shared service construction
+- `pkg/mcp/server.go` — dual-era stdio dispatcher and shared service construction
 - `pkg/mcp/convert.go` — legacy bundle/parser type conversion
+- `pkg/agentconfig/workflow.go` — canonical W01–W07 clauses and portable Skill renderer

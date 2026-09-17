@@ -1,0 +1,156 @@
+# Code Review — add-governed-agent-memory
+
+Implementation commit: df66533 (initial) + follow-up fixes.
+Spec commit: 8712bb7.
+
+## Round 1 — Explicit review (compile, interfaces, logic, errors, naming, data flow)
+
+### Finding 1: Token projection omitempty breaks full-mode backward compatibility
+- **Severity**: high
+- **File**: `pkg/manifest/manifest.go` ManifestItem struct
+- **Issue**: Initial implementation added `omitempty` to 9 existing fields (identity_state, path, status, trust_tier, stale, source_count, file_size_bytes, estimated_tokens, estimate_kind) to achieve summary/hit token reduction. This changed full-mode JSON for zero-valued fields (e.g., `"stale":false` disappeared, `"source_count":0` disappeared). S30 claimed "byte-compatible" but this was not true for concepts with zero-valued fields.
+- **Fix**: Reverted all 9 fields to original non-omitempty tags. Implemented `MarshalJSON` on ManifestItem with `projectionMode` unexported field: full mode uses type alias (byte-identical to original), summary/hit modes use dedicated `summaryProjection`/`hitProjection` DTOs with only required fields.
+- **Test**: `TestS28SummaryModeShape`, `TestS29HitModeShape` updated to assert JSON keys (not struct fields). `TestS30FullModeBackwardCompatible` confirms full mode retains all legacy fields.
+- **Verification**: full mode output = 266,341 bytes (matches pre-change size); summary = 84,482 (68.3% reduction); hit = 130,859 (50.9% reduction).
+
+### Finding 2: staticcheck S1011 in validate.go
+- **Severity**: low
+- **File**: `pkg/memorymeta/validate.go`
+- **Issue**: Loop `for _, w := range codeWarns { errs = append(errs, w) }` could be `errs = append(errs, codeWarns...)`.
+- **Fix**: Replaced with variadic append.
+- **Test**: existing `TestValidateGovernanceStrict` still passes.
+
+### Finding 3: gofmt on coderefs.go/coderefs_test.go
+- **Severity**: low
+- **File**: `pkg/memorymeta/coderefs.go`, `coderefs_test.go`
+- **Issue**: gofmt flagged alignment.
+- **Fix**: `gofmt -w`.
+
+### Finding 4: S39 CLI memory_check missing dedicated test
+- **Severity**: medium
+- **File**: `cmd/okf/cmd_tool_governed_test.go`
+- **Issue**: Only manifest/context CLI tests existed; no `okf tool query --memory-check` test.
+- **Fix**: Added `TestToolQueryMemoryCheckFlags`, `TestToolQueryMemoryCheckEmptyQ`, `TestToolQueryMemoryCheckTypeSingular`, and `TestToolQueryMemoryCheckDupThreshold`; all pass in the final targeted run.
+
+### Finding 5: MCP query governed schema/handler missing test
+- **Severity**: medium
+- **File**: `pkg/mcp/tools_governed_test.go`
+- **Issue**: No okf_query memory_check schema/handler test.
+- **Fix**: Added `TestMCPQueryMemoryCheckSchema`, `TestMCPQueryMemoryCheckHandler`, and `TestMCPQuerySharedAcrossEras`; the final targeted run passes.
+
+### Finding 6: S18 50k entry bound no independent test
+- **Severity**: medium
+- **File**: `pkg/manifest/manifest.go` walkStaleScan
+- **Issue**: maxStaleScanEntries was a const; no test verified the bound behavior.
+- **Fix**: Made `maxStaleScanEntries` injectable and added `TestStaleRefsScanEntryLimit`, covering exact-limit completion and over-limit `incomplete+warning` behavior without constructing 50,000 files.
+
+### Finding 7: S37 CustomFields round-trip only map-level, no parser round-trip
+- **Severity**: medium
+- **Issue**: SetCodeRefs writes to map, but no test verifies parser→Concept→CustomFields→serialize round-trip preserves governance/code_refs/my_custom.
+- **Fix**: Added `TestS37CustomFieldsParseRoundTrip` and `TestS37ConceptHasNoGovernedStructFields`; the parser/serializer round-trip preserves governance, code_refs, and unrelated custom fields while the core Concept type remains unchanged.
+
+### Finding 8: No governed-memory mutation runner
+- **Severity**: medium
+- **Issue**: Existing mutants.sh covers chunking/lexical; no mutants for governance/for_path/memory_check/projection/context refs.
+- **Fix**: Added `tools/mutants-governed-memory.sh` with 8 targeted mutants and wired it into Gauntlet L9c; all 8 are killed and byte-for-byte restoration is verified.
+
+### Finding 9: Codex evidence not persistent, for_path 0 results in real corpus
+- **Severity**: medium
+- **Issue**: Previous Codex run used the 329-concept corpus which has no code_refs, so for_path returned 0 matches — doesn't prove the feature works. No persistent harness script.
+- **Fix**: Added persistent `tools/verify-governed-memory-codex.sh` with a dedicated code_refs and durable-duplicate fixture. The final run verifies summary, for_path hit, context refs body retrieval, and possible_duplicate with zero mutating calls.
+
+## Round 2 — Implicit review (protocol, boundaries, security, performance, compatibility)
+
+### Finding 10: Context refs unknown ref — verified not silent
+- **Severity**: info (no fix needed)
+- **File**: `pkg/tool/service.go:691-696`
+- **Verification**: Unknown refs produce `warnings = append(warnings, "unresolvable ref: "+ref)` and `ContextOmission{Reason: "ref_unresolved"}`. Warnings are included in `ContextResult.Warnings`. `TestServiceContextUnknownRefOmitted` locks this. Not silent.
+
+### Finding 11: Stale-refs fail-closed — verified
+- **Severity**: info (no fix needed)
+- **File**: `pkg/manifest/manifest.go:850-882`
+- **Verification**: Unreadable directory entry → markIncomplete. Symlink escape → markIncomplete. Entry cap → markIncomplete. Walk error → markIncomplete. Never silently returns empty. `TestServiceManifestStaleRefsSymlinkEscape` locks symlink case.
+
+### Finding 12: memory_check benchmark cost — identified and closed by Findings 20–23
+- **Severity**: info at discovery; later promoted to an optimization task
+- **File**: `pkg/memorymeta/duplicate.go`
+- **Original data**: 1000 concepts measured about 22–24ms/op, 9.1MB/op, and 257K allocs/op, dominated by per-call tokenization.
+- **Final resolution**: Findings 20–23 added streaming parity-preserving tokenization, defensive result isolation, single identity derivation, and request-scoped token interning. Final repeated runs are documented in Evidence; allocation is now about 9.1K–10.0K/op and bytes about 2.83–2.91MB/op without persistent/global state.
+
+### Finding 13: Codex tools count = 21 investigation
+- **Severity**: info
+- **Verification**: Direct E2E catalog checks prove the OKF MCP server exposes 20 legacy tools and 11 modern tools. Codex 0.153.4 uses the legacy era and separately exposes 9 built-in function tools; MCP calls are routed through the `okf` namespace. The prior "21" value was a model self-report from prompt-visible names, not a server catalog count. The persistent Codex harness now reports these scopes separately.
+
+### Finding 14: Governance hold advisory — verified no server block
+- **Severity**: info
+- **File**: `pkg/manifest/manifest.go` Build, `pkg/agentconfig/workflow.go` W02
+- **Verification**: hold only sets `GovernanceWarning: true` in result; no error, no write blocking. Agent Skill W02 says "SHOULD request user confirmation" (not MUST). `TestS07HoldAdvisoryWarning` locks this.
+
+### Finding 15: for_path lexical no FS — verified
+- **Severity**: info
+- **File**: `pkg/memorymeta/coderefs.go` MatchCodeRefs
+- **Verification**: Pure string/segment matching, no os.Stat, no filepath.EvalSymlinks. `TestMatchCodeRefsNoFS` and `TestS15ForPathLexicalNoFS` lock this.
+
+### Finding 16: memory_check read-only — verified
+- **Severity**: info
+- **File**: `pkg/tool/service.go` Query memory_check branch, `pkg/memorymeta/duplicate.go`
+- **Verification**: CheckMemory only reads concepts, computes BM25+Jaccard, returns result. No file writes, no Concept modifications. `TestCheckMemoryReadOnly` locks this (compares file hashes before/after).
+
+### Finding 17: Concept struct unchanged — verified
+- **Severity**: info
+- **File**: `pkg/okf/types.go`
+- **Verification**: governance/code_refs are stored only in `Concept.CustomFields` (inline YAML map). `pkg/memorymeta` accessors read/write CustomFields only. `TestS37ConceptHasNoGovernedStructFields` reflects over the core type and `TestS37CustomFieldsParseRoundTrip` verifies parser/serializer preservation.
+
+### Finding 18: Dual-era MCP compatibility — verified
+- **Severity**: info
+- **File**: `pkg/mcp/tools.go`
+- **Verification**: okf_manifest/okf_query/okf_context use shared registration function; both modern (11 tools) and legacy (20 tools) eras get the updated schemas. `test_mcp.py` (legacy) and `test_ext_skills.py` (modern) both pass.
+
+### Finding 19: Legacy MCP E2E used a stale prebuilt binary and did not assert the exact catalog
+- **Severity**: medium
+- **File**: `test_mcp.py`
+- **Issue**: The harness launched repository-local `okf-bin`, which could lag the current source. It also checked only eight required names, allowing an 18-tool stale binary to pass despite the legacy contract requiring exactly 20 tools.
+- **Fix**: The harness now builds the current `./cmd/okf` source into a temporary binary on every run (unless an explicit `OKF_BIN` override is provided), asserts exactly 20 unique legacy tool names, and removes the temporary binary afterward.
+- **Verification**: Fresh E2E reports exactly 20 legacy tools; `TestModernToolsListHas11Tools` reports exactly 11 modern tools.
+
+### Finding 20: memory_check performance — 257K allocs/op, 9MB/op (optimized)
+- **Severity**: medium (performance, not correctness)
+- **File**: `pkg/memorymeta/duplicate.go`
+- **Issue**: pprof showed 95% of allocations in `lexical.Tokenize`: `splitIdentifier` subword expansion (33%) + `flushLatin` string/ToLower (33%) + `strings.FieldsFunc` (21%). `truncateBody` allocated `[]rune` + `string` per concept (2000 allocs). `identity.FromConcept` called twice per top-10 candidate.
+- **Fix**: (1) Custom `tokenizeBM25Freq` streaming tokenizer with in-place subword expansion (no FieldsFunc/[]string) + `lexical.BM25.AddFromFreq`; (2) `firstNRunes` 0-alloc truncation; (3) pre-computed `candidateEntry` + `keyFromIdentity` (single FromConcept); (4) inline ToLower in jaccardTokens; (5) linear entry lookup replaces map; (6) `slices.Clone` defensive copy for CandidateTypes.
+- **Intermediate test state**: `TestCheckMemoryAllocationBudget` initially used a 150K ceiling and measured about 100K allocs/op; Finding 23 later tightened the final ceiling to 20K with about 9.1K actual. Tokenizer parity and defensive-copy tests remained green throughout.
+- **Intermediate result before request-scoped interning**: latency 26.4ms→10.1ms in that run, B/op 9.16MB→3.62MB, allocs 257K→100K; 50-case golden remained TP=27/FP=0/TN=23/FN=0.
+- **Superseded remainder**: the then-remaining token-string allocations were subsequently reduced by request-scoped interning in Finding 23; no global mutable state or persistent cache was required.
+
+### Finding 21: CandidateTypes aliased global defaultDurableTypes (fixed)
+- **Severity**: high (correctness/concurrency)
+- **File**: `pkg/memorymeta/duplicate.go`
+- **Issue**: `CandidateTypes: candidateTypes` set the result field to the global `defaultDurableTypes` slice directly. A caller mutating `result.CandidateTypes[0]` would pollute the global, affecting all subsequent calls and causing data races under concurrent use.
+- **Fix**: Restored `slices.Clone(candidateTypes)` (only 3 strings, negligible cost).
+- **Test**: `TestCheckMemoryCandidateTypesDefensiveCopy` — mutate first result's CandidateTypes, verify second call returns pristine [note event feedback]; also covers explicit type filter.
+
+### Finding 22: tokenizeBM25Freq skipped splitIdentifier, causing document/query token asymmetry (fixed)
+- **Severity**: high (recall regression)
+- **File**: `pkg/memorymeta/duplicate.go`
+- **Issue**: The initial optimized tokenizer skipped `splitIdentifier` subword expansion, but `BM25.Search` still uses `lexical.Tokenize` for queries (which does subword expansion). Documents indexed "ParseConfig" as only "parseconfig" while queries "parse config" produced ["parse","config"], reducing candidate recall. Also `isWordRuneBM25` incorrectly included `-` as a word character (lexical.isWordRune only has `_`), so "cache-invalidation" was one token instead of two.
+- **Fix**: Implemented streaming subword expansion in `tokenizeBM25Freq` (camelCase / snake_case / kebab-case / acronym boundaries, no FieldsFunc or []string), matching `lexical.splitIdentifier` semantics exactly. Fixed `isWordRuneBM25` to match lexical (letters, digits, `_` only).
+- **Test**: `TestTokenizeBM25FreqParity` — 10 representative inputs (ASCII, CJK, camelCase, snake_case, kebab, acronyms, mixed, empty) compared frequency map + docLen with `lexical.Tokenize`, all exact match. Added 6 identifier positive golden cases (ParseConfig/parse config, load_config/load config, cache_invalidation/cache invalidation, forward+reverse), all pass.
+- **Impact**: Subword expansion adds ~46K allocs/op (54K→100K) but restores recall parity with lexical.Tokenize. Still 61% below original baseline.
+
+### Finding 23: "remaining cost requires global interning" was incorrect — request-scoped interning works (fixed)
+- **Severity**: medium (performance, incorrect prior conclusion)
+- **File**: `pkg/memorymeta/duplicate.go`
+- **Issue**: Prior evidence stated "eliminating token string allocations requires string interning (shared mutable state — forbidden)". This is incorrect: a `map[string]string` interner can be created per `CheckMemory` call (request-scoped), with no global state and no persistence. Each concurrent call has its own map, so it is concurrency-safe.
+- **Fix**: Added `internToken(interner, rs []rune)` that UTF-8 encodes into a `[]byte` buffer and uses the Go compiler's zero-allocation `m[string(buf)]` lookup optimization. Only previously-unseen tokens allocate; duplicates across 1000 documents reuse the interned string. The interner map is created in `CheckMemory` and discarded after the call.
+- **Test**: `TestCheckMemoryAllocationBudget` ceiling lowered to 20K (actual ~9.1K). `TestTokenizeBM25FreqParity` still passes (interning doesn't change token values). Golden 50 cases unchanged.
+- **Result**: allocs/op 100K→9.1K (**91% reduction**), B/op 3.62MB→2.83MB (**22% reduction**). Latency ~11-13ms (within run-to-run variance; independent retest of prior commit measured 19.4ms miss under different load).
+- **Constraints**: No unsafe, no sync.Pool, no global cache, no persistent state, no token parity change. Remaining ~9K allocs/op from 1000 tf maps + map growth; eliminating would require map pooling (sync.Pool — forbidden).
+
+## Summary
+
+| Round | Findings | High | Medium | Low | Info |
+|---|---|---|---|---|---|
+| Round 1 (explicit) | 10 | 1 | 6 | 2 | 1 |
+| Round 2 (implicit) | 13 | 2 | 2 (perf) | 0 | 9 |
+
+All high and medium findings were fixed and verified by the tests named above. No critical issues, unresolved security vulnerabilities, or known Spec violations remain.

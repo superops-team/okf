@@ -7,8 +7,20 @@ import sys
 import os
 import tempfile
 
-OKF_BIN = os.path.join(os.path.dirname(__file__), "okf-bin")
-BUNDLE_PATH = os.path.join(os.path.dirname(__file__), "docs", "knowledge")
+ROOT = os.path.dirname(__file__)
+OKF_BIN = os.environ.get("OKF_BIN", os.path.join(tempfile.gettempdir(), f"okf-mcp-e2e-{os.getpid()}"))
+BUNDLE_PATH = os.path.join(ROOT, "docs", "knowledge")
+
+
+def _build_current_binary():
+    """Build the MCP server from the current source tree unless explicitly overridden."""
+    if "OKF_BIN" in os.environ:
+        return
+    subprocess.run(
+        ["go", "build", "-o", OKF_BIN, "./cmd/okf"],
+        cwd=ROOT,
+        check=True,
+    )
 
 def _read_headers(proc):
     """Read MCP headers until empty line, return Content-Length."""
@@ -128,6 +140,7 @@ def test_note_survives_restart():
 
 
 def main():
+    _build_current_binary()
     print("=" * 60)
     print("OKF MCP Server End-to-End Test")
     print("=" * 60)
@@ -161,6 +174,8 @@ def main():
         tools = result["result"]["tools"]
         print(f"  ✓ Found {len(tools)} tools:")
         tool_names = [t["name"] for t in tools]
+        assert len(tools) == 20, f"Legacy tools/list must expose exactly 20 tools, got {len(tools)}: {tool_names}"
+        assert len(set(tool_names)) == 20, f"Legacy tools/list contains duplicate names: {tool_names}"
         for t in tools:
             print(f"    - {t['name']}: {t['description'][:60]}")
         expected_tools = ["okf_load_bundle", "okf_bundle_stats", "okf_list_concepts",
@@ -313,6 +328,8 @@ def main():
     finally:
         proc.terminate()
         proc.wait(timeout=5)
+        if "OKF_BIN" not in os.environ and os.path.exists(OKF_BIN):
+            os.remove(OKF_BIN)
 
 if __name__ == "__main__":
     main()

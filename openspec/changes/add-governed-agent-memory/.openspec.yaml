@@ -1,0 +1,7 @@
+schema: openspec/changes
+change_id: add-governed-agent-memory
+title: Governed Agent Memory Enhancement
+status: draft
+version: 0.1.0
+spec:
+  - add-governed-agent-memory

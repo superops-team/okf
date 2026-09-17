@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/superops-team/okf/pkg/okf"
+	"github.com/superops-team/okf/pkg/okf/meta"
 	"github.com/superops-team/okf/pkg/parser"
 	toolsvc "github.com/superops-team/okf/pkg/tool"
 )
@@ -24,13 +25,26 @@ const (
 	maxStdioMessageBytes = 16 << 20
 )
 
+type processEra uint8
+
+const (
+	eraUnselected processEra = iota
+	eraLegacy
+	eraModern
+)
+
 // Server is an MCP server that communicates over stdio.
 type Server struct {
-	tools   *ToolRegistry
-	reader  *bufio.Reader
-	writer  io.Writer
-	logger  *log.Logger
-	framing stdioFraming
+	tools        *ToolRegistry
+	reader       *bufio.Reader
+	writer       io.Writer
+	logger       *log.Logger
+	framing      stdioFraming
+	era          processEra
+	config       ServerConfig
+	bundleLoaded bool
+	skills       *SkillRegistry
+	bundleLoader func(path string) (*okf.KnowledgeBundle, error)
 }
 
 // ServerConfig holds configuration for the MCP server.
@@ -41,8 +55,11 @@ type ServerConfig struct {
 	Logger       *log.Logger
 }
 
-// NewServer creates a new MCP server.
-func NewServer(config ServerConfig) *Server {
+// NewServer creates a new MCP server. Returns an error if the immutable Skill
+// registry cannot be constructed (T2.3: no panic/partial catalog).
+// BundlePath is NOT auto-loaded at construction; it is loaded only after a
+// legacy initialize selects the legacy era (S16).
+func NewServer(config ServerConfig) (*Server, error) {
 	logger := config.Logger
 	if logger == nil {
 		logger = log.New(os.Stderr, "[okf-mcp] ", log.LstdFlags)
@@ -52,25 +69,51 @@ func NewServer(config ServerConfig) *Server {
 		RepoPath:     config.RepoPath,
 		KnowledgeDir: config.KnowledgeDir,
 	})
+
+	// Build immutable Skill registry (fail closed).
+	skills, err := NewSkillRegistry()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build skill registry: %w", err)
+	}
+
 	s := &Server{
 		tools:  NewToolRegistryWithService(service),
 		reader: bufio.NewReader(os.Stdin),
 		writer: os.Stdout,
 		logger: logger,
+		config: config,
+		skills: skills,
 	}
 
-	// Auto-load bundle if path is provided
-	if config.BundlePath != "" {
-		bundle, err := loadBundleSilent(config.BundlePath)
-		if err != nil {
-			logger.Printf("Warning: failed to auto-load bundle from %s: %v", config.BundlePath, err)
-		} else {
-			s.tools.SetBundle(bundle, config.BundlePath)
-			logger.Printf("Auto-loaded bundle from %s (%d concepts)", config.BundlePath, len(bundle.Concepts))
-		}
-	}
+	return s, nil
+}
 
-	return s
+// serverInfo returns the shared server implementation info from the single version source.
+func (s *Server) serverInfo() ImplementationInfo {
+	return ImplementationInfo{
+		Name:    "okf-mcp-server",
+		Version: meta.Version,
+	}
+}
+
+// loadBundleLegacy loads the configured bundle for the legacy era. Called only
+// after a successful legacy initialize (S16).
+func (s *Server) loadBundleLegacy() {
+	if s.config.BundlePath == "" || s.bundleLoaded {
+		return
+	}
+	loader := s.bundleLoader
+	if loader == nil {
+		loader = loadBundleSilent
+	}
+	bundle, err := loader(s.config.BundlePath)
+	if err != nil {
+		s.logger.Printf("Warning: failed to auto-load bundle from %s: %v", s.config.BundlePath, err)
+	} else {
+		s.tools.SetBundle(bundle, s.config.BundlePath)
+		s.logger.Printf("Auto-loaded bundle from %s (%d concepts)", s.config.BundlePath, len(bundle.Concepts))
+	}
+	s.bundleLoaded = true
 }
 
 func loadBundleSilent(path string) (*okf.KnowledgeBundle, error) {
@@ -146,7 +189,6 @@ func (s *Server) handleMessage(data []byte) {
 	method, id, params, isNotification, err := ParseMessage(data)
 	if err != nil {
 		s.logger.Printf("Parse error: %v", err)
-		// Try to send error response if we can extract id
 		s.sendError(nil, ParseErrorCode, err.Error())
 		return
 	}
@@ -156,6 +198,31 @@ func (s *Server) handleMessage(data []byte) {
 		return
 	}
 
+	// Dual-era dispatch (S01-S05).
+	// Modern requests carry _meta in params; legacy uses initialize.
+	if s.era == eraUnselected {
+		// Check if params contain _meta (modern) or this is initialize (legacy).
+		// Presence of _meta selects modern era even if version is unsupported;
+		// version validation returns -32022 in the modern handler (S03).
+		if hasModernMeta(params) {
+			s.era = eraModern
+			s.logger.Println("Era selected: modern 2026-07-28")
+		} else if method == "initialize" {
+			s.era = eraLegacy
+			s.logger.Println("Era selected: legacy 2024-11-05")
+		} else {
+			// Neither _meta nor initialize: reject (S05).
+			s.sendError(id, InvalidRequestCode, "request must begin with initialize (legacy) or carry modern _meta")
+			return
+		}
+	}
+
+	if s.era == eraModern {
+		s.handleModernMessage(method, id, params)
+		return
+	}
+
+	// Legacy era.
 	switch method {
 	case "initialize":
 		s.handleInitialize(id, params)
@@ -174,7 +241,89 @@ func (s *Server) handleMessage(data []byte) {
 	case "ping":
 		s.sendResponse(id, map[string]interface{}{})
 	default:
+		// Mixed-era rejection (S05): modern method in legacy process.
+		if isModernMethod(method) {
+			s.sendError(id, InvalidRequestCode, "method not available in legacy era; restart for modern 2026-07-28")
+			return
+		}
 		s.logger.Printf("Unknown method: %s", method)
+		s.sendError(id, MethodNotFoundCode, fmt.Sprintf("Method not found: %s", method))
+	}
+}
+
+// hasModernMeta reports whether params contain a _meta object (modern request marker).
+func hasModernMeta(params json.RawMessage) bool {
+	if len(params) == 0 {
+		return false
+	}
+	var wrapper struct {
+		Meta json.RawMessage `json:"_meta"`
+	}
+	if err := json.Unmarshal(params, &wrapper); err != nil {
+		return false
+	}
+	return len(wrapper.Meta) > 0
+}
+
+// extractModernMeta attempts to parse _meta from params. Returns error if absent/invalid.
+func extractModernMeta(params json.RawMessage) (*ModernRequestMeta, error) {
+	if len(params) == 0 {
+		return nil, fmt.Errorf("no params")
+	}
+	var wrapper struct {
+		Meta json.RawMessage `json:"_meta"`
+	}
+	if err := json.Unmarshal(params, &wrapper); err != nil {
+		return nil, err
+	}
+	return ParseModernMeta(wrapper.Meta)
+}
+
+// isModernMethod reports whether a method is modern-only.
+func isModernMethod(method string) bool {
+	switch method {
+	case "server/discover", "skills/list", "skills/get":
+		return true
+	}
+	return false
+}
+
+// handleModernMessage dispatches modern-era methods with per-request _meta validation.
+func (s *Server) handleModernMessage(method string, id json.RawMessage, params json.RawMessage) {
+	meta, err := extractModernMeta(params)
+	if err != nil {
+		var rpErr *RPCError
+		if e, ok := err.(*RPCError); ok {
+			rpErr = e
+		} else {
+			rpErr = &RPCError{Code: InvalidParamsCode, Message: err.Error()}
+		}
+		if rpErr.Data != nil {
+			s.sendErrorWithData(id, rpErr.Code, rpErr.Message, rpErr.Data)
+		} else {
+			s.sendError(id, rpErr.Code, rpErr.Message)
+		}
+		return
+	}
+
+	switch method {
+	case "server/discover":
+		s.handleModernDiscover(id, meta)
+	case "tools/list":
+		s.handleModernToolsList(id, meta)
+	case "tools/call":
+		s.handleModernToolsCall(id, meta, params)
+	case "resources/list":
+		s.handleModernResourcesList(id, meta)
+	case "resources/read":
+		s.handleModernResourcesRead(id, meta, params)
+	case "skills/list":
+		s.handleModernSkillsList(id, meta, params)
+	case "skills/get":
+		s.handleModernSkillsGet(id, meta, params)
+	case "prompts/list", "prompts/get", "ping":
+		s.handleModernNotImplemented(id, method)
+	default:
 		s.sendError(id, MethodNotFoundCode, fmt.Sprintf("Method not found: %s", method))
 	}
 }
@@ -203,17 +352,17 @@ func (s *Server) handleInitialize(id json.RawMessage, params json.RawMessage) {
 		initParams.ClientInfo.Version,
 		initParams.ProtocolVersion)
 
+	// Legacy era: load bundle after successful initialize (S16).
+	s.loadBundleLegacy()
+
 	result := InitializeResult{
-		ProtocolVersion: "2024-11-05",
+		ProtocolVersion: LegacyProtocolVersion,
 		Capabilities: ServerCapabilities{
 			Tools:     &ToolsCapability{ListChanged: false},
 			Resources: &ResourcesCapability{ListChanged: false},
 			Prompts:   &PromptsCapability{ListChanged: false},
 		},
-		ServerInfo: ImplementationInfo{
-			Name:    "okf-mcp-server",
-			Version: "0.4.1",
-		},
+		ServerInfo:   s.serverInfo(),
 		Instructions: "OKF (Open Knowledge Format) MCP Server. Load and query knowledge bundles, inspect concepts, run lint checks.",
 	}
 
@@ -269,6 +418,11 @@ func (s *Server) handleResourcesList(id json.RawMessage) {
 			})
 		}
 	}
+	// Append Skill Resource additively (S22): legacy prior Resources retain order
+	// before the appended Skill.
+	if s.skills != nil {
+		resources = append(resources, s.skills.Resources()...)
+	}
 	s.sendResponse(id, ResourcesListResult{Resources: resources})
 }
 
@@ -279,6 +433,25 @@ func (s *Server) handleResourcesRead(id json.RawMessage, params json.RawMessage)
 		return
 	}
 
+	uri := readParams.URI
+
+	// Skill Resource read works in both eras (S23) and does not require a bundle.
+	if strings.HasPrefix(uri, "skill:") {
+		if s.skills != nil {
+			content, err := s.skills.Read(uri)
+			if err != nil {
+				s.sendError(id, InvalidParamsCode, err.Error())
+				return
+			}
+			s.sendResponse(id, ResourceReadResult{
+				Contents: []ResourceContents{content},
+			})
+			return
+		}
+		s.sendError(id, InvalidParamsCode, fmt.Sprintf("Unsupported resource URI: %s", uri))
+		return
+	}
+
 	bundle, bundlePath := s.tools.GetBundle()
 	if bundle == nil {
 		s.sendError(id, InvalidParamsCode, "No bundle loaded")
@@ -286,7 +459,6 @@ func (s *Server) handleResourcesRead(id json.RawMessage, params json.RawMessage)
 	}
 
 	// Parse URI: okf://concept/{bundlePath}/{conceptPath}
-	uri := readParams.URI
 	if strings.HasPrefix(uri, "okf://concept/") {
 		rest := strings.TrimPrefix(uri, "okf://concept/")
 		// Remove bundle path prefix
@@ -382,6 +554,16 @@ func (s *Server) sendResponse(id json.RawMessage, result interface{}) {
 
 func (s *Server) sendError(id json.RawMessage, code int, message string) {
 	resp := NewErrorResponse(id, code, message)
+	s.writeMessage(resp)
+}
+
+// sendErrorWithData sends an error response with structured data (S03/S04).
+func (s *Server) sendErrorWithData(id json.RawMessage, code int, message string, data any) {
+	resp := &Response{
+		JSONRPC: JSONRPCVersion,
+		ID:      id,
+		Error:   &RPCError{Code: code, Message: message, Data: data},
+	}
 	s.writeMessage(resp)
 }
 

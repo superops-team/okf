@@ -112,7 +112,10 @@ func TestAgentFacingToolAnnotationsDeclareSemantics(t *testing.T) {
 
 func TestServerConfigWiresAgentFacingServiceTools(t *testing.T) {
 	repo := initMCPToolTestRepo(t)
-	server := NewServer(ServerConfig{RepoPath: repo, KnowledgeDir: ".okf/knowledge"})
+	server, err := NewServer(ServerConfig{RepoPath: repo, KnowledgeDir: ".okf/knowledge"})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
 
 	got := make(map[string]bool)
 	for _, definition := range server.tools.List() {

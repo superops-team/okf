@@ -144,7 +144,13 @@ okf mcp --repo /your/repo --dir .okf/knowledge
 
 ### Agent-facing MCP tools
 
-The MCP server exposes the repository knowledge service through `okf_status`, `okf_init`, `okf_refresh`, `okf_query`, and `okf_context`. Durable knowledge capture is available through `okf_note`, `okf_log`, and `okf_feedback`; `okf_ask` queries only those durable note/event/feedback concepts. Stable-ref resolution and metadata discovery are available through `okf_resolve` and `okf_manifest` (see [Stable Identity, Manifest & Agent Discovery](#stable-identity-manifest--agent-discovery)). Existing bundle/list/get/search/lint/document-import tools remain available.
+The MCP server supports **dual protocol eras** from the same `okf mcp` entry point:
+- **Legacy `2024-11-05`**: initialize-based, 20 tools, Prompts, Resources, ping — unchanged.
+- **Modern `2026-07-28`**: stateless, per-request `_meta` validation, `server/discover`, `resultType: complete` + serverInfo `_meta` on all success responses. One era per stdio process; mixed-era requests rejected.
+
+The modern era exposes exactly 11 service-backed tools: `okf_status`, `okf_init`, `okf_refresh`, `okf_query`, `okf_context`, `okf_note`, `okf_log`, `okf_feedback`, `okf_ask`, `okf_resolve`, `okf_manifest`. Legacy bundle-state tools (`okf_load_bundle`, `okf_search`, etc.) are not available in the modern era.
+
+A **portable Agent Skill** (`skill://okf/SKILL.md`) renders the canonical W01–W07 workflow. It is available as a Resource in both eras and via `skills/list`/`skills/get` in the modern era (client capability gate). The immutable registry provides SHA-256 digest, size validation, URI confinement, and zero knowledge-runtime I/O for Skill operations.
 
 Writes require a stable `idempotency_key`, use deterministic identities, reject unknown or incorrectly typed fields, and fail closed for path escape, symlink-root, size-limit, and credential-like metadata violations. The server persists only feedback explicitly submitted by the caller; it does not inspect a host application's private event bus. See [`docs/knowledge/mcp-server.md`](docs/knowledge/mcp-server.md) and [`docs/knowledge/durable-capture.md`](docs/knowledge/durable-capture.md).
 
@@ -264,6 +270,64 @@ okf agent remove --client cursor --yes
 ```
 
 Ownership is marked with the non-secret `OKF_MANAGED=agentconfig-v1` token. An existing entry that is malformed, unowned, or has unbalanced markers is reported as `conflict` and left byte-identical — there is no `--force`. Cursor uses `.cursor/mcp.json` + `.cursor/rules/okf.md`; Claude Code uses `.mcp.json` + `.claude/skills/okf/SKILL.md`; Codex uses `.codex/config.toml` + a managed `AGENTS.md` block. Use `--client all` (the default) for all three.
+
+## Governed Agent Memory
+
+Governance and code references live in each concept's Markdown frontmatter as extension fields (`governance`, `code_refs`), stored in `Concept.CustomFields` — the core `Concept` struct is unchanged. The `pkg/memorymeta` package provides typed accessors, normalizers, and validators.
+
+### Governance levels
+
+| Level | Meaning |
+|---|---|
+| `constraint` | Mandatory guardrail; agent must adhere. |
+| `hold` | Execution freeze; agent SHOULD request user confirmation (advisory warning only; server never blocks writes). |
+| `context` | Informative domain knowledge (default when unspecified). |
+
+Unknown values are treated as `context` with a warning in non-strict mode, or rejected by `okf lint --strict`.
+
+### Code references and `--for-path`
+
+`code_refs` is a list of repo-relative path patterns. Bounds: max 16 patterns, 256 bytes each, 32 path segments, 2 `**` operators (each matching at most 8 segments). Absolute paths, `..` traversal, NUL, and backslash are rejected.
+
+```bash
+# Find concepts governing a specific file (lexical match; file need not exist)
+okf tool manifest --for-path pkg/mcp/server.go --mode hit
+# Filter by governance level
+okf tool manifest --governance constraint,hold
+```
+
+`--stale-refs` performs the only filesystem scan (max 50,000 entries) to report code_refs that match no file on disk; symlink escape or unreadable directories return `incomplete` + warnings rather than silently empty.
+
+### Progressive disclosure
+
+```bash
+okf tool manifest --mode summary    # okf_id, title, type, governance, ≤80-char description
+okf tool manifest --mode hit        # summary + tags, code_refs, status, stale_after
+okf tool manifest --mode full       # all metadata (default, backward compatible)
+okf tool manifest --max-tokens 4000 # token budget: item bytes/4 (Go encoding/json), no envelope
+```
+
+When `--max-tokens` is set, the pipeline is filter → sort → offset → limit → budget. Results include `next_offset`, `omitted_count` (budget_omitted vs total_remaining), and `truncated`. A budget smaller than the first eligible item returns `budget_too_small` with `min_required_tokens`.
+
+### Memory check (read-only duplicate detection)
+
+```bash
+okf tool query -q "redis cache invalidation" --memory-check
+okf tool query -q "..." --memory-check --dup-threshold 0.25
+```
+
+`--memory-check` returns a dedicated `MemoryCheckResult` (`no_similar` or `possible_duplicate` with top-3 candidates and Jaccard scores), skipping normal query ranking. It builds a BM25 index over at most 1,000 durable concepts (note/event/feedback by default; `--type` restricts to one type), takes top-10, then re-ranks by deterministic Unicode token Jaccard. It is read-only — no writes, no blocking.
+
+### Context refs
+
+```bash
+# Read full body of specific concepts by stable ID (query OR refs, at least one)
+okf tool context --refs okf_abc123,okf_def456 --budget-tokens 2000
+```
+
+### CLI vs MCP naming
+
+CLI flags use hyphens (`--for-path`, `--max-tokens`, `--stale-refs`, `--memory-check`, `--dup-threshold`, `--refs`). MCP/JSON fields use underscores (`for_path`, `max_tokens`, `stale_refs`, `memory_check`, `dup_threshold`, `refs`).
 
 ## Documentation
 

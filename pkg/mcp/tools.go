@@ -293,6 +293,9 @@ func (r *ToolRegistry) registerAgentTools() {
 	booleanProperty := func(description string) map[string]interface{} {
 		return map[string]interface{}{"type": "boolean", "description": description}
 	}
+	numberProperty := func(description string) map[string]interface{} {
+		return map[string]interface{}{"type": "number", "description": description}
+	}
 	arrayProperty := func(description string) map[string]interface{} {
 		return map[string]interface{}{
 			"type":        "array",
@@ -343,6 +346,8 @@ func (r *ToolRegistry) registerAgentTools() {
 		"include_trace":         booleanProperty("Include deterministic query trace"),
 		"group_by":              stringProperty("Optional projection grouping: chunk, concept, source, or folder"),
 		"include_group_members": booleanProperty("When grouping, include each group's member list"),
+		"memory_check":          booleanProperty("Read-only duplicate check against durable note/event/feedback concepts; returns a dedicated memory_check envelope and skips normal ranking"),
+		"dup_threshold":         numberProperty("Jaccard threshold for memory_check (default 0.20)"),
 	}
 	r.Register(readOnlyAgentTool(
 		"okf_query",
@@ -359,7 +364,8 @@ func (r *ToolRegistry) registerAgentTools() {
 			"budget_tokens":     integerProperty("Maximum context token budget"),
 			"include_relations": booleanProperty("Include related concepts"),
 			"include_trace":     booleanProperty("Include deterministic context trace"),
-		}, "query"),
+			"refs":              arrayProperty("One or more stable refs (okf_id or okf://concept/<id>) whose concept bodies are included; query or refs at least one required"),
+		}),
 	), func(args map[string]interface{}) (*ToolCallResult, error) {
 		query, _ := args["query"].(string)
 		return serviceEnvelopeResult(r.service.Context(context.Background(), toolsvc.ContextRequest{
@@ -367,6 +373,7 @@ func (r *ToolRegistry) registerAgentTools() {
 			BudgetTokens:     intArg(args, "budget_tokens"),
 			IncludeRelations: boolArg(args, "include_relations"),
 			IncludeTrace:     boolArg(args, "include_trace"),
+			Refs:             stringSliceArg(args, "refs"),
 		}))
 	})
 	r.Register(readOnlyAgentTool(
@@ -391,6 +398,11 @@ func (r *ToolRegistry) registerAgentTools() {
 			"stale":         booleanProperty("Filter by staleness"),
 			"folder_prefix": stringProperty("Bundle-relative folder prefix filter"),
 			"include_trace": booleanProperty("Include deterministic scan trace"),
+			"for_path":      stringProperty("Lexical code-path filter matching declared code_refs"),
+			"governance":    arrayProperty("Filter by effective governance level (constraint|hold|context; OR within list)"),
+			"mode":          stringProperty("Projection mode: summary|hit|full (default full)"),
+			"max_tokens":    integerProperty("If > 0, cap returned items by an approximate token budget"),
+			"stale_refs":    booleanProperty("Scan the repo FS for code_refs matching no file"),
 		}),
 	), func(args map[string]interface{}) (*ToolCallResult, error) {
 		return serviceEnvelopeResult(r.service.Manifest(context.Background(), manifestRequestFromArgs(args)))
@@ -489,6 +501,11 @@ func manifestRequestFromArgs(args map[string]interface{}) toolsvc.ManifestReques
 		Statuses:     stringSliceArg(args, "statuses"),
 		FolderPrefix: stringArg(args, "folder_prefix"),
 		IncludeTrace: boolArg(args, "include_trace"),
+		ForPath:      stringArg(args, "for_path"),
+		Governance:   stringSliceArg(args, "governance"),
+		Mode:         stringArg(args, "mode"),
+		MaxTokens:    intArg(args, "max_tokens"),
+		StaleRefs:    boolArg(args, "stale_refs"),
 	}
 	if _, ok := args["limit"]; ok {
 		l := intArg(args, "limit")
@@ -533,6 +550,19 @@ func queryRequestFromArgs(args map[string]interface{}) toolsvc.QueryRequest {
 		IncludeTrace:        boolArg(args, "include_trace"),
 		GroupBy:             stringArg(args, "group_by"),
 		IncludeGroupMembers: boolArg(args, "include_group_members"),
+		MemoryCheck:         boolArg(args, "memory_check"),
+		DupThreshold:        floatArg(args, "dup_threshold"),
+	}
+}
+
+func floatArg(args map[string]interface{}, key string) float64 {
+	switch value := args[key].(type) {
+	case float64:
+		return value
+	case int:
+		return float64(value)
+	default:
+		return 0
 	}
 }
 

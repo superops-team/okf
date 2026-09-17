@@ -50,19 +50,25 @@ func CanonicalClauses() []Clause {
 			ID:      "W01",
 			Heading: "Check knowledge availability",
 			Guidance: "Call `okf_status` to check repository knowledge availability and freshness " +
-				"before relying on the knowledge base.",
+				"before relying on the knowledge base. For a fast inventory overview, call " +
+				"`okf_manifest` with `mode: summary` (title, type, governance, one-line description).",
 		},
 		{
 			ID:      "W02",
 			Heading: "Ask before mutating initialization",
 			Guidance: "If knowledge is unavailable, ask the user before running any mutating knowledge " +
-				"init or refresh; never initialize or refresh without explicit consent.",
+				"init or refresh; never initialize or refresh without explicit consent. Before modifying " +
+				"code, call `okf_manifest` with `for_path` set to the target file path; if any result has " +
+				"governance `hold` (surfaced as `governance_warning`), request user confirmation before proceeding. " +
+				"`hold` is advisory only; the server does not block writes.",
 		},
 		{
 			ID:      "W03",
 			Heading: "Discover, retrieve and bound evidence",
 			Guidance: "Use `okf_manifest` for inventory and cold start; use `okf_query` for relevance " +
-				"retrieval; use `okf_context` only to select evidence within the token budget.",
+				"retrieval; use `okf_context` only to select evidence within the token budget. When editing " +
+				"code, use `okf_manifest` with `for_path` to discover governing concepts (constraints and holds). " +
+				"For full body of a specific concept, use `okf_context` with `refs` set to the stable concept ID.",
 		},
 		{
 			ID:       "W04",
@@ -78,7 +84,9 @@ func CanonicalClauses() []Clause {
 			ID:      "W06",
 			Heading: "Persist only when requested",
 			Guidance: "Use `okf_note` or `okf_feedback` only when the user asks to persist or the " +
-				"workflow explicitly requires it; always supply an idempotency key.",
+				"workflow explicitly requires it; always supply an idempotency key. Before writing, " +
+				"call `okf_query` with `memory_check: true` to check for possible duplicate or related " +
+				"memory (read-only advisory, never blocks). Review candidates, then write explicitly.",
 		},
 		{
 			ID:       "W07",
@@ -149,6 +157,22 @@ func RenderClaudeSkill() string {
 func RenderCodexBlock() string {
 	var b strings.Builder
 	b.WriteString("OKF project knowledge workflow (managed by `okf agent`).\n\n")
+	b.WriteString(renderCore())
+	return b.String()
+}
+
+// RenderAgentSkill renders the portable canonical Agent Skill (SKILL.md).
+// It contains minimum YAML frontmatter (name, description) and exactly one
+// rendering of W01-W07. It excludes client ownership markers, install/remove
+// instructions, credentials, absolute paths, hooks, scripts and allowed-tools.
+func RenderAgentSkill() string {
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString("name: okf\n")
+	b.WriteString("description: Use the project OKF knowledge base to answer repository questions through the canonical workflow.\n")
+	b.WriteString("---\n\n")
+	b.WriteString("# OKF Project Knowledge Skill\n\n")
+	b.WriteString("Follow the canonical workflow below when using the project OKF knowledge base.\n\n")
 	b.WriteString(renderCore())
 	return b.String()
 }

@@ -161,12 +161,24 @@ func (b *BM25) Add(key, text string) {
 	for _, t := range toks {
 		tf[t]++
 	}
+	b.addFromFreq(key, tf, len(toks))
+}
+
+// AddFromFreq adds a document from a pre-computed term-frequency map, avoiding
+// an internal Tokenize pass and []string intermediate. docLen is the token count
+// (including duplicates) used for length normalization. The map is retained by
+// reference; callers must not mutate it after calling AddFromFreq.
+func (b *BM25) AddFromFreq(key string, tf map[string]int, docLen int) {
+	b.addFromFreq(key, tf, docLen)
+}
+
+func (b *BM25) addFromFreq(key string, tf map[string]int, docLen int) {
 	for t := range tf {
 		b.df[t]++
 	}
 	b.keys = append(b.keys, key)
 	b.tfs = append(b.tfs, tf)
-	b.lens = append(b.lens, float64(len(toks)))
+	b.lens = append(b.lens, float64(docLen))
 	b.ready = false
 }
 

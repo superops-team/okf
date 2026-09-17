@@ -5,7 +5,7 @@
 #
 # Layers: build → vet → gofmt → staticcheck → tests → tests(-race) → coverage(threshold)
 #         → suite health(shuffle) → property tests → secret scan → supply chain
-#         → mutation(convert/...) → mutation(agent discovery) → real execution(CLI smoke)
+#         → mutation(convert/...) → mutation(agent discovery) → mutation(governed memory) → real execution(CLI smoke)
 #
 # Usage: tools/gauntlet.sh   (run from repo root)
 
@@ -131,6 +131,9 @@ bash tools/mutants.sh
 step "L9b mutation (agent discovery): tools/mutants-agent-discovery.sh"
 bash tools/mutants-agent-discovery.sh
 
+step "L9c mutation (governed agent memory): tools/mutants-governed-memory.sh"
+bash tools/mutants-governed-memory.sh
+
 step "L10 real execution: CLI import + search smoke"
 BIN="$WORK/okf"
 "$GO" build -o "$BIN" ./cmd/okf
@@ -165,4 +168,4 @@ if ! grep -q "source=" "$WORK/out_semantic.txt"; then
 fi
 
 echo
-echo "GAUNTLET PASS: build/vet/staticcheck/tests/tests(-race)/coverage(${COV}%)/shuffle/new-package/property(${PROP_RUN})/secret-scan/mod-verify/mutation/agent-mutation/real-exec"
+echo "GAUNTLET PASS: build/vet/staticcheck/tests/tests(-race)/coverage(${COV}%)/shuffle/new-package/property(${PROP_RUN})/secret-scan/mod-verify/mutation/agent-mutation/governed-mutation/real-exec"
