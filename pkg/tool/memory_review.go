@@ -33,10 +33,6 @@ type ReviewMemoryResult struct {
 	ConceptPath   string `json:"concept_path"`
 }
 
-// reviewClock is the injectable wall clock for memory_review.reviewed_at. Tests
-// swap it for determinism; production uses the UTC wall clock.
-var reviewClock = func() time.Time { return time.Now().UTC() }
-
 // ReviewMemory applies a CAS (compare-and-swap) review transition to one durable
 // concept. It runs entirely under the repo-scoped temporal lock so that two
 // concurrent reviews serialize and exactly one wins the CAS (S29).
@@ -141,7 +137,7 @@ func (s *Service) ReviewMemory(ctx stdctx.Context, req ReviewMemoryRequest) Tool
 		return reviewFailure(resolved, fmt.Errorf("read concept for review: %w", err))
 	}
 
-	newState := applyReviewTransition(target, action, currentState, oldRec)
+	newState := s.applyReviewTransition(target, action, currentState, oldRec)
 
 	data, err := serializeKnowledgeConcept(target)
 	if err != nil {
@@ -241,8 +237,8 @@ func validateReviewTransition(action string, current memorymeta.MemoryState, old
 // applyReviewTransition mutates target in place and returns the new state. It
 // stashes (on approve/decline) or restores (on undo) memory_confidence and writes
 // the bounded latest memory_review record.
-func applyReviewTransition(target *okf.Concept, action string, current memorymeta.MemoryState, oldRec memorymeta.ReviewRecord) memorymeta.MemoryState {
-	reviewedAt := reviewClock().Format(time.RFC3339Nano)
+func (s *Service) applyReviewTransition(target *okf.Concept, action string, current memorymeta.MemoryState, oldRec memorymeta.ReviewRecord) memorymeta.MemoryState {
+	reviewedAt := s.now().Format(time.RFC3339Nano)
 
 	switch action {
 	case "approve", "decline":

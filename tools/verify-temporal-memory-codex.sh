@@ -231,7 +231,7 @@ RUN_PHASE() {
   cd "$REPO"
   set +e
   CODEX_HOME="$CODEX_HOME" timeout 300 codex exec --json --skip-git-repo-check -s "$sandbox" -m "$MODEL" \
-    "$prompt" > "$events" 2>"$stderr_log"
+    "$prompt" < /dev/null > "$events" 2>"$stderr_log"
   local rc=$?
   set -e
   local lines

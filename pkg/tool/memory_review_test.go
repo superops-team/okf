@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/superops-team/okf/pkg/memorymeta"
 )
@@ -52,6 +53,43 @@ func proposedNoteRequest(key, content, target string) WriteKnowledgeRequest {
 		req.MemoryRelationTargets = []string{target}
 	}
 	return req
+}
+
+func TestReviewMemoryServiceClocksAreIsolated(t *testing.T) {
+	repoA := initToolTestRepo(t)
+	repoB := initToolTestRepo(t)
+	svcA := NewService(Config{RepoPath: repoA})
+	svcB := NewService(Config{RepoPath: repoB})
+	timeA := time.Date(2026, time.September, 20, 1, 2, 3, 4, time.UTC)
+	timeB := time.Date(2027, time.October, 21, 5, 6, 7, 8, time.UTC)
+	svcA.now = func() time.Time { return timeA }
+	svcB.now = func() time.Time { return timeB }
+
+	noteA := writeRelationNote(t, svcA, proposedNoteRequest("clock-a", "Proposal A", ""))
+	noteB := writeRelationNote(t, svcB, proposedNoteRequest("clock-b", "Proposal B", ""))
+
+	var wg sync.WaitGroup
+	var envA, envB ToolEnvelope
+	wg.Go(func() {
+		envA = svcA.ReviewMemory(t.Context(), ReviewMemoryRequest{Ref: noteA.Ref, Action: "approve", ExpectedState: "proposed"})
+	})
+	wg.Go(func() {
+		envB = svcB.ReviewMemory(t.Context(), ReviewMemoryRequest{Ref: noteB.Ref, Action: "approve", ExpectedState: "proposed"})
+	})
+	wg.Wait()
+	requireReviewResult(t, envA)
+	requireReviewResult(t, envB)
+
+	regA, _, _ := loadTemporalBundle(t, repoA)
+	recA, _ := memorymeta.Review(resolveConcept(t, regA, noteA.OKFID))
+	if recA.ReviewedAt != timeA.Format(time.RFC3339Nano) {
+		t.Fatalf("service A reviewed_at = %q, want %q", recA.ReviewedAt, timeA.Format(time.RFC3339Nano))
+	}
+	regB, _, _ := loadTemporalBundle(t, repoB)
+	recB, _ := memorymeta.Review(resolveConcept(t, regB, noteB.OKFID))
+	if recB.ReviewedAt != timeB.Format(time.RFC3339Nano) {
+		t.Fatalf("service B reviewed_at = %q, want %q", recB.ReviewedAt, timeB.Format(time.RFC3339Nano))
+	}
 }
 
 // S25: approve moves proposed -> approved, drops confidence, writes the bounded

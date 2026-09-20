@@ -90,11 +90,16 @@ type Config struct {
 type Service struct {
 	cfg                Config
 	writeKnowledgeFile func(string, []byte) error
+	now                func() time.Time
 }
 
 // NewService constructs a Service with OKF defaults.
 func NewService(cfg Config) *Service {
-	return &Service{cfg: cfg, writeKnowledgeFile: atomicWriteKnowledgeFile}
+	return &Service{
+		cfg:                cfg,
+		writeKnowledgeFile: atomicWriteKnowledgeFile,
+		now:                func() time.Time { return time.Now().UTC() },
+	}
 }
 
 // ToolEnvelope is the stable top-level response contract for agent tools.

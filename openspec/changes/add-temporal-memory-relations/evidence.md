@@ -120,7 +120,7 @@ Runner: `tools/mutants-temporal-memory.sh`, wired as gauntlet layer **L9d**
 ## 7. Real Codex harness (S43)
 
 Script: `tools/verify-temporal-memory-codex.sh`. **Result: PASS**, model
-`gpt-5.6-sol__dev`.
+`gpt-5.6-luna__dev` selected from the live model pool after the default model was overloaded. The harness explicitly redirects stdin from `/dev/null`; without that, Codex appends piped stdin and can wait indefinitely before starting the turn.
 
 - **Phase A (read-only, 0 mutations):** `okf_query` current view sees A; the
   review queue lists proposal P. Asserts no review mutation occurs before
@@ -155,13 +155,13 @@ Phases A and C stay strictly read-only.
 - Undo of an approved concept that has an approved updater is rejected with
   `memory_has_approved_updater` and the dependent ref.
 
-## 9. Known design notes (recorded, not bugs)
+## 9. Final maintainability closure
 
-1. **`reviewClock` is a package-level var in `pkg/tool/memory_review.go`**
-   (`var reviewClock = func() time.Time { return time.Now().UTC() }`). It is the
-   injectable wall clock used to stamp `memory_review.reviewed_at`. Tests swap
-   it for determinism; it is process-global by design (one review mutation per
-   repository at a time under the temporal lock), not per-instance state.
+1. **Review clock is instance-scoped.** `Service.now` defaults to UTC wall time and
+   is injectable per Service for deterministic tests. There is no package-global
+   mutable review clock. `TestReviewMemoryServiceClocksAreIsolated` runs two Services
+   concurrently with different clocks and verifies each persisted its own timestamp;
+   the test and CAS race both pass under `-race`.
 2. **T3.3 strict-lint pipeline — wired.** `pkg/lint/temporal_lint.go` runs a
    self-contained whole-bundle temporal pass inside `LintBundle`, reading
    additive `Temporal` fields on `lint.Concept` (populated at both conversion
