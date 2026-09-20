@@ -161,6 +161,15 @@ type QueryRequest struct {
 	// DupThreshold overrides the default Jaccard threshold (0.20) when MemoryCheck
 	// is true. A value <= 0 falls back to memorymeta.DefaultDuplicateThreshold.
 	DupThreshold float64 `json:"dup_threshold,omitempty"`
+
+	// MemoryView is the additive temporal projection (P3, design §7.1). Omitted or
+	// "current" keeps the durable current heads; "all" keeps every state with
+	// temporal annotations; "history" switches to the MemoryHistoryResult envelope.
+	MemoryView string `json:"memory_view,omitempty"`
+	// Refs is exactly one stable ref used only with MemoryView=history.
+	Refs []string `json:"refs,omitempty"`
+	// MemoryReviewQueue switches to the body-free proposed-concept review queue.
+	MemoryReviewQueue bool `json:"memory_review_queue,omitempty"`
 }
 
 type ContextRequest struct {
@@ -172,6 +181,10 @@ type ContextRequest struct {
 	// or okf://concept/<id>) whose concept bodies are included verbatim under
 	// the same token budget. Query OR Refs must be non-empty.
 	Refs []string `json:"refs,omitempty"`
+	// MemoryView is the additive temporal projection (P3). "current" filters
+	// non-current durable concepts before packing; "all" keeps every state with
+	// annotations. "history" is rejected here (history has its own Query mode).
+	MemoryView string `json:"memory_view,omitempty"`
 }
 
 // ResolveRequest resolves a stable okf://concept/<id> ref to its current path.
@@ -258,6 +271,11 @@ type ContextItem struct {
 	Score         int    `json:"score"`
 	Reason        string `json:"reason"`
 	Provenance    string `json:"provenance"`
+	// Additive temporal annotations (P3); omitted on the legacy fast path.
+	MemoryState           string   `json:"memory_state,omitempty"`
+	MemoryCurrent         *bool    `json:"memory_current,omitempty"`
+	MemoryRelationKind    string   `json:"memory_relation_kind,omitempty"`
+	MemoryRelationTargets []string `json:"memory_relation_targets,omitempty"`
 }
 
 type KnowledgePathStatus struct {
@@ -284,32 +302,37 @@ type bundleLoadMetadata struct {
 }
 
 type QueryHit struct {
-	Title               string                    `json:"title"`
-	Type                string                    `json:"type"`
-	Resource            string                    `json:"resource,omitempty"`
-	FilePath            string                    `json:"file_path,omitempty"`
-	SourcePath          string                    `json:"source_path,omitempty"`
-	Location            string                    `json:"location,omitempty"`
-	ConceptPath         string                    `json:"concept_path,omitempty"`
-	StartLine           int                       `json:"start_line,omitempty"`
-	EndLine             int                       `json:"end_line,omitempty"`
-	SymbolKind          string                    `json:"symbol_kind,omitempty"`
-	QualifiedName       string                    `json:"qualified_name,omitempty"`
-	RelationKind        string                    `json:"relation_kind,omitempty"`
-	RelationSource      string                    `json:"relation_source,omitempty"`
-	RelationTarget      string                    `json:"relation_target,omitempty"`
-	Score               int                       `json:"score"`
-	Reason              string                    `json:"reason"`
-	Provenance          string                    `json:"provenance"`
-	Generated           bool                      `json:"generated,omitempty"`
-	Generator           string                    `json:"generator,omitempty"`
-	KnowledgePath       string                    `json:"knowledge_path,omitempty"`
-	KnowledgePathSource string                    `json:"knowledge_path_source,omitempty"`
-	SourceRank          int                       `json:"source_rank"`
-	DuplicateSources    []KnowledgePathResolution `json:"duplicate_sources,omitempty"`
-	exactness           int
-	sourceRank          int
-	typeRank            int
+	Title          string `json:"title"`
+	Type           string `json:"type"`
+	Resource       string `json:"resource,omitempty"`
+	FilePath       string `json:"file_path,omitempty"`
+	SourcePath     string `json:"source_path,omitempty"`
+	Location       string `json:"location,omitempty"`
+	ConceptPath    string `json:"concept_path,omitempty"`
+	StartLine      int    `json:"start_line,omitempty"`
+	EndLine        int    `json:"end_line,omitempty"`
+	SymbolKind     string `json:"symbol_kind,omitempty"`
+	QualifiedName  string `json:"qualified_name,omitempty"`
+	RelationKind   string `json:"relation_kind,omitempty"`
+	RelationSource string `json:"relation_source,omitempty"`
+	RelationTarget string `json:"relation_target,omitempty"`
+	Score          int    `json:"score"`
+	Reason         string `json:"reason"`
+	Provenance     string `json:"provenance"`
+	// Additive temporal annotations (P3); omitted on the legacy fast path.
+	MemoryState           string                    `json:"memory_state,omitempty"`
+	MemoryCurrent         *bool                     `json:"memory_current,omitempty"`
+	MemoryRelationKind    string                    `json:"memory_relation_kind,omitempty"`
+	MemoryRelationTargets []string                  `json:"memory_relation_targets,omitempty"`
+	Generated             bool                      `json:"generated,omitempty"`
+	Generator             string                    `json:"generator,omitempty"`
+	KnowledgePath         string                    `json:"knowledge_path,omitempty"`
+	KnowledgePathSource   string                    `json:"knowledge_path_source,omitempty"`
+	SourceRank            int                       `json:"source_rank"`
+	DuplicateSources      []KnowledgePathResolution `json:"duplicate_sources,omitempty"`
+	exactness             int
+	sourceRank            int
+	typeRank              int
 	// identity fields populated at ranking time so a later projection can build
 	// ResultHit without re-reading the concept or re-running retrieval.
 	okfID             string
@@ -474,7 +497,14 @@ func (s *Service) Query(ctx stdctx.Context, req QueryRequest) ToolEnvelope {
 			knowledgeNotInitialized(resolved.repoRoot),
 		)
 	}
-	if strings.TrimSpace(req.Query) == "" {
+	// P3: temporal mode validation (design §7.1) runs BEFORE the empty-query guard.
+	temporalMode, terr := classifyTemporalQuery(req)
+	if terr.code != "" {
+		return failure(OperationQuery, resolved.repoRoot, resolved.knowledgeDir, freshness, terr)
+	}
+	// Dedicated modes (history, review queue) legitimately have an empty query.
+	dedicatedMode := temporalMode == temporalModeHistory || temporalMode == temporalModeReviewQueue
+	if !dedicatedMode && strings.TrimSpace(req.Query) == "" {
 		return failure(OperationQuery, resolved.repoRoot, resolved.knowledgeDir, freshness, toolError{
 			code:        ErrInvalidQuery,
 			message:     "query must not be empty",
@@ -490,9 +520,16 @@ func (s *Service) Query(ctx stdctx.Context, req QueryRequest) ToolEnvelope {
 		return failure(OperationQuery, resolved.repoRoot, resolved.knowledgeDir, freshness, err)
 	}
 
+	// P3: build the temporal projection. When the bundle carries no temporal
+	// metadata the legacy fast path is taken and output bytes are unchanged (S17).
+	temporalView := memorymeta.BuildTemporalView(bundle.Concepts)
+	baseWarnings := func() []string {
+		out := append([]string{}, staleWarnings(freshness)...)
+		return append(out, loadMeta.Warnings...)
+	}
+
 	// memory_check (S20-S27): read-only, per-call duplicate detection. It returns a
 	// dedicated MemoryCheckResult envelope and skips the normal ranked Query output.
-	// The empty-query guard above already enforces that query is required.
 	if req.MemoryCheck {
 		check := memorymeta.CheckMemory(bundle.Concepts, req.Query, req.Type, req.Project, req.Tag, req.DupThreshold)
 		return ToolEnvelope{
@@ -505,6 +542,38 @@ func (s *Service) Query(ctx stdctx.Context, req QueryRequest) ToolEnvelope {
 			Freshness:     freshness,
 			Warnings:      append(staleWarnings(freshness), loadMeta.Warnings...),
 			Result:        check,
+		}
+	}
+
+	// P3 dedicated envelopes.
+	switch temporalMode {
+	case temporalModeReviewQueue:
+		return ToolEnvelope{
+			SchemaVersion: SchemaVersion,
+			Operation:     OperationQuery,
+			OK:            true,
+			Mutating:      isMutatingOperation(OperationQuery),
+			RepoRoot:      resolved.repoRoot,
+			KnowledgeDir:  resolved.knowledgeDir,
+			Freshness:     freshness,
+			Warnings:      append(baseWarnings(), temporalView.Warnings...),
+			Result:        buildMemoryReviewQueue(bundle.Concepts, req.Limit),
+		}
+	case temporalModeHistory:
+		history, herr := buildMemoryHistory(req.Refs[0], temporalView)
+		if herr != nil {
+			return failure(OperationQuery, resolved.repoRoot, resolved.knowledgeDir, freshness, historyErrorTool(herr))
+		}
+		return ToolEnvelope{
+			SchemaVersion: SchemaVersion,
+			Operation:     OperationQuery,
+			OK:            true,
+			Mutating:      isMutatingOperation(OperationQuery),
+			RepoRoot:      resolved.repoRoot,
+			KnowledgeDir:  resolved.knowledgeDir,
+			Freshness:     freshness,
+			Warnings:      append(baseWarnings(), temporalView.Warnings...),
+			Result:        history,
 		}
 	}
 
@@ -534,7 +603,23 @@ func (s *Service) Query(ctx stdctx.Context, req QueryRequest) ToolEnvelope {
 			Counts:  map[string]int{"active_filters": activeQueryFilterCount(filters)},
 		})
 	}
-	hits := rankConcepts(bundle.Concepts, req.Query, filters)
+	// P3: current view drops non-current durable concepts BEFORE ranking so they
+	// cannot consume the TopK limit (S32). The all view and the no-temporal fast
+	// path leave the concept set untouched.
+	temporalActive := temporalView.HasTemporalData
+	allView := temporalMode == temporalModeAll
+	scoredConcepts := bundle.Concepts
+	if temporalActive && !allView {
+		scoredConcepts = filterConceptsForView(bundle.Concepts, temporalView, false)
+	}
+	hits := rankConcepts(scoredConcepts, req.Query, filters)
+	var viewWarns []string
+	if temporalActive {
+		viewWarns = temporalView.Warnings
+		for i := range hits {
+			annotateQueryHit(&hits[i], temporalView)
+		}
+	}
 	if req.IncludeTrace {
 		trace = append(trace, TraceStep{
 			Type:       "candidate_scoring",
@@ -566,7 +651,7 @@ func (s *Service) Query(ctx stdctx.Context, req QueryRequest) ToolEnvelope {
 			RepoRoot:      resolved.repoRoot,
 			KnowledgeDir:  resolved.knowledgeDir,
 			Freshness:     freshness,
-			Warnings:      append(append(staleWarnings(freshness), loadMeta.Warnings...), gwarns...),
+			Warnings:      append(append(baseWarnings(), viewWarns...), gwarns...),
 			Result: QueryResult{
 				Query:   req.Query,
 				Results: representatives,
@@ -595,7 +680,7 @@ func (s *Service) Query(ctx stdctx.Context, req QueryRequest) ToolEnvelope {
 		RepoRoot:      resolved.repoRoot,
 		KnowledgeDir:  resolved.knowledgeDir,
 		Freshness:     freshness,
-		Warnings:      append(staleWarnings(freshness), loadMeta.Warnings...),
+		Warnings:      append(baseWarnings(), viewWarns...),
 		Result: QueryResult{
 			Query:   req.Query,
 			Results: hits,
@@ -627,6 +712,16 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 			remediation: "Pass a non-empty query string and/or one or more stable refs.",
 		})
 	}
+	// P3: history has its own Query mode; Context only supports current/all (S36).
+	switch mv := strings.TrimSpace(req.MemoryView); mv {
+	case "", memoryViewCurrent, memoryViewAll:
+	default:
+		return failure(OperationContext, resolved.repoRoot, resolved.knowledgeDir, freshness, toolError{
+			code:        ErrInvalidRequest,
+			message:     fmt.Sprintf("unsupported context memory_view %q", req.MemoryView),
+			remediation: "Use omit, current, or all; history is served via Query with memory_view=history.",
+		})
+	}
 	if err := checkContext(ctx); err != nil {
 		return failure(OperationContext, resolved.repoRoot, resolved.knowledgeDir, freshness, err)
 	}
@@ -636,13 +731,24 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 		return failure(OperationContext, resolved.repoRoot, resolved.knowledgeDir, freshness, err)
 	}
 
+	// P3: build the temporal projection. When the bundle carries no temporal
+	// metadata the legacy fast path preserves old bytes (S17).
+	temporalView := memorymeta.BuildTemporalView(bundle.Concepts)
+	temporalActive := temporalView.HasTemporalData
+
 	budget := req.BudgetTokens
 	if budget <= 0 {
 		budget = defaultContextBudgetTokens
 	}
 	var hits []QueryHit
 	if strings.TrimSpace(req.Query) != "" {
-		hits = rankConcepts(bundle.Concepts, req.Query, queryFilters{})
+		// Current view drops non-current durable concepts before packing (S36); the
+		// all view keeps every state.
+		rankSet := bundle.Concepts
+		if temporalActive && req.MemoryView != memoryViewAll {
+			rankSet = filterConceptsForView(bundle.Concepts, temporalView, false)
+		}
+		hits = rankConcepts(rankSet, req.Query, queryFilters{})
 		if len(hits) > maxContextCandidates {
 			hits = hits[:maxContextCandidates]
 		}
@@ -650,6 +756,9 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 	items := []ContextItem{}
 	omissions := []ContextOmission{}
 	warnings := append(staleWarnings(freshness), loadMeta.Warnings...)
+	if temporalActive {
+		warnings = append(warnings, temporalView.Warnings...)
+	}
 	usedTokens := 0
 	omitted := 0
 	conceptsByPath := indexConceptsByPath(bundle.Concepts)
@@ -715,7 +824,7 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 			continue
 		}
 		usedTokens += tokens
-		items = append(items, ContextItem{
+		item := ContextItem{
 			Title:         concept.Title,
 			Type:          concept.Type,
 			SourcePath:    concept.FilePath,
@@ -723,7 +832,10 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 			TokenEstimate: tokens,
 			Reason:        "ref",
 			Provenance:    "concept.body",
-		})
+		}
+		// Explicitly requested refs survive regardless of state (S36); annotate it.
+		annotateContextItem(&item, concept, temporalView)
+		items = append(items, item)
 	}
 	for i, candidate := range candidates {
 		if err := checkContext(ctx); err != nil {
@@ -777,7 +889,7 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 			omission := ContextOmission{Reason: "source_missing", Title: concept.Title, SourcePath: sourcePath, Count: 1}
 			omissions = append(omissions, omission)
 			appendTraceOmission(req.IncludeTrace, &trace, omission)
-			items = append(items, ContextItem{
+			missingItem := ContextItem{
 				Title:         concept.Title,
 				Type:          concept.Type,
 				SourcePath:    sourcePath,
@@ -789,7 +901,9 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 				Score:         hit.Score,
 				Reason:        candidate.reason(),
 				Provenance:    hit.Provenance,
-			})
+			}
+			annotateContextItem(&missingItem, concept, temporalView)
+			items = append(items, missingItem)
 			omitted++
 			continue
 		}
@@ -831,7 +945,7 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 				Counts:  map[string]int{"tokens": tokens},
 			})
 		}
-		items = append(items, ContextItem{
+		scoredItem := ContextItem{
 			Title:         concept.Title,
 			Type:          concept.Type,
 			SourcePath:    sourcePath,
@@ -843,7 +957,9 @@ func (s *Service) Context(ctx stdctx.Context, req ContextRequest) ToolEnvelope {
 			Score:         hit.Score,
 			Reason:        candidate.reason(),
 			Provenance:    "repo.source",
-		})
+		}
+		annotateContextItem(&scoredItem, concept, temporalView)
+		items = append(items, scoredItem)
 	}
 	if req.IncludeTrace {
 		trace = append(trace, TraceStep{

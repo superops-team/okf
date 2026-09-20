@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// modernToolNames is the sorted list of 11 service-backed Agent tools exposed in modern era.
+// modernToolNames is the sorted list of 12 service-backed Agent tools exposed in modern era.
 var modernToolNames = []string{
 	"okf_ask",
 	"okf_context",
@@ -15,6 +15,7 @@ var modernToolNames = []string{
 	"okf_init",
 	"okf_log",
 	"okf_manifest",
+	"okf_memory_review",
 	"okf_note",
 	"okf_query",
 	"okf_refresh",
@@ -45,13 +46,13 @@ func (s *Server) handleModernDiscover(id json.RawMessage, meta *ModernRequestMet
 		Data: map[string]any{
 			"supportedVersions": []string{ModernProtocolVersion},
 			"capabilities":      caps,
-			"instructions":      "OKF MCP Server. Use skill://okf/SKILL.md for the canonical Agent workflow. Modern era exposes 11 service-backed tools and the static Skill resource.",
+			"instructions":      "OKF MCP Server. Use skill://okf/SKILL.md for the canonical Agent workflow. Modern era exposes 12 service-backed tools and the static Skill resource.",
 		},
 	}
 	s.sendResponse(id, result)
 }
 
-// handleModernToolsList returns only the 11 modern service-backed tools.
+// handleModernToolsList returns only the 12 modern service-backed tools.
 func (s *Server) handleModernToolsList(id json.RawMessage, meta *ModernRequestMeta) {
 	all := s.tools.List()
 	var modern []Tool

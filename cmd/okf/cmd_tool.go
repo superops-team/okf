@@ -15,18 +15,28 @@ import (
 
 func cmdTool(args []string) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Println("Usage: okf tool <status|init|refresh|query|context|manifest> [options]")
+		fmt.Println("Usage: okf tool <status|init|refresh|query|context|manifest|memory-review> [options]")
 		fmt.Println()
 		fmt.Println("Agent-facing JSON tool operations. All commands accept --json for")
 		fmt.Println("machine-parseable output and --repo/--dir for knowledge base location.")
 		fmt.Println()
 		fmt.Println("Subcommands:")
-		fmt.Println("  status    Show knowledge bundle status and freshness")
-		fmt.Println("  init      Initialize a knowledge bundle")
-		fmt.Println("  refresh   Refresh the knowledge bundle index")
-		fmt.Println("  query     Semantic/hybrid search with optional grouping")
-		fmt.Println("  context   Build context for a query")
-		fmt.Println("  manifest  Metadata-only listing (no body, no index side effects)")
+		fmt.Println("  status         Show knowledge bundle status and freshness")
+		fmt.Println("  init           Initialize a knowledge bundle")
+		fmt.Println("  refresh        Refresh the knowledge bundle index")
+		fmt.Println("  query          Semantic/hybrid search with optional grouping")
+		fmt.Println("  context        Build context for a query")
+		fmt.Println("  manifest       Metadata-only listing (no body, no index side effects)")
+		fmt.Println("  memory-review  CAS approve/decline/undo of one proposed durable concept (S37)")
+		fmt.Println()
+		fmt.Println("Temporal memory modes (S37):")
+		fmt.Println("  query --memory-view current|all|history")
+		fmt.Println("    current/all  still require a non-empty -q and forbid --refs")
+		fmt.Println("    history      requires empty -q and exactly one --refs entry")
+		fmt.Println("  query --memory-review-queue")
+		fmt.Println("    lists body-free proposed concepts; requires empty -q and forbids --refs")
+		fmt.Println("  context --memory-view current|all (history is rejected here)")
+		fmt.Println("  memory-review --ref <id> --action approve|decline|undo --expected-state <state>")
 		fmt.Println()
 		fmt.Println("Examples:")
 		fmt.Println("  okf tool manifest --repo . --dir knowledge")
@@ -48,9 +58,11 @@ func cmdTool(args []string) int {
 		return cmdToolContext(args[1:])
 	case "manifest":
 		return cmdToolManifest(args[1:])
+	case "memory-review":
+		return cmdToolMemoryReview(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown tool subcommand: %s\n", subcommand)
-		fmt.Fprintln(os.Stderr, "Valid subcommands: status, init, refresh, query, context, manifest")
+		fmt.Fprintln(os.Stderr, "Valid subcommands: status, init, refresh, query, context, manifest, memory-review")
 		fmt.Fprintln(os.Stderr, "Run 'okf tool --help' for usage.")
 		return 1
 	}
@@ -103,11 +115,18 @@ func cmdToolQuery(args []string) int {
 	includeGroupMembers := flags.Bool("include-group-members", false, "Include per-member hit lists inside each projected group")
 	memoryCheck := flags.Bool("memory-check", false, "Read-only duplicate check against durable note/event/feedback concepts (skips normal ranking)")
 	dupThreshold := flags.Float64("dup-threshold", 0, "Jaccard threshold for --memory-check (default 0.20)")
+	memoryView := flags.String("memory-view", "", "Temporal memory view: current|all|history (omit for the default current view)")
+	refs := flags.String("refs", "", "Comma-separated stable refs (okf_id or okf://concept/<id>); only valid with --memory-view=history (exactly one entry)")
+	memoryReviewQueue := flags.Bool("memory-review-queue", false, "List body-free proposed durable concepts for review; requires empty -q and forbids --refs/--memory-view=history")
 	if err := parseToolFlags(flags, args); err != nil {
 		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationQuery, toolsvc.ErrInvalidRequest, sanitizeFlagParseError(err), "Fix the invalid flag values and try again."), *jsonOut || hasJSONFlag(args))
 	}
-	if strings.TrimSpace(*query) == "" {
-		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationQuery, toolsvc.ErrInvalidQuery, "query must not be empty", "Pass --q with a non-empty query string."), *jsonOut)
+	// Query-optional temporal modes (S37): the review queue and the history view
+	// do not take a query string. Every other mode still requires non-empty -q;
+	// the service validates the rest of the §7.1 matrix.
+	queryOptional := *memoryReviewQueue || strings.TrimSpace(*memoryView) == "history"
+	if strings.TrimSpace(*query) == "" && !queryOptional {
+		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationQuery, toolsvc.ErrInvalidQuery, "query must not be empty", "Pass --q with a non-empty query string (or use --memory-review-queue / --memory-view=history)."), *jsonOut)
 	}
 	if *limit < 0 {
 		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationQuery, toolsvc.ErrInvalidRequest, "limit must be non-negative", "Pass --limit 0 or a positive integer."), *jsonOut)
@@ -129,6 +148,9 @@ func cmdToolQuery(args []string) int {
 		IncludeGroupMembers: *includeGroupMembers,
 		MemoryCheck:         *memoryCheck,
 		DupThreshold:        *dupThreshold,
+		MemoryView:          *memoryView,
+		Refs:                splitListFlag(*refs),
+		MemoryReviewQueue:   *memoryReviewQueue,
 	}), *jsonOut)
 }
 
@@ -140,6 +162,7 @@ func cmdToolContext(args []string) int {
 	includeRelations := flags.Bool("include-relations", false, "Include relation expansion")
 	includeTrace := flags.Bool("include-trace", false, "Include compact retrieval trace")
 	refs := flags.String("refs", "", "Comma-separated stable refs (okf_id or okf://concept/<id>) whose concept bodies are included")
+	memoryView := flags.String("memory-view", "", "Temporal memory view for context: current|all (omit for default; history is rejected here)")
 	if err := parseToolFlags(flags, args); err != nil {
 		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationContext, toolsvc.ErrInvalidRequest, sanitizeFlagParseError(err), "Fix the invalid flag values and try again."), *jsonOut || hasJSONFlag(args))
 	}
@@ -155,6 +178,30 @@ func cmdToolContext(args []string) int {
 		IncludeRelations: *includeRelations,
 		IncludeTrace:     *includeTrace,
 		Refs:             splitListFlag(*refs),
+		MemoryView:       *memoryView,
+	}), *jsonOut)
+}
+
+// cmdToolMemoryReview dispatches a CAS review of one durable concept's temporal
+// state (S37): approve|decline|undo guarded by --expected-state. It is a
+// mutating, non-idempotent transition, but the envelope is rendered through the
+// shared helper so the JSON contract matches the other tool subcommands.
+func cmdToolMemoryReview(args []string) int {
+	flags := newToolFlagSet("tool memory-review")
+	repoPath, knowledgeDir, jsonOut := addToolCommonFlags(flags)
+	ref := flags.String("ref", "", "Stable ref (okf_id or okf://concept/<id>) of the durable concept to review")
+	action := flags.String("action", "", "Review action: approve|decline|undo")
+	expectedState := flags.String("expected-state", "", "CAS guard: the state the concept must currently be in (e.g. proposed)")
+	if err := parseToolFlags(flags, args); err != nil {
+		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationReview, toolsvc.ErrInvalidRequest, sanitizeFlagParseError(err), "Fix the invalid flag values and try again."), *jsonOut || hasJSONFlag(args))
+	}
+	if strings.TrimSpace(*ref) == "" || strings.TrimSpace(*action) == "" || strings.TrimSpace(*expectedState) == "" {
+		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationReview, toolsvc.ErrInvalidRequest, "--ref, --action and --expected-state are all required", "Pass --ref <id> --action approve|decline|undo --expected-state <state>."), *jsonOut)
+	}
+	return emitToolEnvelope(toolService(*repoPath, *knowledgeDir).ReviewMemory(context.Background(), toolsvc.ReviewMemoryRequest{
+		Ref:           *ref,
+		Action:        *action,
+		ExpectedState: *expectedState,
 	}), *jsonOut)
 }
 

@@ -174,8 +174,8 @@ def main():
         tools = result["result"]["tools"]
         print(f"  ✓ Found {len(tools)} tools:")
         tool_names = [t["name"] for t in tools]
-        assert len(tools) == 20, f"Legacy tools/list must expose exactly 20 tools, got {len(tools)}: {tool_names}"
-        assert len(set(tool_names)) == 20, f"Legacy tools/list contains duplicate names: {tool_names}"
+        assert len(tools) == 21, f"Legacy tools/list must expose exactly 21 tools, got {len(tools)}: {tool_names}"
+        assert len(set(tool_names)) == 21, f"Legacy tools/list contains duplicate names: {tool_names}"
         for t in tools:
             print(f"    - {t['name']}: {t['description'][:60]}")
         expected_tools = ["okf_load_bundle", "okf_bundle_stats", "okf_list_concepts",

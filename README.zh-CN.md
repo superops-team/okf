@@ -23,6 +23,7 @@
 - [安装方式 · 30 秒上手](#安装方式--30-秒上手)
 - [使用示例](#使用示例)
 - [稳定身份、Manifest 与 Agent 发现](#稳定身份manifest-与-agent-发现)
+- [时序记忆与评审工作流](#时序记忆与评审工作流)
 - [文档](#文档)
 - [项目结构](#项目结构)
 - [模块说明](#模块说明)
@@ -45,6 +46,7 @@
 - **🔎 高级查询** — 支持按类型、标签、全文搜索
 - **🧠 混合语义搜索** — 本地自然语言搜索：分块级 MiniLM 向量 + BM25，加权 RRF 融合（完全离线、无 CGO）
 - **🤖 Agent MCP 接入** — 通过标准 MCP 提供仓库知识状态、初始化、刷新、查询、上下文以及持久 note/event/feedback
+- [⏳ 时序记忆与评审](#时序记忆与评审工作流) — `updates`/`extends` 关系、current/all/history 视图，以及 propose→approve/decline/undo 的对比并集评审队列（无图数据库，currentness 实时计算）
 - **🏗 模块化架构** — 遵循 Go 最佳实践，清晰分层设计
 
 ## 工作原理
@@ -142,7 +144,7 @@ okf mcp --repo /your/repo --dir .okf/knowledge
 
 ### Agent-facing MCP 工具
 
-MCP server 通过 `okf_status`、`okf_init`、`okf_refresh`、`okf_query`、`okf_context` 暴露仓库知识服务；通过 `okf_note`、`okf_log`、`okf_feedback` 持久化显式提交的知识，并由 `okf_ask` 仅查询 note/event/feedback。稳定引用解析与元数据发现通过 `okf_resolve`、`okf_manifest` 暴露（见[稳定身份、Manifest 与 Agent 发现](#稳定身份manifest-与-agent-发现)）。原有 bundle/list/get/search/lint/document-import 工具保持可用。
+MCP server 通过 `okf_status`、`okf_init`、`okf_refresh`、`okf_query`、`okf_context` 暴露仓库知识服务；通过 `okf_note`、`okf_log`、`okf_feedback` 持久化显式提交的知识，并由 `okf_ask` 仅查询 note/event/feedback。稳定引用解析与元数据发现通过 `okf_resolve`、`okf_manifest` 暴露（见[稳定身份、Manifest 与 Agent 发现](#稳定身份manifest-与-agent-发现)）。新增 `okf_memory_review`（propose→approve/decline/undo 的 CAS 评审工具）在两个时代均可用，工具数量相应变为现代 12 个、legacy 21 个。原有 bundle/list/get/search/lint/document-import 工具保持可用。
 
 写工具要求稳定的 `idempotency_key`，使用确定性 identity，拒绝未知字段和错误字段类型，并对路径逃逸、symlink root、大小超限和 credential-like metadata 采取 fail-closed。Server 只持久化调用方显式提交的 feedback，不读取宿主应用的私有事件总线。详见 [`docs/knowledge/mcp-server.md`](docs/knowledge/mcp-server.md) 和 [`docs/knowledge/durable-capture.md`](docs/knowledge/durable-capture.md)。
 
@@ -316,6 +318,43 @@ okf tool context --refs okf_abc123,okf_def456 --budget-tokens 2000
 ### CLI 与 MCP 命名
 
 CLI flags 使用连字符（`--for-path`、`--max-tokens`、`--stale-refs`、`--memory-check`、`--dup-threshold`、`--refs`）。MCP/JSON 字段使用下划线（`for_path`、`max_tokens`、`stale_refs`、`memory_check`、`dup_threshold`、`refs`）。
+
+## 时序记忆与评审工作流
+
+时序记忆建立在同一套 `CustomFields` 机制之上：durable 的 note/event/feedback 可携带可选的 `memory_state`、`memory_confidence`、`memory_relation` 以及最新一条 `memory_review` 记录。核心 `Concept` struct 不变，也不引入图数据库、第二索引或缓存——currentness 是基于稳定 `okf_id` 关系边的确定性投影，按需计算。
+
+### 关系与视图
+
+```bash
+# current（默认）、显式审计视图，或单引用历史
+okf tool query -q "current architecture decision" --memory-view current
+okf tool query -q "..." --memory-view all
+okf tool query --memory-view history --refs okf_22222222222222222222222222222222
+```
+
+- **`updates`**——新记忆取代一条较早的记忆（较早者进入历史）；**`extends`** 丰富其他记忆，且全部保持 current。
+- **`current`**（默认）在存在时序字段时隐藏历史/proposed/declined 的 durable 记忆；**`all`** 是显式审计视图，并附加 `memory_state`/`memory_current`/`memory_relation_kind`/`memory_relation_targets` 注解（绝不返回正文）；**`history`** 为恰好一个引用返回按时间排序的更新链。
+
+### Proposed 评审队列
+
+```bash
+okf tool query --memory-review-queue --limit 20   # 不含正文，按 confidence 降序 → 最早 → id 升序
+```
+
+### 带对比并集的评审
+
+```bash
+okf tool memory-review --ref okf_22222222222222222222222222222222 \
+    --action approve --expected-state proposed
+```
+
+`approve` 激活提案，`decline` 将其隔离（保留在盘、从 current 排除），`undo` 将其退回 `proposed` 并恢复原始 confidence。`expected_state` 使该变更具备 CAS 语义：陈旧调用方收到 `memory_state_conflict` 且不改动任何文件。declined 记忆永不删除——decline 可逆且可被 Git 审计。
+
+### Agent 规则（W08）
+
+Agent Skill 规定 **W08「只提案，绝不自批」**：推断/可复用的知识以 `proposed` 写入，并附带 [0,1] 内的有限 `memory_confidence` 与支撑 `evidence_refs`；Agent 可通过评审队列 / `okf_context refs` 列出或阅读提案，但仅在用户明确指示后才调用 `okf_memory_review` 的 approve/decline——绝不批准自己创建的提案。
+
+CLI flags 使用连字符（`--memory-view`、`--refs`、`--memory-review-queue`）；MCP/JSON 字段使用下划线（`memory_view`、`refs`、`memory_review_queue`，写工具上另有 `memory_state`/`memory_confidence`/`memory_relation_kind`/`memory_relation_targets`/`evidence_refs`）。专用评审工具为 `okf_memory_review`。
 
 ## 文档
 

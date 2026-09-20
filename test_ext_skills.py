@@ -5,7 +5,7 @@ Tests the dual-era server's modern protocol surface:
 - server/discover with per-request _meta
 - skills/list, skills/get with capability gate
 - resources/list, resources/read for the static Skill
-- tools/list (exactly 11 modern tools), tools/call (read-only)
+- tools/list (exactly 12 modern tools), tools/call (read-only)
 - Negative: unsupported version (-32022), missing capability (-32021), unknown URI (-32602)
 
 Uses newline-delimited JSON (normative modern stdio framing).
@@ -136,13 +136,13 @@ def test_tools_modern():
     resp = client.call("tools/list", modern_meta())
     assert "error" not in resp
     tools = resp["result"]["tools"]
-    assert len(tools) == 11, f"expected 11 modern tools, got {len(tools)}"
+    assert len(tools) == 12, f"expected 12 modern tools, got {len(tools)}"
     names = [t["name"] for t in tools]
     assert names == sorted(names), "tools must be sorted"
     # Legacy-only tools must not appear
     for legacy in ["okf_load_bundle", "okf_search", "okf_semantic_search"]:
         assert legacy not in names, f"legacy tool {legacy} should not be in modern catalog"
-    print("PASS: tools/list (11 modern tools)")
+    print("PASS: tools/list (12 modern tools)")
     client.close()
 
 def test_unknown_skill_uri():
