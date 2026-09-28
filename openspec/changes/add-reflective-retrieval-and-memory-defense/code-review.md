@@ -176,3 +176,26 @@ This change is test-only (no production code change). CLI/MCP/Codex behavior unc
 - No new security boundary; Reflect read-only, Defense unchanged
 - Demo fallback prints warning to stderr-equivalent stdout
 - All tests pass race/shuffle
+
+## Review C (independent) — Gap closure round
+Files reviewed (this round):
+- cmd/okf/cmd_eval.go (demo fallback removed, -repo required)
+- cmd/okf/cmd_eval_trap_test.go (new: 7 trap eval tests)
+- pkg/tool/relation_graceful_test.go (new: 6 subtests)
+- pkg/tool/relation_parity_test.go (new: parity + unknown anchor)
+- pkg/agentconfig/workflow.go (W09/W10 + tool registration)
+- pkg/agentconfig/skill_w09_w10_test.go (new: 4 renderer tests)
+
+Checks:
+- Type assertion `resp.Result.(tool.ReflectResult)`: panics if resp.OK is false; guarded by `if !resp.OK` continue. PASS.
+- Empty cases division by zero: Summarize uses `if n == 0 return 0`. PASS.
+- Missing -repo: exits 1 with usage. PASS.
+- No hardcoded 1.0 path remains. PASS.
+
+## Review D (independent) — Boundary/security/compatibility
+- Corrupted frontmatter: graceful skip, no panic (tested).
+- Context: context.Background() per case (no cancel needed for bounded CLI).
+- Determinism: rerun exit code identical (tested).
+- Agent Skill: W09/W10 render to all 4 backends; managed block markers handled by existing adapter.
+- No new secrets, no new dependencies.
+- No issues requiring fix.
