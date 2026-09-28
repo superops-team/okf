@@ -324,3 +324,22 @@ New edge tests added (all GREEN on original implementation):
 - RR-04: Service-level graceful degradation end-to-end test (unit test exists for Recall)
 - TE-05: `okf eval trap` CLI is deterministic demo, not live reflect-in-loop (evaluator library works)
 - Agent Skill/workflow persistence: no skill manifest added in this change
+
+## Codex E2E invocation count clarification (2026-09-29)
+
+**更正**：此前"本轮 7 次"口径不准确。真实情况是两个轮次的 MCP 调用合并构成完整矩阵：
+
+| 轮次 | 场景 | MCP 工具调用 | 次数 |
+|---|---|---|---|
+| Round 1（前序） | redact write | load_bundle + import_document | 2 |
+| Round 1（前序） | block write | load_bundle + import_document | 2 |
+| Round 2（本轮） | disabled write | load_bundle + import_document | 2 |
+| Round 2（本轮） | reflect round1+round2 | load_bundle + reflect + reflect(stable) | 3 |
+| Round 2（本轮） | relation recall | relation_recall | 1 |
+| Round 2（本轮） | no-result abstain | reflect | 1 |
+| **累计** | | | **11 次 MCP 调用** |
+
+按工具分布：load_bundle=5, import_document=3, reflect=3, relation_recall=1。
+Durable writes: disabled=1, redact=1, block=0。
+
+历史 shell 段（evidence.md 行 195-215 早期版本）已 superseded，非最终验收证据。

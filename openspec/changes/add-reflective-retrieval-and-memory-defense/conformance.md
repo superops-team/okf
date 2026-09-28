@@ -50,6 +50,7 @@
 | WI-01 CLI reflect/relation/trap | ✓ cmd_tool.go + cmd_eval.go | CLI smoke + gauntlet L10 | aligned |
 | WI-02 MCP parity | ✓ tools.go registers both | test_mcp.py 17/17 + Codex MCP E2E | aligned |
 | WI-03 write tools through defense | ✓ WriteKnowledge Screen | write_defense_test.go | aligned |
+| WI-04 Agent Skill/workflow manifest | ✗ 未新增 | 无（Codex E2E 是 consumer 验证） | gap (FU-3) |
 
 ## Gaps
 - RR-04 graceful degradation: unit test exists for Recall returning warnings, but end-to-end Service test not added.

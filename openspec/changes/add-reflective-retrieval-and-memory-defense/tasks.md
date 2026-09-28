@@ -87,3 +87,8 @@ P0/P1/P2 仅表依赖顺序，全部完成才算完成。
 - [x] T7.4 release-notes.md
 - [x] T7.5 清理临时文件/worktree 外脏文件
 - [x] T7.6 本地 commits 合理拆分，不 push/PR/merge
+
+## Follow-up gaps (真实未完成，非文档过时)
+- [ ] FU-1 Service.RelationRecall graceful degradation 端到端测试（对应 conformance RR-04 partial）
+- [ ] FU-2 okf eval trap 接入 live Service.Reflect，移除 cmd_eval.go deterministic demo（对应 TE-05 partial）
+- [ ] FU-3 Agent Skill/workflow manifest 持久化接线（Codex consumer E2E ≠ 项目自身 Agent Skill 接线）
