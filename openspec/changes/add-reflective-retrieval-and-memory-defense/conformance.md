@@ -47,15 +47,15 @@
 ## Wiring
 | Scenario | Implemented | Test | Status |
 |---|---|---|---|
-| WI-01 CLI reflect/relation/trap | ✓ cmd_tool.go + cmd_eval.go | build verified | partial |
-| WI-02 MCP parity | ✓ tools.go registers both | build verified | partial |
+| WI-01 CLI reflect/relation/trap | ✓ cmd_tool.go + cmd_eval.go | CLI smoke + gauntlet L10 | aligned |
+| WI-02 MCP parity | ✓ tools.go registers both | test_mcp.py 17/17 + Codex MCP E2E | aligned |
 | WI-03 write tools through defense | ✓ WriteKnowledge Screen | write_defense_test.go | aligned |
 
 ## Gaps
 - RR-04 graceful degradation: unit test exists for Recall returning warnings, but end-to-end Service test not added.
 - TE-05 poison block gate: CLI exits 1 on poison_blocked<1.0, but integrated trap bundle not included as fixture.
-- WI-01/WI-02: CLI/MCP build verified but E2E python test not extended.
-- 10k concept latency: not benchmarked (requires large fixture).
+- WI-01/WI-02: now aligned (test_mcp.py 17/17 + Codex MCP E2E).
+- 10k concept latency: benchmarked (Screen10k=1.15ms/op, Recall10k=0.38ms/op, see evidence.md).
 - Document import path defense: covered. MCP handleImportDocument AND CLI okf add both call memorydefense.Screen before writing durable markdown. Default disabled (backward compatible). Enabled via .okf/config.yaml; block rejects import, redact replaces secrets. Tests: TestImportDocumentDefense* (pkg/mcp), TestScreenImportTree* (cmd/okf).
 - MCP parity: unified ToolRegistry (registerCoreTools + registerAgentTools served by same server). No separate legacy MCP entry exists. New tools available in all server start paths.
 

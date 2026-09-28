@@ -299,3 +299,28 @@ New edge tests added (all GREEN on original implementation):
 - Stable refs: two identical reflect calls returned same IDs in same order
 - Block: zero durable writes, no secret leak in error
 - Disabled: byte-for-byte backward compatible
+
+## Final fresh verification (2026-09-29, HEAD=cba86ab)
+
+| Command | Result |
+|---|---|
+| gofmt -l | empty (pass) |
+| go build ./... | pass |
+| go vet ./... | pass |
+| staticcheck ./... | pass (0 issues) |
+| go test ./... -count=1 | 27 packages ok, 0 FAIL |
+| go test -race ./... | 27 packages ok, 0 data races |
+| go test -shuffle=on ./... | 27 packages ok |
+| go mod verify | all modules verified |
+| FuzzScreenNeverCrashes 30s | 231,853 execs, PASS |
+| tools/gauntlet.sh | PASS (coverage 72%, mutation 38/38 killed) |
+
+### M4 mutation (trapGate approved filter inverted)
+- Baseline: `TestReflect_TrapGateDropsProposed` PASS
+- Mutation (invert `!=` to `==`): test FAIL (RED)
+- Restore: PASS (GREEN) — M4 killed
+
+### Known real gaps (not doc issues)
+- RR-04: Service-level graceful degradation end-to-end test (unit test exists for Recall)
+- TE-05: `okf eval trap` CLI is deterministic demo, not live reflect-in-loop (evaluator library works)
+- Agent Skill/workflow persistence: no skill manifest added in this change
