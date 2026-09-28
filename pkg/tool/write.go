@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/superops-team/okf/pkg/identity"
+	"github.com/superops-team/okf/pkg/memorydefense"
 	"github.com/superops-team/okf/pkg/memorymeta"
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/parser"
@@ -25,6 +28,8 @@ const (
 	OperationWrite            = "write"
 	ErrIdempotencyConflict    = "idempotency_conflict"
 	ErrKnowledgePathOutside   = "path_outside_root"
+	ErrMemoryDefenseBlocked   = "memory_defense_blocked"
+	ErrRedactionEmpty         = "redaction_empty"
 	maxKnowledgeContentBytes  = 256 * 1024
 	maxKnowledgeMetadataBytes = 16 * 1024
 	maxKnowledgeTags          = 64
@@ -33,6 +38,10 @@ const (
 )
 
 var writeKnowledgeLocks sync.Map
+
+// reRedactionPlaceholder matches [REDACTED:label] markers to detect degenerate
+// writes where the entire content was secrets.
+var reRedactionPlaceholder = regexp.MustCompile(`\[REDACTED:[^\]]*\]`)
 
 // WriteKnowledgeRequest describes an explicit durable knowledge write.
 type WriteKnowledgeRequest struct {
@@ -69,6 +78,8 @@ type WriteKnowledgeResult struct {
 	// concept. Ref is its canonical okf://concept/<id> URI.
 	OKFID string `json:"okf_id,omitempty"`
 	Ref   string `json:"ref,omitempty"`
+	// Redactions lists memory-defense detectors that fired on this write.
+	Redactions []memorydefense.Hit `json:"redactions,omitempty"`
 }
 
 type writeKnowledgePayload struct {
@@ -118,6 +129,37 @@ func (s *Service) WriteKnowledge(ctx stdctx.Context, req WriteKnowledgeRequest) 
 		return failure(OperationWrite, resolved.repoRoot, resolved.knowledgeDir, readFreshness(resolved), err)
 	}
 
+	// Memory Defense: scan content body (the existing hasCredentialField gate
+	// only inspects metadata field names). Screen runs before payload hashing
+	// so redacted content is what gets persisted and idempotency-hashed.
+	pol, err := memorydefense.LoadPolicy(resolved.repoRoot)
+	if err != nil {
+		return failure(OperationWrite, resolved.repoRoot, resolved.knowledgeDir, readFreshness(resolved),
+			toolError{code: ErrInvalidRequest, message: err.Error(), remediation: "Fix memory_defense config in .okf/config.yaml."})
+	}
+	redacted, defenseHits, err := memorydefense.Screen(payload.Content, pol)
+	if err != nil {
+		var blocked *memorydefense.ErrBlocked
+		if errors.As(err, &blocked) {
+			return failure(OperationWrite, resolved.repoRoot, resolved.knowledgeDir, readFreshness(resolved),
+				toolError{code: ErrMemoryDefenseBlocked,
+					message:     "write blocked by memory defense: high-severity secret detected",
+					remediation: "Remove the secret from content before writing; detector=" + blocked.DetectorID})
+		}
+		return failure(OperationWrite, resolved.repoRoot, resolved.knowledgeDir, readFreshness(resolved), err)
+	}
+	payload.Content = redacted
+	// Reject degenerate writes where the entire content was secrets (after
+	// stripping redaction placeholders, nothing meaningful remains).
+	stripped := reRedactionPlaceholder.ReplaceAllString(payload.Content, "")
+	if strings.TrimSpace(stripped) == "" {
+		return failure(OperationWrite, resolved.repoRoot, resolved.knowledgeDir, readFreshness(resolved),
+			toolError{code: ErrRedactionEmpty,
+				message:     "content became empty after memory-defense redaction",
+				remediation: "Provide non-secret content alongside any redacted material."})
+	}
+	writeRedactions := defenseHits
+
 	conceptID := stableKnowledgeID(resolved.repoRoot, payload.Kind, strings.TrimSpace(req.IdempotencyKey))
 	relPath := filepath.Join(payload.Kind+"s", conceptID+".md")
 	fullPath := filepath.Join(resolved.knowledgeDir, relPath)
@@ -153,7 +195,7 @@ func (s *Service) WriteKnowledge(ctx stdctx.Context, req WriteKnowledgeRequest) 
 		}
 		// Identical retry: reuse the on-disk concept (preserving any review it has
 		// received) and return its current stable identity (S21).
-		return writeKnowledgeSuccess(resolved, conceptID, relPath, false, okfIDFromCustomFields(existing.CustomFields))
+		return writeKnowledgeSuccess(resolved, conceptID, relPath, false, okfIDFromCustomFields(existing.CustomFields), nil)
 	}
 
 	// An APPROVED relation write validates the whole bundle topology before the
@@ -198,7 +240,7 @@ func (s *Service) WriteKnowledge(ctx stdctx.Context, req WriteKnowledgeRequest) 
 		}
 		return failure(OperationWrite, resolved.repoRoot, resolved.knowledgeDir, readFreshness(resolved), verifyErr)
 	}
-	return writeKnowledgeSuccess(resolved, conceptID, relPath, true, okfID)
+	return writeKnowledgeSuccess(resolved, conceptID, relPath, true, okfID, writeRedactions)
 }
 
 func normalizeWriteKnowledgeRequest(req WriteKnowledgeRequest) (writeKnowledgePayload, error) {
@@ -652,7 +694,7 @@ func atomicWriteKnowledgeFile(path string, data []byte) (err error) {
 	return nil
 }
 
-func writeKnowledgeSuccess(resolved resolvedConfig, conceptID, conceptPath string, created bool, okfID string) ToolEnvelope {
+func writeKnowledgeSuccess(resolved resolvedConfig, conceptID, conceptPath string, created bool, okfID string, redactions []memorydefense.Hit) ToolEnvelope {
 	ref := ""
 	if okfID != "" {
 		ref = identity.CanonicalURI(okfID)
@@ -672,6 +714,7 @@ func writeKnowledgeSuccess(resolved resolvedConfig, conceptID, conceptPath strin
 			Created:     created,
 			OKFID:       okfID,
 			Ref:         ref,
+			Redactions:  redactions,
 		},
 	}
 }
