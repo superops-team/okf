@@ -206,7 +206,7 @@ New edge tests added (all GREEN on original implementation):
 ### Codex E2E (real, 2026-09-29)
 - Model: `gpt-5.6-sol__dev` via Xeart Router (127.0.0.1:18080 proxy)
 - Codex version: 0.153.4
-- 4 shell tool calls:
+- 4 shell tool calls: **[SUPERSEDED — historical, not final evidence; shell CLI calls, not MCP invocations]**
   1. Baseline "Say hello" → connectivity confirmed
   2. `okf tool reflect -q "PostgreSQL deployment"` → evidence=[approved], need_clarify=false; correct poison-free results
   3. `okf add` with secret (disabled policy) → exit 0, source unchanged, secret passed through (backward compat)
@@ -275,11 +275,12 @@ New edge tests added (all GREEN on original implementation):
 
 - Model: `gpt-5.6-sol__dev`
 - Codex: 0.153.4
-- Total MCP tool calls this round: **7**
+- **Round 2 subset** (this section): 7 calls
   - okf_load_bundle: 3
   - okf_reflect: 2
   - okf_relation_recall: 1
   - okf_import_document: 1 (disabled)
+- **Cumulative across Round 1+Round 2: 11 calls** (see ledger below)
 
 ### Scenario matrix
 
@@ -339,7 +340,7 @@ New edge tests added (all GREEN on original implementation):
 | Round 2（本轮） | no-result abstain | reflect | 1 |
 | **累计** | | | **11 次 MCP 调用** |
 
-按工具分布：load_bundle=5, import_document=3, reflect=3, relation_recall=1。
+按工具分布：load_bundle=4, import_document=3, reflect=3, relation_recall=1。
 Durable writes: disabled=1, redact=1, block=0。
 
 历史 shell 段（evidence.md 行 195-215 早期版本）已 superseded，非最终验收证据。
