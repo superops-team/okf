@@ -135,3 +135,98 @@ Acceptability: 378µs for O(n) relation scan over 10k concepts is well under 10m
 - handleImportDocument now calls memorydefense.Screen on converted markdown before writing
 - Default disabled (backward compatible); enabled via .okf/config.yaml
 - Block action rejects import; redact replaces secrets in-place
+
+---
+
+## Independent Review A/B final fresh verification (2026-09-29, HEAD 8b796f8)
+
+> **Note**: All numbers below are from the 2026-09-29 fresh run at HEAD `8b796f8`. Earlier sections are historical; the latest acceptance gates are in this section.
+
+### Review A findings (obvious issues, RED→GREEN)
+
+| ID | Severity | File | Issue | RED evidence | Fix |
+|---|---|---|---|---|---|
+| RA-1 | High | cmd/okf/cmd_add.go screenImportTree | Direct .md import redacted user's ORIGINAL files in-place (data corruption). | TestStageForDefensePreservesSource failed: original file content changed after redact. | Added `stageForDefense()`: when defense enabled and no staging dir, copy .md files to temp dir, screen temp, import from temp. Original never touched. |
+| RA-2 | Medium | pkg/mcp/tools.go handleImportDocument | `LoadPolicy(filepath.Dir(bundlePath))` resolved to `<repo>/.okf/.okf/config.yaml` — config never found, MCP Defense silently disabled. | TestImportDocumentDefenseBlock/Redact failed: no config loaded, secrets passed through. | Compute repoRoot from bundlePath (if base=="knowledge" → parent). |
+
+### Review B findings (boundary/security)
+
+New edge tests added (all GREEN on original implementation):
+- TestScreenEmptyInput: empty string no panic/no hits
+- TestScreenMultipleSecretsRedact: 2 secrets both redacted
+- TestScreenLargeInputNoCrash: 1MB normal text, no false positive
+- TestScreenInvalidConfigAction: unknown action passes through
+- TestScreenMultilinePEM: block triggers on PEM marker
+- TestExtendsSelfLoopSkipped: self-extends produces exactly 1 hit
+- **RB-1**: TestReflect_TrapGateDropsProposed — Service-layer trapGate directly tested (approved present, proposed poison absent). This was the M4 mutation gap.
+
+### Full-suite fresh run
+
+| Command | Result |
+|---|---|
+| `go build ./...` | exit 0 |
+| `go vet ./...` | exit 0 |
+| `staticcheck ./...` | exit 0, no findings |
+| `go test ./...` | **27 packages all ok** (no failures) |
+| `go test -race ./...` | **27 packages all ok** |
+| `go test -shuffle=on ./...` | **27 packages all ok** |
+
+### Coverage
+- New packages: memorydefense 90.8%, relationrecall 94.6%, reflect 96.4%, trapeval 86.6%
+- Whole-repo (gauntlet): **72%** (threshold 60%)
+
+### Fuzz
+- `go test ./pkg/memorydefense/ -fuzz=FuzzScreenNeverCrashes -fuzztime=15s`
+- **77,594 execs**, 99 interesting seeds, 0 crashes
+
+### Mutation
+- **Hand-targeted mutations (this change set): 5/5 killed**
+  - M1 (RA-1 remove staging copy): killed by CLI smoke integration
+  - M2 (RA-2 wrong repoRoot): killed by TestImportDocumentDefense*
+  - M3 (block severity high→medium): killed by TestScreenBlockReturnsError
+  - M4 (trapGate filter inverted): killed by TestReflect_TrapGateDropsProposed (RB-1)
+  - M5 (abstain `<`→`<=`): killed by TestAbstainWhenThin/TestNoAbstainAtExactThreshold
+- **Gauntlet built-in mutations: 38/38 killed** (18 convert + 5 agent-discovery + 8 governed-memory + 7 temporal-memory)
+- These are different scopes: 5 hand-targeted = the new code; 38 gauntlet = whole-repo existing mutants.
+
+### Supply chain & secret scan
+- `go mod verify`: all modules verified
+- Secret scan (gauntlet L7): clean — only test-fixture fake tokens in test files
+
+### CLI smoke (real binary)
+- Normal add (disabled): exit 0, 1 imported, byte-for-byte unchanged
+- Redact add: exit 0, **source file unchanged** (stageForDefense works), kb file contains `[REDACTED:github_pat]`
+- Block add: non-zero exit, staging cleaned up
+- Durable writes verified: redacted content in kb, original source untouched
+
+### MCP stdio E2E
+- `python3 test_mcp.py`: **17/17 tests pass**
+- Covers: okf_reflect success/empty, okf_relation_recall success/empty/unknown anchor, import document disabled/block/redact/clean
+
+### Codex E2E (real, 2026-09-29)
+- Model: `gpt-5.6-sol__dev` via Xeart Router (127.0.0.1:18080 proxy)
+- Codex version: 0.153.4
+- 4 shell tool calls:
+  1. Baseline "Say hello" → connectivity confirmed
+  2. `okf tool reflect -q "PostgreSQL deployment"` → evidence=[approved], need_clarify=false; correct poison-free results
+  3. `okf add` with secret (disabled policy) → exit 0, source unchanged, secret passed through (backward compat)
+  4. `okf add` with secret (block enabled) → skipped (already imported), source unchanged
+- Durable writes: 1 under disabled policy
+- No secret leaked in any Codex output
+
+### Benchmark (10k concepts)
+- BenchmarkScreen10k: 1.19 ms/op, 155 KB/op, 716 allocs
+- BenchmarkScreen10kBlock: 0.20 ms/op (early exit)
+- BenchmarkRecall10k: 0.38 ms/op, 384 B/op, 5 allocs
+
+### Gauntlet
+- Command: `tools/gauntlet.sh`
+- Result: **GAUNTLET PASS**
+- Coverage: 72% (threshold 60%)
+- All layers: build/vet/gofmt/staticcheck/tests/race/coverage/shuffle/property/secret-scan/mod-verify/mutation/real-exec
+
+### Final state
+- Branch: `feat/add-reflective-retrieval-and-memory-defense`
+- HEAD: `8b796f8`
+- Commits since base `879bae3`: **16**
+- Working tree: clean

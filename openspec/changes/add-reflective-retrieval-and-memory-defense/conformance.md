@@ -58,3 +58,11 @@
 - 10k concept latency: not benchmarked (requires large fixture).
 - Document import path defense: covered. MCP handleImportDocument AND CLI okf add both call memorydefense.Screen before writing durable markdown. Default disabled (backward compatible). Enabled via .okf/config.yaml; block rejects import, redact replaces secrets. Tests: TestImportDocumentDefense* (pkg/mcp), TestScreenImportTree* (cmd/okf).
 - MCP parity: unified ToolRegistry (registerCoreTools + registerAgentTools served by same server). No separate legacy MCP entry exists. New tools available in all server start paths.
+
+## Review A/B fixes mapping (2026-09-29)
+
+| ID | Implementation | Test |
+|---|---|---|
+| RA-1 (original .md mutation) | cmd/okf/cmd_add.go stageForDefense() | cmd/okf/cmd_add_defense_test.go TestStageForDefensePreservesSource |
+| RA-2 (MCP repoRoot wrong) | pkg/mcp/tools.go handleImportDocument repoRoot resolution | pkg/mcp/import_defense_test.go TestImportDocumentDefenseBlock/Redact |
+| RB-1 (Service trapGate untested) | pkg/tool/reflect.go:79-82 trapGate | pkg/tool/reflect_trapgate_test.go TestReflect_TrapGateDropsProposed |
