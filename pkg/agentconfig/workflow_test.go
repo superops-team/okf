@@ -29,8 +29,8 @@ func TestCanonicalWorkflowCoverage(t *testing.T) {
 			t.Fatalf("clause ID %q duplicated", id)
 		}
 	}
-	if len(clauseIDs()) != 8 {
-		t.Fatalf("want 8 canonical clauses, got %d", len(clauseIDs()))
+	if len(clauseIDs()) != 10 {
+		t.Fatalf("want 10 canonical clauses, got %d", len(clauseIDs()))
 	}
 }
 

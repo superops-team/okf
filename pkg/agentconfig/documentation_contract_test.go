@@ -92,7 +92,7 @@ func TestDocumentationClausesOnceInAgentSkill(t *testing.T) {
 			t.Errorf("Agent Skill guidance: clause %q appears %d times, want exactly once", id, got)
 		}
 	}
-	if len(clauseIDs()) != 8 {
-		t.Fatalf("expected 8 canonical clauses, got %d", len(clauseIDs()))
+	if len(clauseIDs()) != 10 {
+		t.Fatalf("expected 10 canonical clauses, got %d", len(clauseIDs()))
 	}
 }

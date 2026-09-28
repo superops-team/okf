@@ -20,6 +20,8 @@ var (
 		"okf_feedback",
 		"okf_resolve",
 		"okf_memory_review",
+		"okf_reflect",
+		"okf_relation_recall",
 	}
 
 	// RegisteredCommands is the allowlist of OKF CLI commands that rendered
@@ -103,6 +105,22 @@ func CanonicalClauses() []Clause {
 				"`okf_query`, or read a proposal's body through `okf_context` with `refs`). Call `okf_memory_review` " +
 				"with approve, decline, or undo ONLY after an explicit user instruction for that concept; never " +
 				"auto-approve or otherwise self-approve a proposal you created.",
+		},
+		{
+			ID:      "W09",
+			Heading: "Use Reflect for multi-hop questions, abstain when evidence is thin",
+			Guidance: "For questions requiring multi-hop synthesis or relation traversal, call `okf_reflect` instead of " +
+				"raw `okf_query`. Reflect is read-only and bounded (max 3 rounds). If `need_clarify=true`, do not " +
+				"fabricate an answer; ask the user for clarification. Cite stable concept IDs from evidence. " +
+				"Use `okf_relation_recall` to traverse extends/updates chains from an anchor concept.",
+		},
+		{
+			ID:      "W10",
+			Heading: "Memory Defense is non-negotiable",
+			Guidance: "Memory Defense scans all writes for secrets (tokens, keys, PEM, credit cards). If a write is " +
+				"blocked, do not attempt to bypass or rephrase the secret to evade detection. Redacted content appears " +
+				"as `[REDACTED:type]`; never reconstruct the original secret. Proposed/declined/poison concepts are " +
+				"never cited as evidence.",
 		},
 	}
 }

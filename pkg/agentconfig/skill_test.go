@@ -31,7 +31,7 @@ func TestRenderAgentSkillFrontmatter(t *testing.T) {
 
 func TestRenderAgentSkillWorkflowOnce(t *testing.T) {
 	skill := RenderAgentSkill()
-	for _, id := range []string{"W01", "W02", "W03", "W04", "W05", "W06", "W07", "W08"} {
+	for _, id := range []string{"W01", "W02", "W03", "W04", "W05", "W06", "W07", "W08", "W09", "W10"} {
 		count := strings.Count(skill, "["+id+"]")
 		if count != 1 {
 			t.Errorf("clause %s appears %d times, expected exactly 1", id, count)

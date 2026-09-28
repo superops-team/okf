@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/superops-team/okf/pkg/embeddings"
 	"github.com/superops-team/okf/pkg/eval"
 	"github.com/superops-team/okf/pkg/query"
+	"github.com/superops-team/okf/pkg/tool"
 	"github.com/superops-team/okf/pkg/trapeval"
 	"github.com/superops-team/okf/pkg/vectorindex"
 )
@@ -262,15 +264,18 @@ func sortedKeys(m map[string]*eval.EvalReport) []string {
 
 // cmdEvalTrap runs the trap evaluation: loads golden cases and prints
 // answer/evidence/abstention means. Exits non-zero if poison_blocked < 1.0.
+// With -repo, calls Service.Reflect for each golden case (live evaluation).
+// Without -repo, runs deterministic demo scores (backward-compatible fallback).
 func cmdEvalTrap(args []string) int {
 	fs := flag.NewFlagSet("eval trap", flag.ExitOnError)
 	golden := fs.String("golden", "", "Path to trap golden cases JSON (required)")
+	repo := fs.String("repo", "", "Knowledge repo path for live Reflect evaluation")
 	verbose := fs.Bool("verbose", false, "Print per-case results")
 	fs.Parse(args)
 
 	if *golden == "" {
 		fmt.Println("Error: -golden is required")
-		fmt.Println("Example: okf eval trap -golden pkg/trapeval/testdata/cases.json")
+		fmt.Println("Example: okf eval trap -golden pkg/trapeval/testdata/cases.json -repo .")
 		return 1
 	}
 	cases, err := trapeval.LoadCases(*golden)
@@ -278,16 +283,69 @@ func cmdEvalTrap(args []string) int {
 		fmt.Printf("Error: %v\n", err)
 		return 1
 	}
-	// Deterministic demo: score all cases as if reflect was correct.
-	scores := make([]trapeval.CaseScore, len(cases))
-	for i, c := range cases {
-		scores[i] = trapeval.CaseScore{
-			CaseType:        c.CaseType,
-			AnswerScore:     1.0,
-			EvidenceScore:   1.0,
-			AbstentionScore: trapeval.ScoreAbstention(c, c.AbstainOK),
+
+	var scores []trapeval.CaseScore
+	if *repo != "" {
+		// Live evaluation: call Service.Reflect for each case.
+		svc := tool.NewService(tool.Config{RepoPath: *repo})
+		for _, c := range cases {
+			resp := svc.Reflect(context.Background(), tool.ReflectRequest{Question: c.Question})
+			if !resp.OK {
+				scores = append(scores, trapeval.CaseScore{
+					CaseType:        c.CaseType,
+					AnswerScore:     0,
+					EvidenceScore:   0,
+					AbstentionScore: trapeval.ScoreAbstention(c, true), // treat error as abstain
+				})
+				continue
+			}
+			result := resp.Result.(tool.ReflectResult)
+			refs := make([]string, 0, len(result.Evidence))
+			for _, ev := range result.Evidence {
+				refs = append(refs, ev.ID)
+			}
+			exists := map[string]bool{}
+			for _, r := range refs {
+				exists[r] = true
+			}
+			// Live eval: no generated answer text; use evidence presence as proxy.
+			answerScore := 0.0
+			if len(refs) > 0 {
+				answerScore = 1.0
+			}
+			leak := false
+			for _, r := range refs {
+				forbidden := false
+				for _, f := range c.ForbiddenEvidence {
+					if r == f {
+						forbidden = true
+					}
+				}
+				if forbidden {
+					leak = true
+				}
+			}
+			scores = append(scores, trapeval.CaseScore{
+				CaseType:        c.CaseType,
+				AnswerScore:     answerScore,
+				EvidenceScore:   trapeval.ScoreEvidence(c, refs, exists),
+				AbstentionScore: trapeval.ScoreAbstention(c, result.NeedClarify),
+				TrapLeak:        leak,
+			})
 		}
+	} else {
+		// Deterministic demo fallback (no -repo): score all as correct.
+		for _, c := range cases {
+			scores = append(scores, trapeval.CaseScore{
+				CaseType:        c.CaseType,
+				AnswerScore:     1.0,
+				EvidenceScore:   1.0,
+				AbstentionScore: trapeval.ScoreAbstention(c, c.AbstainOK),
+			})
+		}
+		fmt.Println("Note: running in demo mode (no -repo); scores are hardcoded. Use -repo for live evaluation.")
 	}
+
 	report := trapeval.Summarize(cases, scores)
 	fmt.Printf("answer_hit_mean=%.2f evidence_support_mean=%.2f abstain_score=%.2f poison_blocked=%.2f\n",
 		meanAnswer(report), meanEvidence(report), meanAbstain(report), report.PoisonBlockedOverall)
