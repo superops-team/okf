@@ -266,3 +266,36 @@ New edge tests added (all GREEN on original implementation):
 - M1 (remove stageForDefense call site) is killed by:
   - Unit: `TestStageForDefensePreservesSource` (tests the function preserves source)
   - Integration: CLI smoke verified original file unchanged after redact import
+
+---
+
+## Complete Codex + OKF MCP E2E matrix (2026-09-29, final)
+
+> This is the definitive MCP E2E matrix. All scenarios below are genuine `mcp: okf/...` invocations by Codex.
+
+- Model: `gpt-5.6-sol__dev`
+- Codex: 0.153.4
+- Total MCP tool calls this round: **7**
+  - okf_load_bundle: 3
+  - okf_reflect: 2
+  - okf_relation_recall: 1
+  - okf_import_document: 1 (disabled)
+
+### Scenario matrix
+
+| Scenario | MCP calls | Result | Durable writes |
+|---|---|---|---|
+| **Disabled write** (no config) | load_bundle + import_document | success, original content byte-for-byte preserved (secret present) | **1** |
+| **Redact** (action=redact, github_pat) | load_bundle + import_document | success, [REDACTED:github_pat] in output, 0 original secret | **1** |
+| **Block** (action=block, aws_access_key) | load_bundle + import_document | failed: detector "aws_access_key" blocked, error has no original key | **0** |
+| **Reflect Round 1+2** (A extends B) | load_bundle + reflect + reflect | evidence=[A(round=1), B(round=2)], identical across 2 calls (stable refs) | 0 |
+| **Relation recall** (anchor=A) | relation_recall | hits=[A(self), B(extends)] | 0 |
+| **No-result abstain** (empty kb) | reflect | need_clarify=true | 0 |
+
+### Key validations
+- RA-2 (MCP repoRoot): redact scenario proved config fires via stdio
+- Round 2 expansion: B (only reachable via A extends B) appears with source_round=2
+- RRF ordering: A (round1) ranked before B (round2)
+- Stable refs: two identical reflect calls returned same IDs in same order
+- Block: zero durable writes, no secret leak in error
+- Disabled: byte-for-byte backward compatible

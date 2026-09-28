@@ -66,3 +66,15 @@
 | RA-1 (original .md mutation) | cmd/okf/cmd_add.go stageForDefense() | cmd/okf/cmd_add_defense_test.go TestStageForDefensePreservesSource |
 | RA-2 (MCP repoRoot wrong) | pkg/mcp/tools.go handleImportDocument repoRoot resolution | pkg/mcp/import_defense_test.go TestImportDocumentDefenseBlock/Redact |
 | RB-1 (Service trapGate untested) | pkg/tool/reflect.go:79-82 trapGate | pkg/tool/reflect_trapgate_test.go TestReflect_TrapGateDropsProposed |
+
+## Codex MCP E2E mapping (2026-09-29)
+
+| Scenario | Implementation | Verified via |
+|---|---|---|
+| Disabled write byte-compat | pkg/mcp/tools.go handleImportDocument | Codex MCP import_document (no config) |
+| Redact write | pkg/mcp/tools.go + memorydefense.Screen | Codex MCP import_document (redact policy) |
+| Block write, zero durable | pkg/mcp/tools.go + ErrBlocked | Codex MCP import_document (block policy) |
+| Round 1+2 + RRF | pkg/reflect/reflect.go Run | Codex MCP reflect (A extends B fixture) |
+| Relation self+extends | pkg/relationrecall/recall.go Recall | Codex MCP relation_recall(anchor=A) |
+| Stable refs | deterministic RRF sort | Two identical Codex reflect calls |
+| need_clarify abstain | pkg/reflect/reflect.go threshold | Codex MCP reflect on empty kb |
