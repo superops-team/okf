@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/superops-team/okf/pkg/convert"
+	"github.com/superops-team/okf/pkg/memorydefense"
 	okf "github.com/superops-team/okf/pkg/okf"
 )
 
@@ -140,6 +141,21 @@ func cmdAdd(args []string) int {
 	}
 	if stagingDir != "" {
 		importSource = stagingDir
+	}
+	// Memory Defense: screen all markdown files in the import source before
+	// they reach the knowledge base. For staging dirs this covers both converted
+	// docs and copied .md files. For direct .md imports (no staging), we screen
+	// the source file in-place via the same helper.
+	pol, polErr := memorydefense.LoadPolicy(kbDir)
+	if polErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: memory_defense config: %v\n", polErr)
+		return 1
+	}
+	if pol.Enabled {
+		if serr := screenImportTree(importSource, pol); serr != nil {
+			fmt.Fprintf(os.Stderr, "Error: memory defense blocked import: %v\n", serr)
+			return 1
+		}
 	}
 	// If the source contained documents but none could be converted, that is
 	// a hard failure (all-or-nothing for a single document / all-failed batch),
@@ -624,4 +640,46 @@ func wrapFrontmatter(title, filename, format, body string) string {
 	// receive a random okf_id (design §3.3). The explicit `okf identity ensure`
 	// migration adds ids at the final destination later.
 	return convert.WrapConcept(title, filename, format, "source", body, "")
+}
+
+// screenImportTree walks all .md files under root and applies Memory Defense.
+// In redact mode, files are overwritten with redacted content in-place.
+// In block mode, the first high-severity hit returns an error; callers should
+// clean up the staging directory (which defer cleanup already handles).
+// Errors never include the original secret text.
+func screenImportTree(root string, pol memorydefense.Policy) error {
+	info, err := os.Stat(root)
+	if err != nil {
+		return err
+	}
+	var files []string
+	if info.IsDir() {
+		_ = filepath.Walk(root, func(path string, fi os.FileInfo, werr error) error {
+			if werr != nil || fi.IsDir() {
+				return nil
+			}
+			if strings.HasSuffix(strings.ToLower(path), ".md") {
+				files = append(files, path)
+			}
+			return nil
+		})
+	} else if strings.HasSuffix(strings.ToLower(root), ".md") {
+		files = append(files, root)
+	}
+	for _, f := range files {
+		data, rerr := os.ReadFile(f)
+		if rerr != nil {
+			return rerr
+		}
+		redacted, hits, serr := memorydefense.Screen(string(data), pol)
+		if serr != nil {
+			return serr // ErrBlocked — never leaks secret text
+		}
+		if len(hits) > 0 && pol.Action == "redact" {
+			if werr := os.WriteFile(f, []byte(redacted), 0o644); werr != nil {
+				return werr
+			}
+		}
+	}
+	return nil
 }
