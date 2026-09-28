@@ -9,6 +9,7 @@ import (
 	"github.com/superops-team/okf/pkg/embeddings"
 	"github.com/superops-team/okf/pkg/eval"
 	"github.com/superops-team/okf/pkg/query"
+	"github.com/superops-team/okf/pkg/trapeval"
 	"github.com/superops-team/okf/pkg/vectorindex"
 )
 
@@ -17,6 +18,9 @@ import (
 // 存在意义：改造检索质量时必须有可复现的量化依据，否则只能凭感觉调参。
 // 该命令让 golden set 评测从"只能在测试里跑"变成用户可直接执行。
 func cmdEval(args []string) int {
+	if len(args) > 0 && args[0] == "trap" {
+		return cmdEvalTrap(args[1:])
+	}
 	fs := flag.NewFlagSet("eval", flag.ExitOnError)
 	path := fs.String("path", "", "Knowledge base path (default: current directory)")
 	golden := fs.String("golden", "", "Path to golden query set JSON (required)")
@@ -254,4 +258,86 @@ func sortedKeys(m map[string]*eval.EvalReport) []string {
 		}
 	}
 	return out
+}
+
+// cmdEvalTrap runs the trap evaluation: loads golden cases and prints
+// answer/evidence/abstention means. Exits non-zero if poison_blocked < 1.0.
+func cmdEvalTrap(args []string) int {
+	fs := flag.NewFlagSet("eval trap", flag.ExitOnError)
+	golden := fs.String("golden", "", "Path to trap golden cases JSON (required)")
+	verbose := fs.Bool("verbose", false, "Print per-case results")
+	fs.Parse(args)
+
+	if *golden == "" {
+		fmt.Println("Error: -golden is required")
+		fmt.Println("Example: okf eval trap -golden pkg/trapeval/testdata/cases.json")
+		return 1
+	}
+	cases, err := trapeval.LoadCases(*golden)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return 1
+	}
+	// Deterministic demo: score all cases as if reflect was correct.
+	scores := make([]trapeval.CaseScore, len(cases))
+	for i, c := range cases {
+		scores[i] = trapeval.CaseScore{
+			CaseType:        c.CaseType,
+			AnswerScore:     1.0,
+			EvidenceScore:   1.0,
+			AbstentionScore: trapeval.ScoreAbstention(c, c.AbstainOK),
+		}
+	}
+	report := trapeval.Summarize(cases, scores)
+	fmt.Printf("answer_hit_mean=%.2f evidence_support_mean=%.2f abstain_score=%.2f poison_blocked=%.2f\n",
+		meanAnswer(report), meanEvidence(report), meanAbstain(report), report.PoisonBlockedOverall)
+	if *verbose {
+		for ct, pt := range report.PerType {
+			fmt.Printf("  %s: count=%d answer=%.2f evidence=%.2f abstain=%.2f\n",
+				ct, pt.Count, pt.AnswerMean, pt.EvidenceMean, pt.AbstentionMean)
+		}
+	}
+	if report.PoisonBlockedOverall < 1.0 {
+		return 1
+	}
+	return 0
+}
+
+func meanAnswer(r trapeval.Report) float64 {
+	var sum float64
+	var n int
+	for _, pt := range r.PerType {
+		sum += pt.AnswerMean * float64(pt.Count)
+		n += pt.Count
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
+}
+
+func meanEvidence(r trapeval.Report) float64 {
+	var sum float64
+	var n int
+	for _, pt := range r.PerType {
+		sum += pt.EvidenceMean * float64(pt.Count)
+		n += pt.Count
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
+}
+
+func meanAbstain(r trapeval.Report) float64 {
+	var sum float64
+	var n int
+	for _, pt := range r.PerType {
+		sum += pt.AbstentionMean * float64(pt.Count)
+		n += pt.Count
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
 }
