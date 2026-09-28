@@ -95,3 +95,43 @@ Acceptability: 378µs for O(n) relation scan over 10k concepts is well under 10m
 
 ### Code review
 - See code-review.md for Round 1 (3 fixes) and Round 2 (9 observations, 0 fixes needed).
+
+## Round 3 final verification (fresh run 2026-09-28)
+
+### Static checks
+- gofmt: clean
+- go vet: clean
+- staticcheck: clean on all new packages
+- go mod verify: all modules verified
+
+### Fresh test run (race + shuffle)
+| Package | Result | Coverage |
+|---|---|---|
+| pkg/memorydefense | ok (race+shuffle) | 90.8% |
+| pkg/relationrecall | ok (race+shuffle) | 91.9% |
+| pkg/reflect | ok (race+shuffle) | 96.4% |
+| pkg/trapeval | ok (race+shuffle) | 86.6% |
+| pkg/tool | ok (race+shuffle) | inherited |
+| pkg/mcp | ok (race+shuffle) | inherited |
+
+### Fuzz (fresh)
+- FuzzScreenNeverCrashes: 54,925 execs in 11s, 0 crashes
+
+### Codex E2E (real multi-turn)
+- Model: gpt-5.6-sol__dev via Xeart Router
+- MCP server: okf binary stdio, repo=/tmp/okf-e2e-repo
+- Round 1: okf_reflect("postgresql") → found okf_1111 (source_round=1)
+- Round 2: relation expansion → found okf_2222 (source_round=2)
+- RRF fused both, need_clarify=false (2 evidence >= min=2)
+- okf_relation_recall("okf_1111") → self + extends neighbor okf_2222
+- Stable refs verified: same query → same evidence ids
+
+### MCP stdio E2E (test_mcp.py)
+- 17 tests all pass (was 13, added 4 for reflect/relation)
+- Tests cover: success call, empty question error, unknown anchor error, empty anchor error
+- Content-Length framing verified on real subprocess
+
+### Document import defense
+- handleImportDocument now calls memorydefense.Screen on converted markdown before writing
+- Default disabled (backward compatible); enabled via .okf/config.yaml
+- Block action rejects import; redact replaces secrets in-place

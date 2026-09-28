@@ -15,6 +15,7 @@ import (
 	"github.com/superops-team/okf/pkg/embeddings"
 	"github.com/superops-team/okf/pkg/identity"
 	"github.com/superops-team/okf/pkg/lint"
+	"github.com/superops-team/okf/pkg/memorydefense"
 	"github.com/superops-team/okf/pkg/memorymeta"
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/parser"
@@ -28,12 +29,13 @@ type ToolHandler func(args map[string]interface{}) (*ToolCallResult, error)
 
 // ToolRegistry manages MCP tools and their handlers.
 type ToolRegistry struct {
-	mu         sync.RWMutex
-	tools      map[string]Tool
-	handlers   map[string]ToolHandler
-	bundle     *okf.KnowledgeBundle
-	bundlePath string
-	service    *toolsvc.Service
+	mu                 sync.RWMutex
+	tools              map[string]Tool
+	handlers           map[string]ToolHandler
+	bundle             *okf.KnowledgeBundle
+	bundlePath         string
+	service            *toolsvc.Service
+	importDefenseNotes []string
 }
 
 // NewToolRegistry creates a registry with the legacy bundle-facing tools.
@@ -1193,6 +1195,23 @@ func (r *ToolRegistry) handleImportDocument(args map[string]interface{}) (*ToolC
 	res, err := convert.ConvertToMarkdown(context.Background(), path, nil)
 	if err != nil {
 		return errorResult(fmt.Sprintf("Failed to convert document: %v", err)), nil
+	}
+	// Memory Defense: screen converted content before writing to durable storage.
+	pol, polErr := memorydefense.LoadPolicy(filepath.Dir(bundlePath))
+	if polErr != nil {
+		return errorResult(fmt.Sprintf("memory_defense config: %v", polErr)), nil
+	}
+	screenedMD, defenseHits, screenErr := memorydefense.Screen(res.Markdown, pol)
+	if screenErr != nil {
+		return errorResult(fmt.Sprintf("memory_defense blocked import: %v", screenErr)), nil
+	}
+	res.Markdown = screenedMD
+	if len(defenseHits) > 0 {
+		var ids []string
+		for _, h := range defenseHits {
+			ids = append(ids, h.DetectorID)
+		}
+		r.importDefenseNotes = append(r.importDefenseNotes, fmt.Sprintf("redacted: %s", strings.Join(ids, ",")))
 	}
 	title := res.Title
 	if titleOverride != "" {
