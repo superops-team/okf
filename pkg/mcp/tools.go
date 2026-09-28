@@ -1268,6 +1268,10 @@ func (r *ToolRegistry) handleImportDocument(args map[string]interface{}) (*ToolC
 	} else {
 		sb.WriteString("Warnings: 0\n")
 	}
+	for _, note := range r.importDefenseNotes {
+		sb.WriteString(fmt.Sprintf("Memory defense: %s\n", note))
+	}
+	r.importDefenseNotes = nil
 	return &ToolCallResult{Content: []ContentItem{TextContent(sb.String())}}, nil
 }
 

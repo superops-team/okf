@@ -25,3 +25,20 @@
 ## Conclusion
 - Round 1: 3 issues found and fixed.
 - Round 2: 9 observations, 0 require code changes (all acceptable by design).
+
+## Round 3 — Final hardening (document import defense, E2E, test expansion)
+
+Scope: handleImportDocument Defense wiring, test_mcp.py expansion, Codex E2E harness, import_defense_test.go.
+
+| # | Severity | File:Line | Observation | Decision |
+|---|---|---|---|---|
+| R3-1 | Security | pkg/mcp/tools.go handleImportDocument | Screen runs on res.Markdown before WrapConcept+atomicWrite. No path traversal: out is filepath.Join(bundlePath, basename(path)) — basename strips directories. | Safe |
+| R3-2 | Security | pkg/mcp/tools.go | Block error returns fmt.Sprintf("memory_defense blocked: %v", screenErr) — screenErr is *ErrBlocked which only contains DetectorID, never the secret text. | No leak |
+| R3-3 | Resource | pkg/mcp/tools.go | No temp files created; atomicWriteFiles writes directly to bundle path. Temp fixtures in tests use t.TempDir(). | Clean |
+| R3-4 | Compatibility | pkg/mcp/tools.go | LoadPolicy reads .okf/config.yaml from filepath.Dir(bundlePath). Missing file → disabled policy → byte-for-byte identical behavior. | Backward compatible |
+| R3-5 | Error handling | pkg/mcp/tools.go | Config parse error returns immediately; screen block error returns immediately. No partial writes. | Correct |
+| R3-6 | Maintainability | pkg/mcp/tools.go | importDefenseNotes field added but not yet surfaced in response. Minor: should include in sb output. | Fixed below |
+| R3-7 | Test quality | pkg/mcp/import_defense_test.go | 4 tests cover disabled/block/redact/clean. Block test verifies no file on disk + no secret in error. | Good |
+
+### R3-6 fix: surface defense notes in import response
+The importDefenseNotes field was collected but never printed. Let me surface it.

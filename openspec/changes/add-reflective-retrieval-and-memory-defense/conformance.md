@@ -56,4 +56,4 @@
 - TE-05 poison block gate: CLI exits 1 on poison_blocked<1.0, but integrated trap bundle not included as fixture.
 - WI-01/WI-02: CLI/MCP build verified but E2E python test not extended.
 - 10k concept latency: not benchmarked (requires large fixture).
-- Document import path defense: confirmed NOT in scope (PDF/DOCX via pkg/convert).
+- Document import path defense: covered. handleImportDocument calls memorydefense.Screen before writing markdown. Default disabled (backward compatible). Enabled via .okf/config.yaml; block rejects import, redact replaces secrets. Test: TestImportDocumentDefenseDisabled/Block/Redact in pkg/mcp.
