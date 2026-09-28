@@ -540,6 +540,36 @@ func (r *ToolRegistry) registerAgentTools() {
 			ExpectedState: stringArg(args, "expected_state"),
 		}))
 	})
+
+	// okf_reflect: bounded multi-round reflective retrieval (read-only).
+	r.Register(readOnlyAgentTool(
+		"okf_reflect",
+		"Bounded multi-round reflective retrieval: round 1 lexical/semantic, round 2 relation expansion, RRF fusion, abstain when evidence is thin",
+		objectSchema(map[string]interface{}{
+			"question":     stringProperty("Non-empty question to reflect on"),
+			"min_evidence": integerProperty("Minimum evidence count before need_clarify (default 2)"),
+			"max_rounds":   integerProperty("Maximum rounds, hard cap 3 (default 2)"),
+		}, "question"),
+	), func(args map[string]interface{}) (*ToolCallResult, error) {
+		return serviceEnvelopeResult(r.service.Reflect(context.Background(), toolsvc.ReflectRequest{
+			Question:    stringArg(args, "question"),
+			MinEvidence: intArg(args, "min_evidence"),
+			MaxRounds:   intArg(args, "max_rounds"),
+		}))
+	})
+
+	// okf_relation_recall: bidirectional extends neighbors + updates chain.
+	r.Register(readOnlyAgentTool(
+		"okf_relation_recall",
+		"Recall approved extends neighbors (bidirectional) and the updates-chain head for an anchor okf_id",
+		objectSchema(map[string]interface{}{
+			"anchor": stringProperty("Stable okf_id or okf://concept/<id> anchor"),
+		}, "anchor"),
+	), func(args map[string]interface{}) (*ToolCallResult, error) {
+		return serviceEnvelopeResult(r.service.RelationRecall(context.Background(), toolsvc.RelationRecallRequest{
+			Anchor: stringArg(args, "anchor"),
+		}))
+	})
 }
 
 // manifestRequestFromArgs builds a toolsvc.ManifestRequest, preserving the

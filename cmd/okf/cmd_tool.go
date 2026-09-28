@@ -15,7 +15,7 @@ import (
 
 func cmdTool(args []string) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Println("Usage: okf tool <status|init|refresh|query|context|manifest|memory-review> [options]")
+		fmt.Println("Usage: okf tool <status|init|refresh|query|context|manifest|memory-review|reflect|relation> [options]")
 		fmt.Println()
 		fmt.Println("Agent-facing JSON tool operations. All commands accept --json for")
 		fmt.Println("machine-parseable output and --repo/--dir for knowledge base location.")
@@ -28,6 +28,8 @@ func cmdTool(args []string) int {
 		fmt.Println("  context        Build context for a query")
 		fmt.Println("  manifest       Metadata-only listing (no body, no index side effects)")
 		fmt.Println("  memory-review  CAS approve/decline/undo of one proposed durable concept (S37)")
+		fmt.Println("  reflect        Bounded multi-round reflective retrieval with RRF fusion")
+		fmt.Println("  relation       Bidirectional extends neighbors + updates chain recall")
 		fmt.Println()
 		fmt.Println("Temporal memory modes (S37):")
 		fmt.Println("  query --memory-view current|all|history")
@@ -60,9 +62,13 @@ func cmdTool(args []string) int {
 		return cmdToolManifest(args[1:])
 	case "memory-review":
 		return cmdToolMemoryReview(args[1:])
+	case "reflect":
+		return cmdToolReflect(args[1:])
+	case "relation":
+		return cmdToolRelation(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown tool subcommand: %s\n", subcommand)
-		fmt.Fprintln(os.Stderr, "Valid subcommands: status, init, refresh, query, context, manifest, memory-review")
+		fmt.Fprintln(os.Stderr, "Valid subcommands: status, init, refresh, query, context, manifest, memory-review, reflect, relation")
 		fmt.Fprintln(os.Stderr, "Run 'okf tool --help' for usage.")
 		return 1
 	}
@@ -418,6 +424,36 @@ func hasJSONFlag(args []string) bool {
 		}
 	}
 	return false
+}
+
+// cmdToolReflect runs the bounded multi-round reflective retrieval.
+func cmdToolReflect(args []string) int {
+	flags := newToolFlagSet("tool reflect")
+	repoPath, knowledgeDir, jsonOut := addToolCommonFlags(flags)
+	question := flags.String("q", "", "Question to reflect on")
+	minEvidence := flags.Int("min-evidence", 2, "Minimum evidence count before abstaining")
+	maxRounds := flags.Int("max-rounds", 2, "Maximum rounds (hard cap 3)")
+	if err := parseToolFlags(flags, args); err != nil {
+		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationReflect, toolsvc.ErrInvalidQuery, sanitizeFlagParseError(err), "Fix the invalid flag values and try again."), *jsonOut || hasJSONFlag(args))
+	}
+	return emitToolEnvelope(toolService(*repoPath, *knowledgeDir).Reflect(context.Background(), toolsvc.ReflectRequest{
+		Question:    *question,
+		MinEvidence: *minEvidence,
+		MaxRounds:   *maxRounds,
+	}), *jsonOut)
+}
+
+// cmdToolRelation recalls extends neighbors and updates chain for an anchor.
+func cmdToolRelation(args []string) int {
+	flags := newToolFlagSet("tool relation")
+	repoPath, knowledgeDir, jsonOut := addToolCommonFlags(flags)
+	anchor := flags.String("anchor", "", "Stable okf_id (or okf://concept/<id>) anchor")
+	if err := parseToolFlags(flags, args); err != nil {
+		return emitToolEnvelope(toolInvalidEnvelopeWithContext(*repoPath, *knowledgeDir, toolsvc.OperationRelationRecall, toolsvc.ErrInvalidRequest, sanitizeFlagParseError(err), "Fix the invalid flag values and try again."), *jsonOut || hasJSONFlag(args))
+	}
+	return emitToolEnvelope(toolService(*repoPath, *knowledgeDir).RelationRecall(context.Background(), toolsvc.RelationRecallRequest{
+		Anchor: *anchor,
+	}), *jsonOut)
 }
 
 type ioDiscard struct{}
