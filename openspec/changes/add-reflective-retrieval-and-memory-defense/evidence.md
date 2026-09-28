@@ -362,3 +362,10 @@ Durable writes: disabled=1, redact=1, block=0。
 - RR-04: TestRelationRecall_ServiceGraceful (5 subtests: unknown/cycle/fork/dangling/empty) PASS
 - TE-05: cmdEvalTrap -repo flag calls Service.Reflect per case; demo fallback without -repo
 - WI-04: W09 (Reflect/abstain) + W10 (Defense non-negotiable) clauses; okf_reflect/okf_relation_recall added to RegisteredTools
+
+## Demo fallback removal + corrupted metadata (2026-09-29, HEAD=3618f00)
+
+- TE-05: demo fallback removed; -repo required; missing -repo exits 1 with usage
+- RR-04: corrupted_frontmatter_graceful subtest added (6 total: unknown/cycle/fork/dangling/empty/corrupted)
+- Agent Skill: Plan/Apply/Status/Remove verified in pkg/agentconfig/service.go; W09/W10 rendered to Cursor/Claude/Codex
+- Fresh: gofmt/build/vet/staticcheck pass; 27 packages test/race/shuffle pass; gauntlet PASS 72%
