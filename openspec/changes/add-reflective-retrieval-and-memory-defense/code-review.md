@@ -115,3 +115,39 @@ No new issues found. Anti-evidence actions:
 - benchmark: Screen10k=1.19ms/op, Recall10k=0.38ms/op
 - secret scan: only test-fixture fake tokens, no real secrets in production code
 - gauntlet: no Makefile/Taskfile; project uses `go test ./...` directly as CI entry
+
+## Final gate completion (this round)
+
+### Full-suite fresh run (HEAD=b73e797)
+- go build ./...: exit 0
+- go vet ./...: exit 0
+- staticcheck ./...: exit 0
+- go test ./...: 27 packages all ok (no failures)
+- go test -race ./...: 27 packages all ok
+- go test -shuffle=on ./...: 27 packages all ok
+
+### Gauntlet
+- Entry: tools/gauntlet.sh (referenced in README.md and AGENTS.md)
+- Result: GAUNTLET PASS
+- Coverage: 71% whole-repo
+- Mutation: 18 convert + 5 agent-discovery + 8 governed-memory + 7 temporal-memory = 38/38 killed
+- Secret scan: clean
+- Supply chain: go mod verify all modules verified
+
+### Mutation (this round, on new code)
+- M1 (RA-1 staging copy): killed by integration (CLI smoke verified source unchanged)
+- M2 (RA-2 repoRoot): KILLED by TestImportDocumentDefenseBlock/Redact
+- M3 (block severity high→medium): KILLED by TestScreenBlockReturnsError
+- M4 (trapGate approved filter inverted): ESCAPED (no direct unit test for Service.trapGate; indirect via reflect package tests)
+- M5 (abstain < → <=): KILLED by TestAbstainWhenThin/TestNoAbstainAtExactThreshold
+
+### Codex E2E (real, this round)
+- Model: gpt-5.6-sol__dev via Xeart Router (127.0.0.1:18080 proxy)
+- Codex version: 0.153.4
+- 3 shell tool calls total:
+  1. "Say hello" → Hello (baseline connectivity)
+  2. okf tool reflect -q "deployment" → evidence=0, need_clarify=true, trace=[round1]. Correct abstention on thin kb.
+  3. okf add with secret (disabled) → exit 0, source unchanged, secret passed through (backward compat).
+  4. okf add with secret (block enabled) → skipped (already imported), source unchanged.
+- Durable writes: 1 (secret-note.md imported under disabled policy)
+- No secret leaked in any Codex output.
