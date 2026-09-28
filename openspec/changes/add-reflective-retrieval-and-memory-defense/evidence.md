@@ -230,3 +230,39 @@ New edge tests added (all GREEN on original implementation):
 - HEAD: `8b796f8`
 - Commits since base `879bae3`: **16**
 - Working tree: clean
+
+---
+
+## Real Codex + OKF MCP E2E (2026-09-29, stdio transport)
+
+> This supersedes the earlier "shell tool calls" Codex section. The below are genuine `mcp: okf/...` tool invocations by Codex, not shell CLI calls.
+
+- Model: `gpt-5.6-sol__dev`
+- Codex version: 0.153.4
+- MCP server: `/tmp/okf-mcp mcp` (stdio, current HEAD build)
+- MCP tools discovered by Codex: okf_reflect, okf_relation_recall, okf_import_document, okf_load_bundle, etc.
+
+### MCP tool call sequence (4 real MCP invocations)
+
+| # | MCP tool | Result | Durable writes |
+|---|---|---|---|
+| 1 | `mcp: okf/okf_reflect` (empty kb) | evidence=0, need_clarify=true | 0 |
+| 2 | `mcp: okf/okf_load_bundle` then `mcp: okf/okf_import_document` (redact policy, github_pat) | success, redaction note: "github_pat" | **1** (.md contains [REDACTED:github_pat], 0 original secret) |
+| 3 | `mcp: okf/okf_load_bundle` then `mcp: okf/okf_import_document` (block policy, aws_access_key) | **failed**: blocked by detector "aws_access_key", error contains only detector name, no original key | **0** |
+| 4 | `mcp: okf/okf_load_bundle` then `mcp: okf/okf_relation_recall` (anchor okf_aaaa) | self edge returned, state=approved | 0 |
+
+### Stable refs
+- `mcp: okf/okf_reflect` called twice with same question "PostgreSQL"
+- Both runs returned identical evidence ID `okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+- Stable refs confirmed (deterministic)
+
+### no-result / need_clarify
+- On empty kb, `okf_reflect` returned need_clarify=true with suggestion text
+
+### RA-2 verified via real MCP
+- The redact scenario (call #2) confirmed Memory Defense config is read from repo root via MCP `handleImportDocument` — redaction actually fired (not silently disabled). This directly validates the RA-2 fix.
+
+### Mutation M1 clarification
+- M1 (remove stageForDefense call site) is killed by:
+  - Unit: `TestStageForDefensePreservesSource` (tests the function preserves source)
+  - Integration: CLI smoke verified original file unchanged after redact import
