@@ -143,10 +143,8 @@ func cmdAdd(args []string) int {
 		importSource = stagingDir
 	}
 	// Memory Defense: screen all markdown files in the import source before
-	// they reach the knowledge base. For staging dirs this covers both converted
-	// docs and copied .md files. For direct .md imports (no staging), we screen
-	// the source file in-place via the same helper.
-	pol, polErr := memorydefense.LoadPolicy(kbDir)
+	// they reach the knowledge base.
+	pol, polErr := memorydefense.LoadPolicy(resolveRepoRoot(kbDir))
 	if polErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: memory_defense config: %v\n", polErr)
 		return 1
@@ -640,6 +638,19 @@ func wrapFrontmatter(title, filename, format, body string) string {
 	// receive a random okf_id (design §3.3). The explicit `okf identity ensure`
 	// migration adds ids at the final destination later.
 	return convert.WrapConcept(title, filename, format, "source", body, "")
+}
+
+// resolveRepoRoot returns the directory containing .okf/. If kbDir ends in
+// "knowledge", its parent is the repo root; otherwise kbDir itself is used.
+func resolveRepoRoot(kbDir string) string {
+	abs, err := filepath.Abs(kbDir)
+	if err != nil {
+		return kbDir
+	}
+	if filepath.Base(abs) == "knowledge" {
+		return filepath.Dir(abs)
+	}
+	return abs
 }
 
 // screenImportTree walks all .md files under root and applies Memory Defense.

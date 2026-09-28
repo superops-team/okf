@@ -40,6 +40,6 @@
 
 ## Known limitations
 - Chinese PII (phone/ID card) not covered by design.
-- Document import path (PDF/DOCX/TXT/MD) now goes through Memory Defense in MCP handleImportDocument. Default disabled; enable via .okf/config.yaml memory_defense.enabled=true. CLI `okf add` does not yet run Defense (known limitation).
+- Document import path: both MCP `okf_import_document` and CLI `okf add` now run Memory Defense before writing durable markdown. Default disabled; enable via .okf/config.yaml memory_defense.enabled=true. Block rejects the whole batch; redact replaces secrets per-file. Staging directory cleaned up on failure.
 - Trap eval CLI currently scores deterministically; live reflect-in-the-loop scoring is future work.
 - 10k concept latency: benchmarked at 378µs for relation recall, 1.13ms for screen (see evidence.md).

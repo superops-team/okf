@@ -42,3 +42,17 @@ Scope: handleImportDocument Defense wiring, test_mcp.py expansion, Codex E2E har
 
 ### R3-6 fix: surface defense notes in import response
 The importDefenseNotes field was collected but never printed. Let me surface it.
+
+## Round 4 — okf add Defense wiring (obvious issues)
+
+Scope: cmd_add.go screenImportTree, cmd_add_defense_test.go.
+
+| # | Severity | File:Line | Observation | Decision |
+|---|---|---|---|---|
+| R4-1 | Medium | cmd_add.go screenImportTree | Block mode aborts on first high-severity hit; files screened before the bad one are already redacted in staging. Since staging is cleaned by defer, no kb contamination. | Correct — staging isolation |
+| R4-2 | Low | cmd_add.go | LoadPolicy(kbDir) looks for kbDir/.okf/config.yaml. But kbDir is the knowledge dir, not repo root. The .okf dir is typically at repo root, not inside kb. | Fixed below |
+| R4-3 | Low | cmd_add.go | Non-.md files in staging (e.g. images copied from archive) are not screened. This is acceptable: Defense targets text content, not binaries. | Acceptable |
+
+### R4-2 fix: LoadPolicy path
+LoadPolicy should read from the repo root (parent of kbDir if kbDir ends in knowledge, or kbDir itself). Let me fix.
+
