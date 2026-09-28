@@ -106,4 +106,23 @@ D body.
 			t.Fatalf("error should mention anchor, got: %+v", resp.Error)
 		}
 	})
+
+	t.Run("corrupted_frontmatter_graceful", func(t *testing.T) {
+		// Write a file with broken YAML frontmatter; should not panic.
+		broken := `---
+okf_id: okf_ffffffffffffffffffffffffffffffff
+title: "Broken"
+this is not valid yaml: [unclosed
+---
+# Broken
+Body.
+`
+		os.WriteFile(filepath.Join(kb, "broken.md"), []byte(broken), 0o644)
+		svc2 := NewService(Config{RepoPath: repo})
+		resp := svc2.RelationRecall(t.Context(), RelationRecallRequest{Anchor: "okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+		// Should still return valid results for A (broken file skipped gracefully).
+		if !resp.OK {
+			t.Fatalf("corrupted frontmatter should not break valid recall: %+v", resp.Error)
+		}
+	})
 }
