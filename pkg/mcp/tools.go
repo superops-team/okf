@@ -1197,7 +1197,15 @@ func (r *ToolRegistry) handleImportDocument(args map[string]interface{}) (*ToolC
 		return errorResult(fmt.Sprintf("Failed to convert document: %v", err)), nil
 	}
 	// Memory Defense: screen converted content before writing to durable storage.
-	pol, polErr := memorydefense.LoadPolicy(filepath.Dir(bundlePath))
+	// bundlePath is the knowledge dir (e.g. <repo>/.okf/knowledge); LoadPolicy
+	// expects the repo root (parent of .okf).
+	repoRoot := bundlePath
+	if filepath.Base(repoRoot) == "knowledge" {
+		repoRoot = filepath.Dir(repoRoot)
+	} else if filepath.Base(repoRoot) == ".okf" {
+		repoRoot = filepath.Dir(repoRoot)
+	}
+	pol, polErr := memorydefense.LoadPolicy(repoRoot)
 	if polErr != nil {
 		return errorResult(fmt.Sprintf("memory_defense config: %v", polErr)), nil
 	}

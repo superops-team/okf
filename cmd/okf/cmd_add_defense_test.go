@@ -111,6 +111,37 @@ func TestScreenImportTreeSingleFile(t *testing.T) {
 	}
 }
 
+// TestStageForDefensePreservesSource verifies that staging copies .md files
+// without modifying the originals.
+func TestStageForDefensePreservesSource(t *testing.T) {
+	dir := t.TempDir()
+	secret := "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh1234"
+	orig := writeMD(t, dir, "a.md", "Token "+secret)
+	origData, _ := os.ReadFile(orig)
+
+	staging, cleanup := stageForDefense(dir)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if staging == "" {
+		t.Fatal("expected staging dir")
+	}
+
+	pol := memorydefense.Policy{Enabled: true, Action: "redact"}
+	if err := screenImportTree(staging, pol); err != nil {
+		t.Fatal(err)
+	}
+
+	after, _ := os.ReadFile(orig)
+	if string(after) != string(origData) {
+		t.Error("original source file was modified!")
+	}
+	stagedData, _ := os.ReadFile(filepath.Join(staging, "a.md"))
+	if strings.Contains(string(stagedData), secret) {
+		t.Error("staged file still has secret")
+	}
+}
+
 // asBlocked checks if err wraps *ErrBlocked.
 func asBlocked(err error, target **memorydefense.ErrBlocked) bool {
 	for err != nil {

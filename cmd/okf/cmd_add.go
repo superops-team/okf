@@ -143,11 +143,21 @@ func cmdAdd(args []string) int {
 		importSource = stagingDir
 	}
 	// Memory Defense: screen all markdown files in the import source before
-	// they reach the knowledge base.
+	// they reach the knowledge base. If defense is enabled but no staging dir
+	// exists (pure .md import), we must NOT modify the user's original files.
+	// Instead, create a staging copy and screen that.
 	pol, polErr := memorydefense.LoadPolicy(resolveRepoRoot(kbDir))
 	if polErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: memory_defense config: %v\n", polErr)
 		return 1
+	}
+	if pol.Enabled && stagingDir == "" {
+		// Create staging copy so we never mutate the user's source files.
+		stagingDir, cleanup = stageForDefense(srcPath)
+		if cleanup != nil {
+			defer cleanup()
+		}
+		importSource = stagingDir
 	}
 	if pol.Enabled {
 		if serr := screenImportTree(importSource, pol); serr != nil {
@@ -651,6 +661,44 @@ func resolveRepoRoot(kbDir string) string {
 		return filepath.Dir(abs)
 	}
 	return abs
+}
+
+// stageForDefense copies .md files from src into a temp staging dir so that
+// screenImportTree can redact without mutating the user's original files.
+func stageForDefense(src string) (string, func()) {
+	info, err := os.Stat(src)
+	if err != nil {
+		return "", nil
+	}
+	tmp, err := os.MkdirTemp("", "okf-defense-stage-*")
+	if err != nil {
+		return "", nil
+	}
+	cleanup := func() { os.RemoveAll(tmp) }
+	copyFile := func(dst, src string) error {
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, data, 0o644)
+	}
+	if info.IsDir() {
+		_ = filepath.Walk(src, func(path string, fi os.FileInfo, werr error) error {
+			if werr != nil || fi.IsDir() {
+				return nil
+			}
+			if strings.HasSuffix(strings.ToLower(path), ".md") {
+				rel, _ := filepath.Rel(src, path)
+				dst := filepath.Join(tmp, rel)
+				os.MkdirAll(filepath.Dir(dst), 0o755)
+				_ = copyFile(dst, path)
+			}
+			return nil
+		})
+	} else if strings.HasSuffix(strings.ToLower(src), ".md") {
+		_ = copyFile(filepath.Join(tmp, filepath.Base(src)), src)
+	}
+	return tmp, cleanup
 }
 
 // screenImportTree walks all .md files under root and applies Memory Defense.

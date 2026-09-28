@@ -56,3 +56,23 @@ Scope: cmd_add.go screenImportTree, cmd_add_defense_test.go.
 ### R4-2 fix: LoadPolicy path
 LoadPolicy should read from the repo root (parent of kbDir if kbDir ends in knowledge, or kbDir itself). Let me fix.
 
+
+## Review A (independent round) — Obvious issues
+
+Reviewed files: screen.go, recall.go, reflect.go, trap.go, policy.go, catalog.go, write.go defense wiring, tool/reflect.go, mcp/tools.go import defense, cmd/okf/cmd_add.go screenImportTree.
+
+| # | Severity | File:Line | Issue | RED evidence | Fix |
+|---|---|---|---|---|---|
+| RA-1 | High | cmd/okf/cmd_add.go screenImportTree | Direct .md import (no staging) would redact user's ORIGINAL files in-place, corrupting source data. | TestStageForDefensePreservesSource failed before fix (original modified). | Added stageForDefense(): when defense enabled and stagingDir=="", copy .md files to temp dir, screen temp dir, import from temp. Original never touched. |
+| RA-2 | Medium | pkg/mcp/tools.go:1200 | LoadPolicy(filepath.Dir(bundlePath)) resolved to `<repo>/.okf/.okf/config.yaml` — config never found, defense silently disabled in MCP. | TestImportDocumentDefenseBlock/Redact failed (no config loaded). | Compute repoRoot from bundlePath: if base=="knowledge" → parent; if base==".okf" → parent. |
+
+## Review B (independent round) — Boundary/security/compatibility
+
+Reviewed: regex safety (all RE2 linear, no backtracking), empty/binary input, file walk (os.Walk doesn't follow symlinks), error messages (no secret leak), staging cleanup (defer), block rollback (staging cleaned), disabled byte-compat (verified).
+
+No new issues found. Anti-evidence actions:
+- Tested credit card regex on 16-digit phone numbers → Luhn verify rejects.
+- Tested empty string Screen → returns content unchanged.
+- Tested binary garbage through Screen → no matches, no panic.
+- Verified os.Walk does not follow symlinks (path escape not possible via Walk).
+- Verified ErrBlocked.Error() contains only DetectorID, never match text.
