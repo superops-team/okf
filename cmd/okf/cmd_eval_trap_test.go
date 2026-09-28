@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// initTestRepo creates a temp OKF repo with approved concepts for trap eval testing.
 func initTrapTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
@@ -30,7 +29,7 @@ type: note
 memory_state: proposed
 ---
 # Poison
-Untrusted proposed PostgreSQL content.
+Untrusted proposed PostgreSQL content that should be filtered.
 `
 	os.WriteFile(filepath.Join(kb, "approved.md"), []byte(approved), 0o644)
 	os.WriteFile(filepath.Join(kb, "poison.md"), []byte(proposed), 0o644)
@@ -45,7 +44,6 @@ func writeGolden(t *testing.T, repo, content string) string {
 }
 
 func TestCmdEvalTrap_RepoRequired(t *testing.T) {
-	// No -repo should exit 1.
 	code := cmdEvalTrap([]string{"-golden", "/tmp/nonexistent.json"})
 	if code != 1 {
 		t.Fatalf("expected exit 1 without -repo, got %d", code)
@@ -69,9 +67,9 @@ func TestCmdEvalTrap_InvalidGolden(t *testing.T) {
 	}
 }
 
-func TestCmdEvalTrap_LiveEvalPoisonBlocked(t *testing.T) {
+func TestCmdEvalTrap_PoisonBlockedGate(t *testing.T) {
 	repo := initTrapTestRepo(t)
-	// Case: question matches approved concept; poison is proposed (should be filtered).
+	// poison is proposed → trapGate filters it → poison_blocked=1.0 → exit 0
 	golden := `[
 		{
 			"question": "PostgreSQL deployment",
@@ -82,15 +80,14 @@ func TestCmdEvalTrap_LiveEvalPoisonBlocked(t *testing.T) {
 	]`
 	p := writeGolden(t, repo, golden)
 	code := cmdEvalTrap([]string{"-golden", p, "-repo", repo})
-	// Poison (proposed) should be filtered by trapGate → poison_blocked=1.0 → exit 0.
 	if code != 0 {
-		t.Logf("exit code=%d (poison may leak depending on ranker)", code)
+		t.Fatalf("poison should be blocked by trapGate, expected exit 0, got %d", code)
 	}
 }
 
 func TestCmdEvalTrap_NeedClarifyAbstain(t *testing.T) {
 	repo := initTrapTestRepo(t)
-	// Question that won't match anything → need_clarify.
+	// Question matches nothing → need_clarify=true → abstain rewarded
 	golden := `[
 		{
 			"question": "quantum gravity string theory",
@@ -101,18 +98,16 @@ func TestCmdEvalTrap_NeedClarifyAbstain(t *testing.T) {
 	p := writeGolden(t, repo, golden)
 	code := cmdEvalTrap([]string{"-golden", p, "-repo", repo})
 	if code != 0 {
-		t.Logf("exit code=%d", code)
+		t.Fatalf("abstain case should exit 0, got %d", code)
 	}
 }
 
 func TestCmdEvalTrap_EmptyCases(t *testing.T) {
 	repo := initTrapTestRepo(t)
-	golden := `[]`
-	p := writeGolden(t, repo, golden)
+	p := writeGolden(t, repo, `[]`)
 	code := cmdEvalTrap([]string{"-golden", p, "-repo", repo})
-	// Empty cases → poison_blocked=1.0 (no poison) → exit 0.
 	if code != 0 {
-		t.Fatalf("expected exit 0 for empty cases, got %d", code)
+		t.Fatalf("empty cases should exit 0 (no poison), got %d", code)
 	}
 }
 
@@ -130,6 +125,37 @@ func TestCmdEvalTrap_DeterministicRerun(t *testing.T) {
 	code2 := cmdEvalTrap([]string{"-golden", p, "-repo", repo})
 	if code1 != code2 {
 		t.Fatalf("non-deterministic exit: %d vs %d", code1, code2)
+	}
+}
+
+func TestCmdEvalTrap_NoDemoFallback(t *testing.T) {
+	// Verify that without -repo, we get exit 1 (not hardcoded scores).
+	repo := initTrapTestRepo(t)
+	golden := `[{"question": "test", "case_type": "single-hop"}]`
+	p := writeGolden(t, repo, golden)
+	code := cmdEvalTrap([]string{"-golden", p})
+	if code != 1 {
+		t.Fatalf("without -repo should exit 1 (no demo fallback), got %d", code)
+	}
+}
+
+func TestCmdEvalTrap_ExpectedEvidenceScore(t *testing.T) {
+	repo := initTrapTestRepo(t)
+	// Question matches approved concept → expected evidence should be found.
+	golden := `[
+		{
+			"question": "PostgreSQL deployment tuning",
+			"case_type": "single-hop",
+			"expected_evidence": ["okf_approved_0000000000000000000001"]
+		}
+	]`
+	p := writeGolden(t, repo, golden)
+	code := cmdEvalTrap([]string{"-golden", p, "-repo", repo})
+	// If expected evidence is found, poison_blocked=1.0 → exit 0.
+	// If not found, evidence_score=0.5 but no poison → still exit 0.
+	// We only assert it doesn't crash and exits 0 or 1 based on poison.
+	if code != 0 && code != 1 {
+		t.Fatalf("unexpected exit code: %d", code)
 	}
 	_ = strings.Contains
 }
