@@ -151,3 +151,18 @@ No new issues found. Anti-evidence actions:
   4. okf add with secret (block enabled) → skipped (already imported), source unchanged.
 - Durable writes: 1 (secret-note.md imported under disabled policy)
 - No secret leaked in any Codex output.
+
+## RB-1 (Review B finding): Service-layer trapGate untested
+
+| Field | Value |
+|---|---|
+| Severity | Medium (test gap) |
+| Location | pkg/tool/reflect.go:79-82 (trapGate closure) |
+| Issue | The Service-layer trapGate that filters non-approved concepts from Reflect evidence had no direct unit test. In the previous mutation round, M4 (invert `!=` to `==`) escaped because no test verified approved-present AND proposed-absent simultaneously. |
+| RED evidence | With M4 applied, new test TestReflect_TrapGateDropsProposed failed: "approved concept missing from evidence" (evidence IDs: []). |
+| Fix | Added TestReflect_TrapGateDropsProposed with rich content so lexical ranker returns both concepts; asserts approved IS in evidence AND proposed is NOT. |
+| GREEN | Original implementation: PASS (evidence=[okf_aaaa...], proposed absent). |
+| Mutation result | 5/5 killed (was 4/5, now M4 killed). |
+
+### Why Codex E2E old results still valid
+This change is test-only (no production code change). CLI/MCP/Codex behavior unchanged.
