@@ -4,9 +4,7 @@ import (
 	stdctx "context"
 	"strings"
 
-	"github.com/superops-team/okf/pkg/identity"
 	"github.com/superops-team/okf/pkg/memorymeta"
-	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/reflect"
 	"github.com/superops-team/okf/pkg/relationrecall"
 )
@@ -144,7 +142,3 @@ func (s *Service) RelationRecall(ctx stdctx.Context, req RelationRecallRequest) 
 		Result:        result,
 	}
 }
-
-// Ensure imports are used.
-var _ = okf.KnowledgeBundle{}
-var _ = identity.Field

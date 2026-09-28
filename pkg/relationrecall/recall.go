@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/superops-team/okf/pkg/memorymeta"
-	"github.com/superops-team/okf/pkg/okf"
 )
 
 // Hit is one recalled concept.
@@ -97,6 +96,3 @@ func Recall(anchorID string, view *memorymeta.TemporalView) (*Result, error) {
 
 	return res, nil
 }
-
-// Ensure okf import is used (Concept type referenced in doc).
-var _ = okf.Concept{}
