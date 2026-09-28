@@ -244,3 +244,24 @@ func TestDeclinedHidden(t *testing.T) {
 		}
 	}
 }
+
+func TestExtendsSelfLoopSkipped(t *testing.T) {
+	// A extends itself. Should not duplicate the self entry.
+	aID := "okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	a := mkConcept(aID, "note", extendsFields(aID))
+	view := memorymeta.BuildTemporalView([]*okf.Concept{a})
+
+	res, err := Recall(aID, view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, h := range res.Hits {
+		if h.OKFID == aID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("self-loop should produce exactly 1 self hit, got %d", count)
+	}
+}

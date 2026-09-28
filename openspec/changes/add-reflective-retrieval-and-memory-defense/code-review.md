@@ -76,3 +76,42 @@ No new issues found. Anti-evidence actions:
 - Tested binary garbage through Screen → no matches, no panic.
 - Verified os.Walk does not follow symlinks (path escape not possible via Walk).
 - Verified ErrBlocked.Error() contains only DetectorID, never match text.
+
+## Review A/B — 32-file coverage matrix
+
+| Group | Files | Reviewed | Key checks |
+|---|---|---|---|
+| cmd/okf | 4 (cmd_add.go, cmd_add_defense_test.go, cmd_eval.go, cmd_tool.go) | yes | flag parsing, exit codes, Defense wiring, no secret leak in stdout |
+| pkg/mcp | 2 (tools.go, import_defense_test.go) | yes | RA-2 repoRoot fix, unified registry, stdio framing |
+| pkg/memorydefense | 6 (catalog.go, screen.go, policy.go, catalog_test.go, fuzz_test.go, screen_bench_test.go) | yes | 16 detectors RE2-safe, Screen redact/block, LoadPolicy, fuzz 77k execs |
+| pkg/reflect | 2 (reflect.go, reflect_test.go) | yes | RRF k=60, hard cap 3, abstain threshold, trap gate |
+| pkg/relationrecall | 3 (recall.go, recall_test.go, recall_bench_test.go) | yes | bidirectional extends, updates chain, cycle/fork/dangling/self-loop |
+| pkg/tool | 3 (reflect.go, write.go, write_defense_test.go) | yes | Service layer, WriteKnowledge Screen, idempotency |
+| pkg/trapeval | 2 (trap.go, trap_test.go) | yes | 3-layer scoring, poison ratio, abstain |
+| test_mcp.py | 1 | yes | 17 stdio E2E tests all pass |
+| OpenSpec docs | 9 (proposal/design/spec/tasks/review/evidence/conformance/release-notes/code-review) | yes | consistency, no unexplained gaps |
+
+## Review B additional edge tests (added this round)
+- TestScreenEmptyInput: empty string no panic/no hits
+- TestScreenMultipleSecretsRedact: 2 secrets both redacted
+- TestScreenLargeInputNoCrash: 1MB normal text, no false positive
+- TestScreenInvalidConfigAction: unknown action passes through
+- TestScreenMultilinePEM: block triggers on PEM marker
+- TestExtendsSelfLoopSkipped: self-extends produces exactly 1 hit
+
+## Fresh run (HEAD=0ab5f52 + new edge tests)
+- gofmt: clean
+- go build: ok
+- go vet: ok
+- staticcheck: ok
+- go test: all 7 packages green
+- race: green on 4 new packages
+- shuffle: green
+- coverage: memorydefense 90.8%, relationrecall 94.6%, reflect 96.4%, trapeval 86.6%
+- fuzz: 77,594 execs / 15s, no crash
+- go mod verify: all modules verified
+- CLI smoke: normal add exit 0, redact add exit 0, source file unchanged, kb has [REDACTED]
+- MCP E2E: 17/17 tests pass
+- benchmark: Screen10k=1.19ms/op, Recall10k=0.38ms/op
+- secret scan: only test-fixture fake tokens, no real secrets in production code
+- gauntlet: no Makefile/Taskfile; project uses `go test ./...` directly as CI entry
