@@ -77,16 +77,16 @@ No new issues found. Anti-evidence actions:
 - Verified os.Walk does not follow symlinks (path escape not possible via Walk).
 - Verified ErrBlocked.Error() contains only DetectorID, never match text.
 
-## Review A/B — 32-file coverage matrix
+## Review A/B — 34-file coverage matrix (actual diff 879bae3..HEAD)
 
 | Group | Files | Reviewed | Key checks |
 |---|---|---|---|
 | cmd/okf | 4 (cmd_add.go, cmd_add_defense_test.go, cmd_eval.go, cmd_tool.go) | yes | flag parsing, exit codes, Defense wiring, no secret leak in stdout |
 | pkg/mcp | 2 (tools.go, import_defense_test.go) | yes | RA-2 repoRoot fix, unified registry, stdio framing |
-| pkg/memorydefense | 6 (catalog.go, screen.go, policy.go, catalog_test.go, fuzz_test.go, screen_bench_test.go) | yes | 16 detectors RE2-safe, Screen redact/block, LoadPolicy, fuzz 77k execs |
+| pkg/memorydefense | 7 (catalog.go, screen.go, policy.go, catalog_test.go, fuzz_test.go, screen_bench_test.go, screen_edge_test.go) | yes | 16 detectors RE2-safe, Screen redact/block, LoadPolicy, fuzz 231k execs, edge cases (empty/multiline/1MB) |
 | pkg/reflect | 2 (reflect.go, reflect_test.go) | yes | RRF k=60, hard cap 3, abstain threshold, trap gate |
 | pkg/relationrecall | 3 (recall.go, recall_test.go, recall_bench_test.go) | yes | bidirectional extends, updates chain, cycle/fork/dangling/self-loop |
-| pkg/tool | 3 (reflect.go, write.go, write_defense_test.go) | yes | Service layer, WriteKnowledge Screen, idempotency |
+| pkg/tool | 4 (reflect.go, write.go, write_defense_test.go, reflect_trapgate_test.go) | yes | Service layer, WriteKnowledge Screen, idempotency, RB-1 trapGate direct test |
 | pkg/trapeval | 2 (trap.go, trap_test.go) | yes | 3-layer scoring, poison ratio, abstain |
 | test_mcp.py | 1 | yes | 17 stdio E2E tests all pass |
 | OpenSpec docs | 9 (proposal/design/spec/tasks/review/evidence/conformance/release-notes/code-review) | yes | consistency, no unexplained gaps |
@@ -138,7 +138,7 @@ No new issues found. Anti-evidence actions:
 - M1 (RA-1 staging copy): killed by integration (CLI smoke verified source unchanged)
 - M2 (RA-2 repoRoot): KILLED by TestImportDocumentDefenseBlock/Redact
 - M3 (block severity high→medium): KILLED by TestScreenBlockReturnsError
-- M4 (trapGate approved filter inverted): ESCAPED (no direct unit test for Service.trapGate; indirect via reflect package tests)
+- M4 (trapGate approved filter inverted): **HISTORICAL / pre-RB-1 — was ESCAPED at this point; later RB-1 added TestReflect_TrapGateDropsProposed which kills this mutation. Final state: 5/5 killed (see RB-1 section below).**
 - M5 (abstain < → <=): KILLED by TestAbstainWhenThin/TestNoAbstainAtExactThreshold
 
 ### Codex E2E (real, this round)
