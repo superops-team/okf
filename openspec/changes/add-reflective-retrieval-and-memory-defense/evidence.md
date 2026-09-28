@@ -344,3 +344,21 @@ New edge tests added (all GREEN on original implementation):
 Durable writes: disabled=1, redact=1, block=0。
 
 历史 shell 段（evidence.md 行 195-215 早期版本）已 superseded，非最终验收证据。
+
+## Gap closure fresh run (2026-09-29, HEAD=50faff8)
+
+| Command | Result |
+|---|---|
+| gofmt -l | clean |
+| go build ./... | pass |
+| go vet ./... | pass |
+| staticcheck ./... | 0 issues |
+| go test ./... -count=1 | 27 packages ok |
+| go test -race ./... | 27 packages ok |
+| go test -shuffle=on ./... | 27 packages ok |
+| tools/gauntlet.sh | PASS (71% coverage, mutations killed) |
+
+### Gap closures
+- RR-04: TestRelationRecall_ServiceGraceful (5 subtests: unknown/cycle/fork/dangling/empty) PASS
+- TE-05: cmdEvalTrap -repo flag calls Service.Reflect per case; demo fallback without -repo
+- WI-04: W09 (Reflect/abstain) + W10 (Defense non-negotiable) clauses; okf_reflect/okf_relation_recall added to RegisteredTools

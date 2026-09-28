@@ -166,3 +166,13 @@ No new issues found. Anti-evidence actions:
 
 ### Why Codex E2E old results still valid
 This change is test-only (no production code change). CLI/MCP/Codex behavior unchanged.
+
+## Review C (incremental) — Gap closure
+- RR-04: no issues found; test covers all degradation paths
+- TE-05: no issues; live -repo path isolated from demo fallback
+- WI-04: no issues; W09/W10 follow W01-W08 format, tool whitelist updated
+
+## Review D (incremental) — Boundary/security
+- No new security boundary; Reflect read-only, Defense unchanged
+- Demo fallback prints warning to stderr-equivalent stdout
+- All tests pass race/shuffle

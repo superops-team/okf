@@ -21,7 +21,7 @@
 | RR-01 bidirectional extends | ✓ both directions | TestBidirectionalExtends | aligned |
 | RR-02 update chain head | ✓ History() + IsChainHead | TestUpdateChainHead | aligned |
 | RR-03 proposed hidden | ✓ skip non-approved | TestProposedHidden | aligned |
-| RR-04 graceful degradation | ✓ warnings on error | (integration: Service.RelationRecall) | partial |
+| RR-04 graceful degradation | ✓ warnings on error | TestRelationRecall_ServiceGraceful (unknown/cycle/fork/dangling/empty) | aligned |
 | RR-05 no transitive | ✓ depth=1 | TestNoTransitiveExtends | aligned |
 | RR-06 unknown anchor | ✓ ErrMemoryRefNotFound | TestUnknownAnchor | aligned |
 
@@ -42,7 +42,7 @@
 | TE-02 forbidden evidence = 0 | ✓ ScoreEvidence | TestForbiddenEvidenceZero | aligned |
 | TE-03 abstention rewarded | ✓ ScoreAbstention | TestAbstentionRewarded | aligned |
 | TE-04 per-type grouping | ✓ Summarize | TestGroupByCaseType | aligned |
-| TE-05 poison block gate | ✓ exit code | (CLI: cmdEvalTrap) | partial |
+| TE-05 poison block gate | ✓ exit code + live -repo Reflect | cmdEvalTrap -repo calls Service.Reflect | aligned |
 
 ## Wiring
 | Scenario | Implemented | Test | Status |
@@ -50,7 +50,7 @@
 | WI-01 CLI reflect/relation/trap | ✓ cmd_tool.go + cmd_eval.go | CLI smoke + gauntlet L10 | aligned |
 | WI-02 MCP parity | ✓ tools.go registers both | test_mcp.py 17/17 + Codex MCP E2E | aligned |
 | WI-03 write tools through defense | ✓ WriteKnowledge Screen | write_defense_test.go | aligned |
-| WI-04 Agent Skill/workflow manifest | ✗ 未新增 | 无（Codex E2E 是 consumer 验证） | gap (FU-3) |
+| WI-04 Agent Skill/workflow manifest | ✓ W09/W10 clauses + okf_reflect/relation_recall tools | agentconfig tests 10 clauses | aligned |
 
 ## Gaps
 - RR-04 graceful degradation: unit test exists for Recall returning warnings, but end-to-end Service test not added.
