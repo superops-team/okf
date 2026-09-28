@@ -50,3 +50,48 @@ Fresh run date: 2026-09-28. All numbers from the last clean test run on branch `
 - Config missing/invalid: TestLoadPolicyMissingFile / TestLoadPolicyInvalidAction PASS
 - Block zero bytes: TestWriteKnowledge_DefenseBlockZeroBytes PASS
 - Error no leak: TestScreenBlockReturnsError checks error message excludes original token
+
+## Round 2 verification (2026-09-28)
+
+### Test counts after additions
+| Package | Tests | Coverage |
+|---|---|---|
+| pkg/memorydefense | 14 pass (13+1 determinism) | 90.8% |
+| pkg/relationrecall | 9 pass (5+4 edge: cycle/fork/dangling/declined) | 91.9% |
+| pkg/reflect | 7 pass (6+1 boundary exact-threshold) | 96.5% |
+| pkg/trapeval | 7 pass (6+1 poison ratio) | 84.4% |
+
+### Performance benchmark (10k concepts)
+| Benchmark | Latency | Allocs/op | B/op |
+|---|---|---|---|
+| BenchmarkRecall10k | 378 µs/op | 5 | 384 |
+| BenchmarkScreen10k (redact, 10KB) | 1.13 ms/op | 715 | 154,900 |
+| BenchmarkScreen10kBlock (10KB) | 207 µs/op | 715 | 125,761 |
+
+Acceptability: 378µs for O(n) relation scan over 10k concepts is well under 10ms SLA for CLI/MCP. Screen redact at 1.1ms on 10KB content is dominated by string building; acceptable for write path.
+
+### Mutation testing
+| Mutation | Target | Killed? |
+|---|---|---|
+| M1: reverse block severity (`==High` → `!=High`) | screen.go | YES — TestWriteKnowledge_DefenseBlockZeroBytes |
+| M2: reverse approved filter (`!=Approved` → `==Approved`) | recall.go | YES — TestDeclinedHidden |
+| M3: change abstain threshold (`<` → `<=`) | reflect.go | Initially escaped; added TestNoAbstainAtExactThreshold → now KILLED |
+
+### Secret / supply-chain scan
+- grep-based secret scan on all new .go files: only matches are fake test tokens (ABCDEF...) in _test.go files. No real secrets.
+- `go mod verify`: all modules verified.
+- 54 dependencies total, no new dependencies added.
+
+### CLI smoke test
+- `okf tool reflect -q "deployment database"` → returns ok:true, envelope correct
+- `okf tool relation --anchor okf_aaa...` → returns self + extends neighbor
+- `okf eval trap -golden cases.json` → prints 4 means, exits 0
+- Binary built from clean tree, ran on real git repo fixture.
+
+### Legacy MCP
+- Unified ToolRegistry: registerCoreTools + registerAgentTools both served by same MCP server.
+- New tools okf_reflect/okf_relation_recall registered in registerAgentTools.
+- No separate legacy MCP server exists; dual_era_test.go confirms unified registry.
+
+### Code review
+- See code-review.md for Round 1 (3 fixes) and Round 2 (9 observations, 0 fixes needed).

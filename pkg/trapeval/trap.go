@@ -27,6 +27,7 @@ type CaseScore struct {
 	EvidenceScore   float64 `json:"evidence_score"`
 	AbstentionScore float64 `json:"abstention_score"`
 	TrapLeak        bool    `json:"trap_leak"`
+	IsPoison        bool    `json:"is_poison"`
 }
 
 // PerType aggregates scores by case_type.
@@ -123,7 +124,8 @@ func LoadCases(path string) ([]Case, error) {
 	return cases, nil
 }
 
-// Summarize aggregates per-type means.
+// Summarize aggregates per-type means. Poison stats only count cases marked
+// IsPoison=true (i.e. trap cases that must not leak).
 func Summarize(cases []Case, scores []CaseScore) Report {
 	agg := map[string]*PerType{}
 	var poisonTotal, poisonBlocked float64
@@ -141,11 +143,11 @@ func Summarize(cases []Case, scores []CaseScore) Report {
 		a.AnswerMean += sc.AnswerScore
 		a.EvidenceMean += sc.EvidenceScore
 		a.AbstentionMean += sc.AbstentionScore
-		if sc.TrapLeak {
+		if sc.IsPoison {
 			poisonTotal++
-		} else {
-			poisonTotal++
-			poisonBlocked++
+			if !sc.TrapLeak {
+				poisonBlocked++
+			}
 		}
 	}
 	out := map[string]PerType{}
@@ -158,8 +160,12 @@ func Summarize(cases []Case, scores []CaseScore) Report {
 			AbstentionMean: a.AbstentionMean / float64(n),
 		}
 	}
+	ratio := 1.0
+	if poisonTotal > 0 {
+		ratio = poisonBlocked / poisonTotal
+	}
 	return Report{
 		PerType:              out,
-		PoisonBlockedOverall: poisonBlocked / poisonTotal,
+		PoisonBlockedOverall: ratio,
 	}
 }

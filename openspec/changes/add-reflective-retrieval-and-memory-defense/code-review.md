@@ -1,0 +1,27 @@
+# Code Review: Reflective Retrieval and Memory Defense
+
+## Round 1 — Obvious issues
+
+| # | Severity | File:Line | Problem | Fix | Verified |
+|---|---|---|---|---|---|
+| R1-1 | Medium | pkg/reflect/reflect.go:130-145 | O(n²) round-assignment loop; `_ = i` dead code | Replaced linear scans with `round1Set`/`round2Set` map lookups | tests pass |
+| R1-2 | High | pkg/trapeval/trap.go:144-149 | Summarize counted EVERY case as poison (poisonTotal++ for all), making poison_blocked ratio meaningless | Added `IsPoison bool` to CaseScore; only count IsPoison cases; default ratio=1.0 when no poison cases | TestPoisonBlockedRatio added |
+| R1-3 | Low | pkg/trapeval/trap_test.go:87 | `var _ = json.Marshal` dead reference after removing import | Removed | build clean |
+
+## Round 2 — Boundary, resource, compatibility, security, maintainability
+
+| # | Severity | File:Line | Observation | Decision |
+|---|---|---|---|---|
+| R2-1 | Low | pkg/memorydefense/screen.go:64-94 | Sequential detectors: after detector N redacts, detector N+1 scans the redacted string. A secret spanning a redaction boundary is unlikely and would already be partially redacted. | Acceptable — no fix needed |
+| R2-2 | Info | pkg/relationrecall/recall.go:54 | Outgoing extends scan is O(n) per call. For 10k concepts this is 10k map lookups — acceptable for local-first CLI/MCP usage. | Acceptable — benchmark confirms (see evidence.md) |
+| R2-3 | Info | pkg/tool/reflect.go:66-76 | relationFn called per alive anchor in round 2; each call does O(n) scan. For 10 alive anchors × 10k entries = 100k iterations. | Acceptable for local-first |
+| R2-4 | Security | pkg/memorydefense/screen.go:80 | ErrBlocked.Error() includes only detector ID, never the matched secret text. | Correct — no leak |
+| R2-5 | Compatibility | pkg/memorydefense/policy.go:23 | Default Policy{Enabled:false, Action:"redact"}. Missing config file returns disabled policy, not error. | Correct — backward compatible |
+| R2-6 | Resource | pkg/memorydefense/screen.go:83 | strings.Builder allocated per detector per write. No goroutines, no file handles, no network. | Clean — no leaks |
+| R2-7 | Maintainability | pkg/reflect/reflect.go | Run() takes 3 function params (queryFn, relationFn, trapGate). This is dependency injection for testability; acceptable for a pure function. | Acceptable |
+| R2-8 | Edge | pkg/relationrecall/recall.go:49 | Anchor itself is only added if approved. If anchor is proposed, no self-hit but neighbors still returned. | Correct — proposed anchor should not appear as self |
+| R2-9 | Edge | pkg/reflect/reflect.go:148 | NeedClarify triggers when evidence < min_evidence AFTER poison gate. If poison gate drops half the results, abstention is more aggressive. | Correct — safety-first |
+
+## Conclusion
+- Round 1: 3 issues found and fixed.
+- Round 2: 9 observations, 0 require code changes (all acceptable by design).

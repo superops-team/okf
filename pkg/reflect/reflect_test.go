@@ -39,6 +39,19 @@ func TestAbstainWhenThin(t *testing.T) {
 	}
 }
 
+func TestNoAbstainAtExactThreshold(t *testing.T) {
+	// Exactly minEvidence=2 results → should NOT abstain (boundary test).
+	q := func(string) []string { return []string{"a", "b"} }
+	r := func(string) []string { return nil }
+	res, err := Run("question", Options{MinEvidence: 2, MaxRounds: 1}, q, r, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NeedClarify {
+		t.Fatal("should NOT abstain when evidence == minEvidence exactly")
+	}
+}
+
 func TestMultiRoundGathersMore(t *testing.T) {
 	// Round 1 finds A; round 2 relation recall finds B.
 	q := func(string) []string { return []string{"a"} }

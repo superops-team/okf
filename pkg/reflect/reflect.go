@@ -127,22 +127,20 @@ func Run(question string, opts Options,
 
 	// Fuse with RRF.
 	fused := RRF([][]string{alive, round2}, DefaultRRFK)
-	for i, h := range fused {
+	round1Set := make(map[string]bool, len(alive))
+	for _, id := range alive {
+		round1Set[id] = true
+	}
+	round2Set := make(map[string]bool, len(round2))
+	for _, id := range round2 {
+		round2Set[id] = true
+	}
+	for _, h := range fused {
 		round := 1
-		for _, id := range alive {
-			if id == h.ID {
-				round = 1
-				break
-			}
-		}
-		for _, id := range round2 {
-			if id == h.ID {
-				round = 2
-				break
-			}
+		if round2Set[h.ID] && !round1Set[h.ID] {
+			round = 2
 		}
 		res.Evidence = append(res.Evidence, Evidence{ID: h.ID, Score: h.Score, Round: round})
-		_ = i
 	}
 
 	if len(res.Evidence) < opts.MinEvidence {

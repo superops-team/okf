@@ -1,7 +1,6 @@
 package trapeval
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -81,7 +80,25 @@ func TestGroupByCaseType(t *testing.T) {
 	if report.PerType["abstain"].AbstentionMean != 1.0 {
 		t.Fatalf("abstain mean = %v, want 1.0", report.PerType["abstain"].AbstentionMean)
 	}
+	// No poison cases → ratio stays 1.0.
+	if report.PoisonBlockedOverall != 1.0 {
+		t.Fatalf("poison ratio with no poison cases = %v, want 1.0", report.PoisonBlockedOverall)
+	}
 }
 
-// Ensure json import is used.
-var _ = json.Marshal
+func TestPoisonBlockedRatio(t *testing.T) {
+	cases := []Case{
+		{Question: "p1", CaseType: "knowledge-update"},
+		{Question: "p2", CaseType: "knowledge-update"},
+		{Question: "p3", CaseType: "knowledge-update"},
+	}
+	scores := []CaseScore{
+		{CaseType: "knowledge-update", IsPoison: true, TrapLeak: false}, // blocked
+		{CaseType: "knowledge-update", IsPoison: true, TrapLeak: true},  // leaked
+		{CaseType: "knowledge-update", IsPoison: true, TrapLeak: false}, // blocked
+	}
+	report := Summarize(cases, scores)
+	if report.PoisonBlockedOverall != 2.0/3.0 {
+		t.Fatalf("poison ratio = %v, want 0.667", report.PoisonBlockedOverall)
+	}
+}

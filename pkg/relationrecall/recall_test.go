@@ -159,3 +159,88 @@ func TestNoTransitiveExtends(t *testing.T) {
 		}
 	}
 }
+
+func TestExtendsCycle(t *testing.T) {
+	// A extends B, B extends A — cycle at depth 1. Both should appear as
+	// direct neighbors; no infinite loop.
+	a := mkConcept("okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "note", extendsFields("okf_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+	b := mkConcept("okf_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "note", extendsFields("okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+	view := memorymeta.BuildTemporalView([]*okf.Concept{a, b})
+
+	res, err := Recall("okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundB := false
+	for _, h := range res.Hits {
+		if h.OKFID == "okf_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Fatalf("B missing from cycle recall: %+v", res.Hits)
+	}
+}
+
+func TestExtendsFork(t *testing.T) {
+	// A extends B and C (fork). Both should be returned.
+	a := mkConcept("okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "note", extendsFields(
+		"okf_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"okf_cccccccccccccccccccccccccccccccc",
+	))
+	b := mkConcept("okf_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "note", nil)
+	c := mkConcept("okf_cccccccccccccccccccccccccccccccc", "note", nil)
+	view := memorymeta.BuildTemporalView([]*okf.Concept{a, b, c})
+
+	res, err := Recall("okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, h := range res.Hits {
+		got[h.OKFID] = true
+	}
+	if !got["okf_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"] || !got["okf_cccccccccccccccccccccccccccccccc"] {
+		t.Fatalf("fork neighbors missing: %+v", res.Hits)
+	}
+}
+
+func TestExtendsDanglingTarget(t *testing.T) {
+	// A extends a non-existent ID. Should not panic; dangling target is skipped.
+	a := mkConcept("okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "note", extendsFields(
+		"okf_dddddddddddddddddddddddddddddddd",
+	))
+	view := memorymeta.BuildTemporalView([]*okf.Concept{a})
+
+	res, err := Recall("okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range res.Hits {
+		if h.OKFID == "okf_dddddddddddddddddddddddddddddddd" {
+			t.Fatal("dangling target leaked into results")
+		}
+	}
+}
+
+func TestDeclinedHidden(t *testing.T) {
+	a := mkConcept("okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "note", nil)
+	d := mkConcept("okf_d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1", "note", map[string]any{
+		"memory_state": "declined",
+	})
+	d.CustomFields["memory_relation"] = map[string]any{
+		"kind":    "extends",
+		"targets": []any{"okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	}
+	view := memorymeta.BuildTemporalView([]*okf.Concept{a, d})
+
+	res, err := Recall("okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range res.Hits {
+		if h.OKFID == "okf_d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1" {
+			t.Fatal("declined D leaked into recall results")
+		}
+	}
+}
