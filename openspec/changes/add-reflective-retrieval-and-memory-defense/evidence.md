@@ -415,3 +415,61 @@ No temporary prompt injection; Codex discovered rules from persisted AGENTS.md.
 - reflect("PostgreSQL") × 2 → stable refs (A + B both times)
 - reflect("...replication") → need_clarify=true (correct abstain)
 - 0 writes, Remove cleanup verified
+
+## Independent closure fresh run (2026-09-29, this agent)
+
+The closing agent re-verified from source (did not trust prior green claims) and
+found the prior "closed" gaps were still fake-green. Real fixes and fresh gates:
+
+### Real defects found and fixed (RED→GREEN)
+1. **TE-05 gate was dead**: `cmdEvalTrap` never set `CaseScore.IsPoison`, so an
+   *approved* doc listed as `forbidden_evidence` could leak into evidence and the
+   CLI still exited 0. Reproduced (`poison_blocked=1.00 EXIT=0` on a leak),
+   fixed (`IsPoison = len(ForbiddenEvidence)>0`), re-verified (`poison_blocked=0.00
+   EXIT=1`).
+2. **TE-05 tests were vacuous**: trap repos were not git repos; Reflect returned
+   NotGitRepository and every case silently abstained. Now `git init`+commit.
+3. **Relation graceful tests were vacuous**: used ignored `extends:` frontmatter
+   instead of the real `memory_relation:{kind,targets}` schema. Rewritten with
+   real relations and asserted hit sets.
+4. **Relation unknown anchor** returned `internal_error`, now typed
+   `memory_ref_not_found` on both CLI and MCP.
+
+### Fresh gates from final code
+| Gate | Result |
+|---|---|
+| go build ./... | PASS |
+| go vet ./... | PASS |
+| gofmt -l pkg/ cmd/ | clean |
+| staticcheck ./... | clean |
+| go test ./... -count=1 | 24 packages ok |
+| go test -race (changed pkgs) | ok |
+| go test -shuffle=on (changed pkgs) | ok |
+| coverage new pkgs | memorydefense 90.8% / relationrecall 94.6% / reflect 96.4% / trapeval 86.6% |
+| fuzz FuzzScreenNeverCrashes 30s | 119,208 execs, 0 crash |
+| go mod verify | all modules verified |
+| secret scan | clean |
+| gauntlet.sh | PASS (whole-repo coverage 72%; 38/38 built-in mutants killed) |
+
+### Hand-targeted mutation (this change set): 9/9 killed
+M1 staging-copy, M2 MCP repoRoot, M3 block severity, M4 trapGate, M5 abstain
+threshold, M6 Remove no-op, M7 IsPoison gate, M8 hit order, M9 W09/W10 — each
+injected RED then restored GREEN.
+
+### Benchmark (10k concepts, fresh)
+- BenchmarkScreen10k: 1.17 ms/op, 715 allocs
+- BenchmarkScreen10kBlock: 0.21 ms/op
+- BenchmarkRecall10k: 0.38 ms/op, 5 allocs
+
+### MCP stdio E2E
+- python3 test_mcp.py: 17/17 pass (Content-Length framing asserted per message).
+
+### Codex persisted-Skill E2E (real, not temp prompt)
+- Codex 0.153.4, gpt-5.6-sol__dev via Xeart Router.
+- `agent apply --client codex --yes` → AGENTS.md(W09/W10) + `.codex/config.toml`
+  `[mcp_servers.okf]`.
+- Codex discovered the MCP server from the persisted config and called
+  okf_status/manifest/reflect/relation_recall/context.
+- relation_recall(A) → self=A + extends=B; final answer cited stable IDs and the
+  `extends` relation. On thin kb reflect returned need_clarify and Codex abstained.
+- 0 durable writes (all envelopes Mutating:false).

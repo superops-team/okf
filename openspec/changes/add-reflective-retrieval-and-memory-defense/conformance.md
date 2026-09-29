@@ -81,3 +81,22 @@
 | Relation self+extends | pkg/relationrecall/recall.go Recall | Codex MCP relation_recall(anchor=A) |
 | Stable refs | deterministic RRF sort | Two identical Codex reflect calls |
 | need_clarify abstain | pkg/reflect/reflect.go threshold | Codex MCP reflect on empty kb |
+
+## Independent re-verification (2026-09-29, closing agent)
+
+The closing agent re-ran every gate from source. Prior "aligned" entries for
+RR-04/TE-05/WI-04 were based on partially-vacuous tests; the following are now
+strict and non-vacuous:
+
+| Scenario | Implementation | Strict test (non-vacuous) | Status |
+|---|---|---|---|
+| TE-05 poison gate (approved leak) | `cmdEvalTrap` sets `IsPoison=len(forbidden)>0` | `TestCmdEvalTrap_ApprovedForbiddenLeak_NonZero` asserts exit 1 on leak | aligned |
+| TE-05 live Reflect | real git repo, `Service.Reflect` per case | all trap tests run against git-backed repo | aligned |
+| TE-05 JSON/human fields | 4 metrics emitted | `TestCmdEvalTrap_JSONOutput_FieldsComplete` + `HumanOutput_FieldsPresent` | aligned |
+| TE-05 empty bundle / missing expected | abstain + 0.5 evidence score | `EmptyBundle_Abstains`, `MissingExpectedEvidence_ScoresHalf` | aligned |
+| RR-04 cycle/fork/dangling | real `memory_relation` schema | graceful test asserts exact hit sets | aligned |
+| RR-04 typed error | `relationErrorTool` maps sentinel | parity asserts CLI==MCP code `memory_ref_not_found` | aligned |
+| WI-04 lifecycle Remove | managed AGENTS.md + config.toml | lifecycle asserts config.toml block present/removed | aligned |
+
+No remaining open gaps. The three FU items (FU-1 RR-04, FU-2 TE-05, FU-3 Agent
+Skill) are closed with strict, non-vacuous evidence.

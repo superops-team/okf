@@ -41,10 +41,14 @@
 ## Known limitations
 - Chinese PII (phone/ID card) not covered by design.
 - Document import path: both MCP `okf_import_document` and CLI `okf add` now run Memory Defense before writing durable markdown. Default disabled; enable via .okf/config.yaml memory_defense.enabled=true. Block rejects the whole batch; redact replaces secrets per-file. Staging directory cleaned up on failure.
-- Trap eval CLI currently scores deterministically; live reflect-in-the-loop scoring is future work.
-- 10k concept latency: benchmarked at 378µs for relation recall, 1.13ms for screen (see evidence.md).
+- Trap eval CLI (`okf eval trap -golden <file> -repo <repo>`) calls live
+  `Service.Reflect` per case; no hardcoded/demo fallback. Exits non-zero when any
+  case declares `forbidden_evidence` that leaks into cited refs.
+- 10k concept latency: benchmarked at 379µs for relation recall, 1.17ms for screen (see evidence.md).
 
 ## Fixes (2026-09-29)
 - **RA-1**: `okf add` with redact policy no longer modifies the user's original .md files. A temp staging copy is screened before import.
 - **RA-2**: MCP `okf_import_document` now correctly reads Memory Defense config from the repo root (was silently disabled).
 - **RB-1**: Added direct test for Service-layer trapGate (proposed poison concepts dropped from Reflect evidence).
+- **IC-1 (closure)**: `okf eval trap` now marks forbidden-declaring cases as poison, so an *approved* doc listed as `forbidden_evidence` that leaks into evidence causes a non-zero exit (previously the gate always reported 1.0).
+- **IC-4 (closure)**: `okf tool relation` on an unknown anchor now returns the typed wire code `memory_ref_not_found` (was `internal_error`), identical over CLI and MCP.

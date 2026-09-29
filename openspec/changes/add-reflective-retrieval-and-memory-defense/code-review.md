@@ -199,3 +199,40 @@ Checks:
 - Agent Skill: W09/W10 render to all 4 backends; managed block markers handled by existing adapter.
 - No new secrets, no new dependencies.
 - No issues requiring fix.
+
+## Review C/D (independent closure, 2026-09-29) — INDEPENDENT RE-VERIFICATION
+
+> This section supersedes the earlier "Review C/D" no-op assessments above. The
+> independent closing agent re-ran everything from source (not trusting prior
+> green claims) and found the prior gaps were only partially closed. Each item
+> below was reproduced as a RED test, then fixed to GREEN.
+
+| # | Severity | File | Issue (RED evidence) | Fix (GREEN) |
+|---|---|---|---|---|
+| IC-1 | **Critical / Security** | cmd/okf/cmd_eval.go `cmdEvalTrap` | The live trap gate was DEAD: `CaseScore.IsPoison` was never set, so `Summarize` counted zero poison cases → `PoisonBlockedOverall` always 1.0 → exit 0 even when an *approved* doc listed as `forbidden_evidence` leaked into evidence. Reproduced: approved forbidden doc cited, `evidence_support_mean=0.00`, yet `poison_blocked=1.00`, EXIT=0. | Set `IsPoison = len(c.ForbiddenEvidence) > 0` on all three score paths. Reproduced after fix: same fixture → `poison_blocked=0.00`, EXIT=1. New strict test `TestCmdEvalTrap_ApprovedForbiddenLeak_NonZero`. |
+| IC-2 | High (fake green) | cmd/okf/cmd_eval_trap_test.go | Trap test repos used `t.TempDir()` WITHOUT `git init`, but `Service.resolve()` requires a git repo. Reflect returned `ErrNotGitRepository` → every case silently degraded to abstain. The whole TE-05 suite was vacuous (gate/abstain/expected-evidence tests all passed for the wrong reason). | `initTrapTestRepo` now does `git init` + commit. All trap tests now exercise real live `Service.Reflect`. |
+| IC-3 | High (fake green) | pkg/tool/relation_graceful_test.go | Cycle/fork/dangling subtests used a bare top-level `extends: [...]` frontmatter key, which the temporal loader silently ignores (only `memory_relation:{kind,targets}` is parsed). Verified empirically: anchor A returned self-only. Cycle/fork/dangling assertions never executed real relations. | Rewrote fixture with correct `memory_relation` schema and asserted actual hit sets (order + edge): `[self=A, extends=B]`, fork `[A,B,C]`, dangling `[D]` only. |
+| IC-4 | Medium (typed error) | pkg/tool/reflect.go `RelationRecall` | Unknown anchor returned wire code `internal_error` instead of the documented typed `memory_ref_not_found` (the wrapped sentinel was not recognized by `failure()`). | Added `relationErrorTool` mapping `errors.Is(err, memorymeta.ErrMemoryRefNotFound)` → `ErrMemoryRefNotFound`. Now parity test asserts CLI==MCP code == `memory_ref_not_found`. |
+| IC-5 | Medium (test strength) | pkg/tool/relation_cli_mcp_parity_test.go | Parity test only compared CLI vs MCP to each other (would pass even if BOTH returned self-only). Did not assert expected neighbor content, warnings, or cover corrupt/empty/typed-error. | Added explicit assertions: hits==`[self=A, extends=B]` with edges; warnings equality; empty-anchor rejected on both transports; corrupt frontmatter does not break either; typed error code equality. |
+| IC-6 | Medium (test strength) | cmd/okf/cmd_eval_trap_test.go | JSON test only checked exit code; `ForbiddenEvidenceLeaks` accepted exit 0 OR 1; no empty-bundle, no missing-expected, no field-completeness checks. | Added stdout capture; strict approved-forbidden→exit1; empty-bundle abstain; missing-expected scores 0.50; JSON parses all 4 fields; human output contains all 4 metrics. |
+| IC-7 | Low (test gap) | pkg/agentconfig/lifecycle_w09_w10_test.go | Post-Remove cleanup only checked AGENTS.md, not the managed `.codex/config.toml` MCP block that Codex actually discovers. | Added Apply-time assertion (managed MCP block + `mcp_servers.okf` present) and Remove-time assertion (block + table removed). This is the mutation that kills M6 (Remove no-op). |
+
+### Mutation re-verification (9/9 killed this round)
+Each mutant was injected, observed RED, then restored to GREEN:
+- M1 staging-copy removed → RED (TestStageForDefensePreservesSource: original modified)
+- M2 repoRoot resolution removed → RED (TestImportDocumentDefenseBlock/Redact)
+- M3 block severity inverted → RED (TestScreenBlockReturnsError)
+- M4 trapGate inverted → RED (TestReflect_TrapGateDropsProposed)
+- M5 abstain `<`→`<=` → RED (TestNoAbstainAtExactThreshold)
+- M6 Remove no-op → RED (lifecycle: managed MCP block remains)
+- M7 IsPoison forced false → RED (TestCmdEvalTrap_ApprovedForbiddenLeak_NonZero: exit 0 on leak)
+- M8 hit order reversed → RED (parity: hit[0] should be self=A)
+- M9 W09/W10 IDs renamed → RED (lifecycle content check across all 3 clients)
+
+### Codex persisted-Skill E2E (real, this round)
+- Codex 0.153.4, model gpt-5.6-sol__dev via Xeart Router.
+- `okf agent apply --client codex --yes` installed AGENTS.md (W09/W10) + `.codex/config.toml` `[mcp_servers.okf]`.
+- With NO temp prompt instructing tool use, Codex discovered the MCP server from the persisted config and called `okf_status/manifest/reflect/relation_recall/context`.
+- relation_recall(A) → self=A + extends=B; final answer cited stable IDs and named the `extends` relation.
+- On thin kb, reflect returned need_clarify=true and Codex abstained rather than fabricating (W09).
+- 0 durable writes (all envelopes Mutating:false).
