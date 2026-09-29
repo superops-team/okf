@@ -391,3 +391,27 @@ Setup: temp workspace, `okf agent apply --client codex --yes` installed AGENTS.m
 
 MCP tool calls by Codex: okf_status=1, okf_reflect=1, okf_relation_recall=1 (total 3).
 No temporary prompt injection; Codex discovered rules from persisted AGENTS.md.
+
+## Final fresh verification (2026-09-29, HEAD=d389818)
+
+| Gate | Result |
+|---|---|
+| gofmt -l | clean |
+| go build ./... | PASS |
+| go vet ./... | PASS |
+| staticcheck ./... | clean |
+| go test ./... -count=1 | 24 packages PASS |
+| go test -race ./... | PASS |
+| go test -shuffle=on ./... | 24 packages PASS |
+| coverage | 72% (gauntlet) |
+| fuzz FuzzScreen | 67,703 execs / 15s, PASS |
+| gauntlet.sh | PASS (72% coverage, 7/7 temporal mutation killed) |
+| BenchmarkScreen10k | 1.52 ms/op, 747 allocs |
+| BenchmarkRecall10k | 0.64 ms/op, 5 allocs |
+
+### Codex persisted-Skill E2E (verified earlier this session)
+- Model: gpt-5.6-sol__dev, Codex 0.153.4
+- relation_recall(A) → A(self) + B(extends) — 2 hits
+- reflect("PostgreSQL") × 2 → stable refs (A + B both times)
+- reflect("...replication") → need_clarify=true (correct abstain)
+- 0 writes, Remove cleanup verified
