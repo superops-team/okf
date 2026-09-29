@@ -291,6 +291,14 @@ func cmdEvalTrap(args []string) int {
 		return 1
 	}
 
+	// isPoison marks a trap case that must not cite any forbidden evidence.
+	// A case is a poison trap iff it declares forbidden_evidence; the gate
+	// (poison_blocked < 1.0 → exit 1) only counts such cases. Without this the
+	// gate is dead: Summarize skips scores with IsPoison=false, so an approved
+	// doc listed as forbidden that leaked into evidence would still yield
+	// poison_blocked=1.0 and exit 0.
+	isPoison := func(c trapeval.Case) bool { return len(c.ForbiddenEvidence) > 0 }
+
 	// Live evaluation: call Service.Reflect for each case.
 	svc := tool.NewService(tool.Config{RepoPath: *repo})
 	var scores []trapeval.CaseScore
@@ -298,8 +306,11 @@ func cmdEvalTrap(args []string) int {
 		resp := svc.Reflect(context.Background(), tool.ReflectRequest{Question: c.Question})
 		if !resp.OK {
 			// Reflect error = no evidence; treat as abstain (no fabricated score).
+			// No evidence cited → forbidden evidence could not leak → blocked.
 			scores = append(scores, trapeval.CaseScore{
 				CaseType:        c.CaseType,
+				IsPoison:        isPoison(c),
+				TrapLeak:        false,
 				AnswerScore:     0,
 				EvidenceScore:   0,
 				AbstentionScore: trapeval.ScoreAbstention(c, true),
@@ -308,7 +319,12 @@ func cmdEvalTrap(args []string) int {
 		}
 		result, ok := resp.Result.(tool.ReflectResult)
 		if !ok {
-			scores = append(scores, trapeval.CaseScore{CaseType: c.CaseType, AbstentionScore: trapeval.ScoreAbstention(c, true)})
+			scores = append(scores, trapeval.CaseScore{
+				CaseType:        c.CaseType,
+				IsPoison:        isPoison(c),
+				TrapLeak:        false,
+				AbstentionScore: trapeval.ScoreAbstention(c, true),
+			})
 			continue
 		}
 		refs := make([]string, 0, len(result.Evidence))
@@ -335,10 +351,11 @@ func cmdEvalTrap(args []string) int {
 		}
 		scores = append(scores, trapeval.CaseScore{
 			CaseType:        c.CaseType,
+			IsPoison:        isPoison(c),
+			TrapLeak:        leak,
 			AnswerScore:     answerScore,
 			EvidenceScore:   trapeval.ScoreEvidence(c, refs, exists),
 			AbstentionScore: trapeval.ScoreAbstention(c, result.NeedClarify),
-			TrapLeak:        leak,
 		})
 	}
 

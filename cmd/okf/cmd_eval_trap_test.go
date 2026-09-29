@@ -1,14 +1,61 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// runTrapCapture runs cmdEvalTrap and captures stdout, returning the exit code
+// and captured output. This lets tests assert on human/JSON field content, not
+// just the exit code.
+func runTrapCapture(t *testing.T, args []string) (int, string) {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	code := cmdEvalTrap(args)
+	_ = w.Close()
+	os.Stdout = old
+	var buf bytes.Buffer
+	if _, err := ioCopy(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	return code, buf.String()
+}
+
+func ioCopy(dst *bytes.Buffer, src *os.File) (int64, error) {
+	b := make([]byte, 4096)
+	for {
+		n, err := src.Read(b)
+		if n > 0 {
+			dst.Write(b[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
+	return int64(dst.Len()), nil
+}
 
 func initTrapTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
+	// Service.resolve() requires a real git repo. Without this, Reflect returns
+	// ErrNotGitRepository and every trap case degrades to abstain — making the
+	// whole suite vacuous (fake green).
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	exec.Command("git", "-C", repo, "config", "user.email", "t@t.com").Run()
+	exec.Command("git", "-C", repo, "config", "user.name", "T").Run()
 	kb := filepath.Join(repo, ".okf", "knowledge")
 	os.MkdirAll(kb, 0o755)
 
@@ -32,6 +79,8 @@ Untrusted proposed PostgreSQL content that should be filtered.
 `
 	os.WriteFile(filepath.Join(kb, "approved.md"), []byte(approved), 0o644)
 	os.WriteFile(filepath.Join(kb, "poison.md"), []byte(proposed), 0o644)
+	exec.Command("git", "-C", repo, "add", "-A").Run()
+	exec.Command("git", "-C", repo, "commit", "-q", "-m", "init").Run()
 	return repo
 }
 
@@ -170,9 +219,12 @@ func TestCmdEvalTrap_JSONOutput(t *testing.T) {
 	}
 }
 
-func TestCmdEvalTrap_ForbiddenEvidenceLeaks(t *testing.T) {
+func TestCmdEvalTrap_ApprovedForbiddenLeak_NonZero(t *testing.T) {
 	repo := initTrapTestRepo(t)
-	kb := repo + "/.okf/knowledge"
+	kb := filepath.Join(repo, ".okf", "knowledge")
+	// An APPROVED doc that the golden set forbids must not be cited. If Reflect
+	// returns it, the gate MUST go non-zero. This is the security assertion the
+	// old dead-gate missed: IsPoison must be derived from forbidden_evidence.
 	forbidden := `---
 okf_id: okf_forbidden_00000000000000000000000001
 title: "PostgreSQL deployment leaked"
@@ -191,10 +243,126 @@ PostgreSQL deployment shared_buffers replication leaked content.
 		}
 	]`
 	p := writeGolden(t, repo, golden)
-	code := cmdEvalTrap([]string{"-golden", p, "-repo", repo})
-	// Either: forbidden not in evidence (exit 0) or leak detected (exit 1).
-	// We only assert it doesn't crash. The poison_blocked metric reflects this.
-	if code != 0 && code != 1 {
-		t.Fatalf("unexpected exit: %d", code)
+	code, out := runTrapCapture(t, []string{"-golden", p, "-repo", repo})
+	if code != 1 {
+		t.Fatalf("approved forbidden doc leaked into evidence -> expected exit 1, got %d (out=%s)", code, out)
+	}
+	if !strings.Contains(out, "poison_blocked=0.00") && !strings.Contains(out, `"poison_blocked":0`) {
+		t.Fatalf("expected poison_blocked=0 on leak, out=%q", out)
+	}
+}
+
+func TestCmdEvalTrap_ProposedPoisonFiltered_Zero(t *testing.T) {
+	repo := initTrapTestRepo(t)
+	// proposed poison is dropped by the trapGate → never cited → blocked → exit 0.
+	golden := `[
+		{
+			"question": "PostgreSQL deployment",
+			"case_type": "single-hop",
+			"expected_evidence": ["okf_approved_0000000000000000000001"],
+			"forbidden_evidence": ["okf_poison_00000000000000000000000001"]
+		}
+	]`
+	p := writeGolden(t, repo, golden)
+	code, out := runTrapCapture(t, []string{"-golden", p, "-repo", repo})
+	if code != 0 {
+		t.Fatalf("proposed poison should be filtered (blocked), expected exit 0, got %d (out=%s)", code, out)
+	}
+	if !strings.Contains(out, "poison_blocked=1.00") {
+		t.Fatalf("expected poison_blocked=1.00 when proposed filtered, out=%q", out)
+	}
+}
+
+func TestCmdEvalTrap_EmptyBundle_Abstains(t *testing.T) {
+	// Empty knowledge bundle (not empty golden): question matches nothing →
+	// Reflect abstains (need_clarify) on an abstain_ok case → rewarded, exit 0.
+	repo := t.TempDir()
+	kb := filepath.Join(repo, ".okf", "knowledge")
+	os.MkdirAll(kb, 0o755)
+	golden := `[
+		{
+			"question": "quantum gravity string theory",
+			"case_type": "abstain",
+			"abstain_ok": true
+		}
+	]`
+	p := writeGolden(t, repo, golden)
+	code, out := runTrapCapture(t, []string{"-golden", p, "-repo", repo})
+	if code != 0 {
+		t.Fatalf("empty bundle + abstain_ok should exit 0, got %d (out=%s)", code, out)
+	}
+	if !strings.Contains(out, "abstain_score=1.00") {
+		t.Fatalf("expected abstain rewarded on empty bundle, out=%q", out)
+	}
+}
+
+func TestCmdEvalTrap_MissingExpectedEvidence_ScoresHalf(t *testing.T) {
+	repo := initTrapTestRepo(t)
+	// Expected evidence exists but question does not surface it → evidence score
+	// must be 0.5 (partial), not fabricated 1.0. No forbidden → no gate fire.
+	golden := `[
+		{
+			"question": "unrelated quantum topic",
+			"case_type": "single-hop",
+			"expected_evidence": ["okf_approved_0000000000000000000001"]
+		}
+	]`
+	p := writeGolden(t, repo, golden)
+	code, out := runTrapCapture(t, []string{"-golden", p, "-repo", repo})
+	if code != 0 {
+		t.Fatalf("no forbidden -> exit 0, got %d (out=%s)", code, out)
+	}
+	if !strings.Contains(out, "evidence_support_mean=0.50") {
+		t.Fatalf("missing expected evidence should score 0.50, out=%q", out)
+	}
+}
+
+func TestCmdEvalTrap_JSONOutput_FieldsComplete(t *testing.T) {
+	repo := initTrapTestRepo(t)
+	golden := `[
+		{
+			"question": "PostgreSQL deployment",
+			"case_type": "single-hop",
+			"expected_evidence": ["okf_approved_0000000000000000000001"],
+			"forbidden_evidence": ["okf_poison_00000000000000000000000001"]
+		}
+	]`
+	p := writeGolden(t, repo, golden)
+	code, out := runTrapCapture(t, []string{"-golden", p, "-repo", repo, "-json"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d (out=%s)", code, out)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &m); err != nil {
+		t.Fatalf("output is not valid JSON: %v (out=%q)", err, out)
+	}
+	for _, field := range []string{"answer_hit_mean", "evidence_support_mean", "abstain_score", "poison_blocked"} {
+		if _, ok := m[field]; !ok {
+			t.Fatalf("JSON missing required field %q; keys=%v", field, m)
+		}
+	}
+	if m["poison_blocked"].(float64) != 1.0 {
+		t.Fatalf("proposed filtered -> poison_blocked=1.0, got %v", m["poison_blocked"])
+	}
+}
+
+func TestCmdEvalTrap_HumanOutput_FieldsPresent(t *testing.T) {
+	repo := initTrapTestRepo(t)
+	golden := `[
+		{
+			"question": "PostgreSQL deployment",
+			"case_type": "single-hop",
+			"expected_evidence": ["okf_approved_0000000000000000000001"]
+		}
+	]`
+	p := writeGolden(t, repo, golden)
+	code, out := runTrapCapture(t, []string{"-golden", p, "-repo", repo})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	for _, want := range []string{"answer_hit_mean=", "evidence_support_mean=", "abstain_score=", "poison_blocked="} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("human output missing %q; out=%q", want, out)
+		}
 	}
 }
