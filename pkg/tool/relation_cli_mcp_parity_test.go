@@ -62,7 +62,7 @@ func TestCLI_MCP_RelationParity(t *testing.T) {
 	exec.Command("git", "-C", repo, "add", "-A").Run()
 	exec.Command("git", "-C", repo, "commit", "-q", "-m", "init").Run()
 
-	// CLI: success (A extends B).
+	// CLI: success (A extends B) — extract hits.
 	cliOut, err := exec.Command(bin, "tool", "relation", "--anchor", idA, "--repo", repo, "--json").CombinedOutput()
 	if err != nil {
 		t.Fatalf("CLI A: %v\n%s", err, cliOut)
@@ -72,11 +72,31 @@ func TestCLI_MCP_RelationParity(t *testing.T) {
 	if cliEnv["ok"] != true {
 		t.Fatalf("CLI A not ok: %s", cliOut)
 	}
+	cliHits := extractHitIDs(t, cliEnv)
+	if len(cliHits) < 1 {
+		t.Fatal("CLI A: expected at least self hit")
+	}
 
-	// MCP: success (A extends B).
-	mcpOut := callMCPRelationRaw(t, bin, repo, idA)
-	if mcpOut["ok"] != true {
-		t.Fatalf("MCP A not ok: %+v", mcpOut)
+	// MCP: success (A extends B) — extract hits.
+	mcpEnv := callMCPRelationEnv(t, bin, repo, idA)
+	if mcpEnv["ok"] != true {
+		t.Fatalf("MCP A not ok: %+v", mcpEnv)
+	}
+	mcpHits := extractHitIDs(t, mcpEnv)
+	if len(mcpHits) < 1 {
+		t.Fatal("MCP A: expected at least self hit")
+	}
+
+	// Compare hit counts.
+	if len(cliHits) != len(mcpHits) {
+		t.Fatalf("hit count mismatch: CLI=%d MCP=%d (CLI=%v MCP=%v)",
+			len(cliHits), len(mcpHits), cliHits, mcpHits)
+	}
+	// Compare hit IDs in order.
+	for i, id := range cliHits {
+		if id != mcpHits[i] {
+			t.Fatalf("hit[%d] mismatch: CLI=%s MCP=%s", i, id, mcpHits[i])
+		}
 	}
 
 	// CLI: unknown anchor → error.
@@ -102,7 +122,28 @@ func TestCLI_MCP_RelationParity(t *testing.T) {
 	}
 }
 
-func callMCPRelationRaw(t *testing.T, bin, repo, anchor string) map[string]any {
+func extractHitIDs(t *testing.T, env map[string]any) []string {
+	t.Helper()
+	result, ok := env["result"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	hits, ok := result["hits"].([]any)
+	if !ok {
+		return nil
+	}
+	var ids []string
+	for _, h := range hits {
+		if hm, ok := h.(map[string]any); ok {
+			if id, ok := hm["okf_id"].(string); ok {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
+func callMCPRelationEnv(t *testing.T, bin, repo, anchor string) map[string]any {
 	t.Helper()
 	proc := exec.Command(bin, "mcp", "--repo", repo)
 	stdin, _ := proc.StdinPipe()
@@ -130,25 +171,26 @@ func callMCPRelationRaw(t *testing.T, bin, repo, anchor string) map[string]any {
 	})
 	resp := readMCPMsg(t, stdout)
 
-	// MCP wraps tool output in result.content[0].text as JSON string.
-	result := map[string]any{"ok": true}
+	// Extract envelope from MCP content.
+	env := map[string]any{"ok": true}
 	if res, ok := resp["result"].(map[string]any); ok {
 		if content, ok := res["content"].([]any); ok {
 			if first, ok := content[0].(map[string]any); ok {
 				if text, ok := first["text"].(string); ok {
-					var env map[string]any
 					json.Unmarshal([]byte(text), &env)
-					if okFlag, _ := env["ok"].(bool); !okFlag {
-						result["ok"] = false
-					}
 				}
 			}
 		}
 	}
 	if _, hasErr := resp["error"]; hasErr {
-		result["ok"] = false
+		env["ok"] = false
 	}
-	return result
+	return env
+}
+
+func callMCPRelationRaw(t *testing.T, bin, repo, anchor string) map[string]any {
+	env := callMCPRelationEnv(t, bin, repo, anchor)
+	return map[string]any{"ok": env["ok"]}
 }
 
 func readMCPMsg(t *testing.T, r io.Reader) map[string]any {
