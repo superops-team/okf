@@ -45,6 +45,11 @@ func writeParityConcept(t *testing.T, kb, id, title, state, extends string) {
 	os.WriteFile(filepath.Join(kb, id+".md"), []byte(content), 0o644)
 }
 
+const extendsRelation = `memory_relation:
+  kind: extends
+  targets:
+    - `
+
 // TestCLI_MCP_RelationParity verifies real CLI subprocess vs MCP stdio subprocess
 // return equivalent results for relation recall.
 func TestCLI_MCP_RelationParity(t *testing.T) {
@@ -56,9 +61,9 @@ func TestCLI_MCP_RelationParity(t *testing.T) {
 	kb := filepath.Join(repo, ".okf", "knowledge")
 	os.MkdirAll(kb, 0o755)
 
-	writeParityConcept(t, kb, idA, "A", "approved", "extends: ["+idB+"]\n")
+	writeParityConcept(t, kb, idA, "A", "approved", extendsRelation+idB+"\n")
 	writeParityConcept(t, kb, idB, "B", "approved", "")
-	writeParityConcept(t, kb, idD, "D", "approved", "extends: [okf_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee]\n")
+	writeParityConcept(t, kb, idD, "D", "approved", extendsRelation+"okf_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n")
 	exec.Command("git", "-C", repo, "add", "-A").Run()
 	exec.Command("git", "-C", repo, "commit", "-q", "-m", "init").Run()
 
