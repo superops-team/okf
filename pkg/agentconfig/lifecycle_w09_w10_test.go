@@ -52,6 +52,24 @@ func TestLifecycle_W09W10_Strict(t *testing.T) {
 			}
 			content = string(b)
 
+			// 3b. Codex must also install the managed MCP block in
+			// .codex/config.toml (not just AGENTS.md). This is how Codex
+			// discovers the okf MCP server for persisted-skill E2E.
+			if client == "codex" {
+				tomlPath := filepath.Join(root, ".codex", "config.toml")
+				tb, err := os.ReadFile(tomlPath)
+				if err != nil {
+					t.Fatalf("read %s after Apply: %v", tomlPath, err)
+				}
+				tomlContent := string(tb)
+				if !strings.Contains(tomlContent, "BEGIN OKF MANAGED MCP v1") {
+					t.Errorf("codex: .codex/config.toml missing managed MCP block:\n%s", tomlContent)
+				}
+				if !strings.Contains(tomlContent, "mcp_servers.okf") {
+					t.Errorf("codex: .codex/config.toml missing mcp_servers.okf:\n%s", tomlContent)
+				}
+			}
+
 			// 3. Strict W09/W10 content + semantics.
 			semanticChecks := map[string]string{
 				"W09":                 "W09",
@@ -118,6 +136,13 @@ func TestLifecycle_W09W10_Strict(t *testing.T) {
 				}
 				if strings.Contains(after, "OKF MANAGED") {
 					t.Errorf("codex: OKF MANAGED markers must be removed")
+				}
+				// Managed MCP block must also be removed from .codex/config.toml.
+				tomlPath := filepath.Join(root, ".codex", "config.toml")
+				if tb, err := os.ReadFile(tomlPath); err == nil {
+					if strings.Contains(string(tb), "OKF MANAGED MCP") || strings.Contains(string(tb), "mcp_servers.okf") {
+						t.Errorf("codex: managed MCP block must be removed from .codex/config.toml:\n%s", string(tb))
+					}
 				}
 				// User content preserved.
 				if !strings.Contains(after, "My custom rules") {
