@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -95,18 +96,42 @@ func TestCLI_MCP_RelationParity(t *testing.T) {
 	// Compare full hit structures.
 	compareHits(t, "A", cliHits, mcpHits)
 
-	// CLI: unknown anchor → error.
+	// Assert EXPECTED content (not just CLI==MCP): self(A) then extends(B),
+	// in deterministic order with correct edge labels.
+	if len(cliHits) != 2 {
+		t.Fatalf("CLI A: expected 2 hits [self,extends], got %+v", cliHits)
+	}
+	if cliHits[0].OKFID != idA || cliHits[0].Edge != "self" {
+		t.Fatalf("CLI A hit[0] = %+v, want self=A", cliHits[0])
+	}
+	if cliHits[1].OKFID != idB || cliHits[1].Edge != "extends" {
+		t.Fatalf("CLI A hit[1] = %+v, want extends=B", cliHits[1])
+	}
+	// Warnings must be equivalent (empty in this clean fixture).
+	if warningsOf(cliEnv) != warningsOf(mcpEnv) {
+		t.Fatalf("warnings mismatch CLI=%v MCP=%v", warningsOf(cliEnv), warningsOf(mcpEnv))
+	}
+
+	// CLI: unknown anchor → typed error code.
 	cliUnknown, _ := exec.Command(bin, "tool", "relation", "--anchor", idZ, "--repo", repo, "--json").CombinedOutput()
 	var cliUnknownEnv map[string]any
 	json.Unmarshal(cliUnknown, &cliUnknownEnv)
 	if cliUnknownEnv["ok"] == true {
 		t.Fatal("CLI unknown anchor should error")
 	}
+	cliErrCode := errorCodeOf(t, cliUnknownEnv)
+	if cliErrCode != "memory_ref_not_found" {
+		t.Fatalf("CLI unknown anchor code = %q, want memory_ref_not_found", cliErrCode)
+	}
 
-	// MCP: unknown anchor → error.
-	mcpUnknown := callMCPRelationRaw(t, bin, repo, idZ)
-	if mcpUnknown["ok"] == true {
+	// MCP: unknown anchor → same typed error code.
+	mcpUnknownEnv := callMCPRelationEnv(t, bin, repo, idZ)
+	if mcpUnknownEnv["ok"] == true {
 		t.Fatal("MCP unknown anchor should error")
+	}
+	mcpErrCode := errorCodeOf(t, mcpUnknownEnv)
+	if mcpErrCode != cliErrCode {
+		t.Fatalf("typed error mismatch CLI=%q MCP=%q", cliErrCode, mcpErrCode)
 	}
 
 	// CLI: dangling → ok (no panic).
@@ -125,6 +150,58 @@ func TestCLI_MCP_RelationParity(t *testing.T) {
 
 	// Compare dangling hits (should both return self only).
 	compareHits(t, "dangling", extractHits(t, cliDanglingEnv), extractHits(t, mcpDanglingEnv))
+
+	// Empty anchor: both CLI and MCP must reject, never panic.
+	cliEmpty, _ := exec.Command(bin, "tool", "relation", "--anchor", "", "--repo", repo, "--json").CombinedOutput()
+	var cliEmptyEnv map[string]any
+	json.Unmarshal(cliEmpty, &cliEmptyEnv)
+	if cliEmptyEnv["ok"] == true {
+		t.Fatalf("CLI empty anchor should error: %s", cliEmpty)
+	}
+	mcpEmpty := callMCPRelationEnv(t, bin, repo, "")
+	if mcpEmpty["ok"] == true {
+		t.Fatal("MCP empty anchor should error")
+	}
+
+	// Corrupted frontmatter: a broken .md in the bundle must not break either
+	// the CLI or the MCP subprocess recall for a valid anchor.
+	broken := "---\nokf_id: " + idZ + "\ntitle: \"Broken\"\nunclosed: [\n---\n# Broken\nBody.\n"
+	os.WriteFile(filepath.Join(kb, idZ+".md"), []byte(broken), 0o644)
+	exec.Command("git", "-C", repo, "add", "-A").Run()
+	exec.Command("git", "-C", repo, "commit", "-q", "-m", "broken").Run()
+
+	cliCorrupt, _ := exec.Command(bin, "tool", "relation", "--anchor", idA, "--repo", repo, "--json").CombinedOutput()
+	var cliCorruptEnv map[string]any
+	json.Unmarshal(cliCorrupt, &cliCorruptEnv)
+	if cliCorruptEnv["ok"] != true {
+		t.Fatalf("CLI recall after corrupt frontmatter should not break: %s", cliCorrupt)
+	}
+	mcpCorrupt := callMCPRelationEnv(t, bin, repo, idA)
+	if mcpCorrupt["ok"] != true {
+		t.Fatalf("MCP recall after corrupt frontmatter should not break: %+v", mcpCorrupt)
+	}
+	compareHits(t, "corrupt", extractHits(t, cliCorruptEnv), extractHits(t, mcpCorrupt))
+}
+
+// warningsOf extracts the envelope warnings slice as a comparable string.
+func warningsOf(env map[string]any) string {
+	w, _ := env["warnings"].([]any)
+	parts := make([]string, 0, len(w))
+	for _, item := range w {
+		parts = append(parts, fmt.Sprint(item))
+	}
+	return strings.Join(parts, "|")
+}
+
+// errorCodeOf extracts the typed error.code from a failed envelope.
+func errorCodeOf(t *testing.T, env map[string]any) string {
+	t.Helper()
+	e, ok := env["error"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	code, _ := e["code"].(string)
+	return code
 }
 
 // hitStruct represents a relation hit for comparison.
@@ -226,11 +303,6 @@ func callMCPRelationEnv(t *testing.T, bin, repo, anchor string) map[string]any {
 		env["ok"] = false
 	}
 	return env
-}
-
-func callMCPRelationRaw(t *testing.T, bin, repo, anchor string) map[string]any {
-	env := callMCPRelationEnv(t, bin, repo, anchor)
-	return map[string]any{"ok": env["ok"]}
 }
 
 func readMCPMsg(t *testing.T, r io.Reader) map[string]any {

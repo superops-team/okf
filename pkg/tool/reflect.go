@@ -2,6 +2,7 @@ package tool
 
 import (
 	stdctx "context"
+	"errors"
 	"strings"
 
 	"github.com/superops-team/okf/pkg/memorymeta"
@@ -128,7 +129,10 @@ func (s *Service) RelationRecall(ctx stdctx.Context, req RelationRecallRequest) 
 	view := memorymeta.BuildTemporalView(bundle.Concepts)
 	result, err := relationrecall.Recall(req.Anchor, view)
 	if err != nil {
-		return failure(OperationRelationRecall, resolved.repoRoot, resolved.knowledgeDir, freshness, err)
+		// Map the recall error to a stable wire code instead of a generic
+		// internal_error, so CLI and MCP clients get a typed memory_ref_not_found.
+		return failure(OperationRelationRecall, resolved.repoRoot, resolved.knowledgeDir, freshness,
+			relationErrorTool(err))
 	}
 	return ToolEnvelope{
 		SchemaVersion: SchemaVersion,
@@ -141,4 +145,15 @@ func (s *Service) RelationRecall(ctx stdctx.Context, req RelationRecallRequest) 
 		Warnings:      []string{},
 		Result:        result,
 	}
+}
+
+// relationErrorTool maps a relation-recall failure to a stable wire code. Only
+// the anchor-not-found case is expected in practice; everything else stays a
+// generic internal_error via the toolError default.
+func relationErrorTool(err error) error {
+	if errors.Is(err, memorymeta.ErrMemoryRefNotFound) {
+		return toolError{code: ErrMemoryRefNotFound, message: err.Error(),
+			remediation: "Pass a stable okf_id that exists in the bundle."}
+	}
+	return err
 }
