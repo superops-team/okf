@@ -369,3 +369,25 @@ Durable writes: disabled=1, redact=1, block=0。
 - RR-04: corrupted_frontmatter_graceful subtest added (6 total: unknown/cycle/fork/dangling/empty/corrupted)
 - Agent Skill: Plan/Apply/Status/Remove verified in pkg/agentconfig/service.go; W09/W10 rendered to Cursor/Claude/Codex
 - Fresh: gofmt/build/vet/staticcheck pass; 27 packages test/race/shuffle pass; gauntlet PASS 72%
+
+## Codex persisted-Skill E2E (2026-09-29, HEAD=fe06269)
+
+Setup: temp workspace, `okf agent apply --client codex --yes` installed AGENTS.md (W01-W10 visible) + .codex/config.toml MCP entry.
+
+| Step | Result |
+|---|---|
+| AGENTS.md contains W09/W10 | yes (verified in installed file) |
+| .codex/config.toml mcp_servers.okf | yes |
+| Codex model | gpt-5.6-sol__dev via Xeart Router |
+| Codex version | 0.153.4 |
+| Codex called okf_status | yes (MCP tool call) |
+| Codex called okf_reflect("PostgreSQL deployment") | yes |
+| Evidence found | okf_postgres_001 |
+| need_clarify | true (correct abstention per W09) |
+| Codex called okf_relation_recall(okf_postgres_001) | yes |
+| Relation result | memory_ref_not_found (typed error, no panic) |
+| Writes made | 0 |
+| Agent Remove | AGENTS.md cleaned, .codex/config.toml cleaned |
+
+MCP tool calls by Codex: okf_status=1, okf_reflect=1, okf_relation_recall=1 (total 3).
+No temporary prompt injection; Codex discovered rules from persisted AGENTS.md.
