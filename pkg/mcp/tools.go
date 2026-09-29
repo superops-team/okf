@@ -15,6 +15,8 @@ import (
 	"github.com/superops-team/okf/pkg/embeddings"
 	"github.com/superops-team/okf/pkg/identity"
 	"github.com/superops-team/okf/pkg/lint"
+	"github.com/superops-team/okf/pkg/memorydefense"
+	"github.com/superops-team/okf/pkg/memorymeta"
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/parser"
 	"github.com/superops-team/okf/pkg/query"
@@ -27,12 +29,13 @@ type ToolHandler func(args map[string]interface{}) (*ToolCallResult, error)
 
 // ToolRegistry manages MCP tools and their handlers.
 type ToolRegistry struct {
-	mu         sync.RWMutex
-	tools      map[string]Tool
-	handlers   map[string]ToolHandler
-	bundle     *okf.KnowledgeBundle
-	bundlePath string
-	service    *toolsvc.Service
+	mu                 sync.RWMutex
+	tools              map[string]Tool
+	handlers           map[string]ToolHandler
+	bundle             *okf.KnowledgeBundle
+	bundlePath         string
+	service            *toolsvc.Service
+	importDefenseNotes []string
 }
 
 // NewToolRegistry creates a registry with the legacy bundle-facing tools.
@@ -296,6 +299,9 @@ func (r *ToolRegistry) registerAgentTools() {
 	numberProperty := func(description string) map[string]interface{} {
 		return map[string]interface{}{"type": "number", "description": description}
 	}
+	enumProperty := func(description string, values ...string) map[string]interface{} {
+		return map[string]interface{}{"type": "string", "description": description, "enum": values}
+	}
 	arrayProperty := func(description string) map[string]interface{} {
 		return map[string]interface{}{
 			"type":        "array",
@@ -348,6 +354,9 @@ func (r *ToolRegistry) registerAgentTools() {
 		"include_group_members": booleanProperty("When grouping, include each group's member list"),
 		"memory_check":          booleanProperty("Read-only duplicate check against durable note/event/feedback concepts; returns a dedicated memory_check envelope and skips normal ranking"),
 		"dup_threshold":         numberProperty("Jaccard threshold for memory_check (default 0.20)"),
+		"memory_view":           enumProperty("Temporal memory view: current (default, approved heads only), all (every state with annotations), or history (chain for refs)", "current", "all", "history"),
+		"refs":                  arrayProperty("Stable refs (okf_id or okf://concept/<id>); exactly one entry, only valid with memory_view=history"),
+		"memory_review_queue":   booleanProperty("List body-free proposed durable concepts for review; requires empty query and forbids refs/memory_view=history"),
 	}
 	r.Register(readOnlyAgentTool(
 		"okf_query",
@@ -365,6 +374,7 @@ func (r *ToolRegistry) registerAgentTools() {
 			"include_relations": booleanProperty("Include related concepts"),
 			"include_trace":     booleanProperty("Include deterministic context trace"),
 			"refs":              arrayProperty("One or more stable refs (okf_id or okf://concept/<id>) whose concept bodies are included; query or refs at least one required"),
+			"memory_view":       enumProperty("Temporal memory view for context: current (default) or all (history is not valid here)", "current", "all"),
 		}),
 	), func(args map[string]interface{}) (*ToolCallResult, error) {
 		query, _ := args["query"].(string)
@@ -374,6 +384,7 @@ func (r *ToolRegistry) registerAgentTools() {
 			IncludeRelations: boolArg(args, "include_relations"),
 			IncludeTrace:     boolArg(args, "include_trace"),
 			Refs:             stringSliceArg(args, "refs"),
+			MemoryView:       stringArg(args, "memory_view"),
 		}))
 	})
 	r.Register(readOnlyAgentTool(
@@ -408,11 +419,16 @@ func (r *ToolRegistry) registerAgentTools() {
 		return serviceEnvelopeResult(r.service.Manifest(context.Background(), manifestRequestFromArgs(args)))
 	})
 	writeProperties := map[string]interface{}{
-		"content":         stringProperty("Knowledge content to persist"),
-		"project":         stringProperty("Optional project isolation key"),
-		"tags":            arrayProperty("Optional normalized tags"),
-		"metadata":        objectProperty("Optional small JSON metadata"),
-		"idempotency_key": stringProperty("Required stable idempotency key"),
+		"content":                 stringProperty("Knowledge content to persist"),
+		"project":                 stringProperty("Optional project isolation key"),
+		"tags":                    arrayProperty("Optional normalized tags"),
+		"metadata":                objectProperty("Optional small JSON metadata"),
+		"idempotency_key":         stringProperty("Required stable idempotency key"),
+		"evidence_refs":           arrayProperty("Evidence refs (okf_id or okf://concept/<id>) supporting this write; required for a proposed write"),
+		"memory_state":            enumProperty("Temporal memory state: approved (default) or proposed", "approved", "proposed"),
+		"memory_confidence":       numberProperty("Proposal confidence in [0,1]; only meaningful (and required) when memory_state is proposed"),
+		"memory_relation_kind":    enumProperty("Temporal relation kind: updates (exactly 1 target) or extends (1-8 targets)", "updates", "extends"),
+		"memory_relation_targets": arrayProperty("Stable ids this write updates or extends (okf_id or okf://concept/<id>)"),
 	}
 	for _, definition := range []struct {
 		name        string
@@ -431,10 +447,11 @@ func (r *ToolRegistry) registerAgentTools() {
 			if invalid := validateWriteArgs(
 				args,
 				[]string{"content", "idempotency_key"},
-				[]string{"project"},
-				[]string{"tags"},
+				[]string{"project", "memory_state", "memory_relation_kind"},
+				[]string{"tags", "evidence_refs", "memory_relation_targets"},
 				[]string{"metadata"},
 				"content", "project", "tags", "metadata", "idempotency_key",
+				"evidence_refs", "memory_state", "memory_confidence", "memory_relation_kind", "memory_relation_targets",
 			); invalid != nil {
 				return serviceEnvelopeResult(*invalid)
 			}
@@ -445,22 +462,27 @@ func (r *ToolRegistry) registerAgentTools() {
 		"okf_feedback",
 		"Persist an explicit reusable feedback principle and evidence",
 		objectSchema(map[string]interface{}{
-			"principle":       stringProperty("Reusable principle to persist"),
-			"category":        stringProperty("Feedback category"),
-			"project":         stringProperty("Optional project isolation key"),
-			"tags":            arrayProperty("Optional normalized tags"),
-			"metadata":        objectProperty("Optional small JSON metadata"),
-			"evidence_refs":   arrayProperty("Evidence references supporting the principle"),
-			"idempotency_key": stringProperty("Required stable idempotency key"),
+			"principle":               stringProperty("Reusable principle to persist"),
+			"category":                stringProperty("Feedback category"),
+			"project":                 stringProperty("Optional project isolation key"),
+			"tags":                    arrayProperty("Optional normalized tags"),
+			"metadata":                objectProperty("Optional small JSON metadata"),
+			"evidence_refs":           arrayProperty("Evidence references supporting the principle; required for a proposed write"),
+			"idempotency_key":         stringProperty("Required stable idempotency key"),
+			"memory_state":            enumProperty("Temporal memory state: approved (default) or proposed", "approved", "proposed"),
+			"memory_confidence":       numberProperty("Proposal confidence in [0,1]; only meaningful (and required) when memory_state is proposed"),
+			"memory_relation_kind":    enumProperty("Temporal relation kind: updates (exactly 1 target) or extends (1-8 targets)", "updates", "extends"),
+			"memory_relation_targets": arrayProperty("Stable ids this feedback updates or extends (okf_id or okf://concept/<id>)"),
 		}, "principle", "category", "idempotency_key"),
 	), func(args map[string]interface{}) (*ToolCallResult, error) {
 		if invalid := validateWriteArgs(
 			args,
 			[]string{"principle", "category", "idempotency_key"},
-			[]string{"project"},
-			[]string{"tags", "evidence_refs"},
+			[]string{"project", "memory_state", "memory_relation_kind"},
+			[]string{"tags", "evidence_refs", "memory_relation_targets"},
 			[]string{"metadata"},
 			"principle", "category", "project", "tags", "metadata", "evidence_refs", "idempotency_key",
+			"memory_state", "memory_confidence", "memory_relation_kind", "memory_relation_targets",
 		); invalid != nil {
 			return serviceEnvelopeResult(*invalid)
 		}
@@ -488,6 +510,67 @@ func (r *ToolRegistry) registerAgentTools() {
 		request := queryRequestFromArgs(args)
 		request.Types = []string{"note", "event", "feedback"}
 		return serviceEnvelopeResult(r.service.Query(context.Background(), request))
+	})
+	// okf_memory_review (S37/S38): a compare-and-swap state transition on one
+	// durable concept. It mutates durable memory, is non-idempotent (a second
+	// call after the state advanced fails the CAS guard), and is destructive in
+	// the sense that it changes the effective memory state, so it is flagged
+	// mutating + destructive + non-idempotent per design §8.2.
+	r.Register(Tool{
+		Name:        "okf_memory_review",
+		Description: "Approve, decline, or undo a proposed durable concept's temporal state (compare-and-swap on expected_state)",
+		InputSchema: objectSchema(map[string]interface{}{
+			"ref":            stringProperty("Stable ref (okf_id or okf://concept/<id>) of the durable concept to review"),
+			"action":         enumProperty("Review action", "approve", "decline", "undo"),
+			"expected_state": stringProperty("CAS guard: the state the concept must currently be in (e.g. proposed)"),
+		}, "ref", "action", "expected_state"),
+		Annotations: &ToolAnnotations{DestructiveHint: true},
+	}, func(args map[string]interface{}) (*ToolCallResult, error) {
+		allowed := []string{"ref", "action", "expected_state"}
+		if invalid := rejectUnknownArgs(args, allowed...); invalid != nil {
+			return serviceEnvelopeResult(*invalid)
+		}
+		for _, key := range allowed {
+			value, _ := args[key].(string)
+			if strings.TrimSpace(value) == "" {
+				return serviceEnvelopeResult(*invalidWriteArgs(key + " must be a non-empty string"))
+			}
+		}
+		return serviceEnvelopeResult(r.service.ReviewMemory(context.Background(), toolsvc.ReviewMemoryRequest{
+			Ref:           stringArg(args, "ref"),
+			Action:        stringArg(args, "action"),
+			ExpectedState: stringArg(args, "expected_state"),
+		}))
+	})
+
+	// okf_reflect: bounded multi-round reflective retrieval (read-only).
+	r.Register(readOnlyAgentTool(
+		"okf_reflect",
+		"Bounded multi-round reflective retrieval: round 1 lexical/semantic, round 2 relation expansion, RRF fusion, abstain when evidence is thin",
+		objectSchema(map[string]interface{}{
+			"question":     stringProperty("Non-empty question to reflect on"),
+			"min_evidence": integerProperty("Minimum evidence count before need_clarify (default 2)"),
+			"max_rounds":   integerProperty("Maximum rounds, hard cap 3 (default 2)"),
+		}, "question"),
+	), func(args map[string]interface{}) (*ToolCallResult, error) {
+		return serviceEnvelopeResult(r.service.Reflect(context.Background(), toolsvc.ReflectRequest{
+			Question:    stringArg(args, "question"),
+			MinEvidence: intArg(args, "min_evidence"),
+			MaxRounds:   intArg(args, "max_rounds"),
+		}))
+	})
+
+	// okf_relation_recall: bidirectional extends neighbors + updates chain.
+	r.Register(readOnlyAgentTool(
+		"okf_relation_recall",
+		"Recall approved extends neighbors (bidirectional) and the updates-chain head for an anchor okf_id",
+		objectSchema(map[string]interface{}{
+			"anchor": stringProperty("Stable okf_id or okf://concept/<id> anchor"),
+		}, "anchor"),
+	), func(args map[string]interface{}) (*ToolCallResult, error) {
+		return serviceEnvelopeResult(r.service.RelationRecall(context.Background(), toolsvc.RelationRecallRequest{
+			Anchor: stringArg(args, "anchor"),
+		}))
 	})
 }
 
@@ -552,6 +635,9 @@ func queryRequestFromArgs(args map[string]interface{}) toolsvc.QueryRequest {
 		IncludeGroupMembers: boolArg(args, "include_group_members"),
 		MemoryCheck:         boolArg(args, "memory_check"),
 		DupThreshold:        floatArg(args, "dup_threshold"),
+		MemoryView:          stringArg(args, "memory_view"),
+		Refs:                stringSliceArg(args, "refs"),
+		MemoryReviewQueue:   boolArg(args, "memory_review_queue"),
 	}
 }
 
@@ -640,14 +726,27 @@ func writeRequestFromArgs(kind string, args map[string]interface{}) toolsvc.Writ
 	content, _ := args["content"].(string)
 	project, _ := args["project"].(string)
 	idempotencyKey, _ := args["idempotency_key"].(string)
-	return toolsvc.WriteKnowledgeRequest{
-		Kind:           kind,
-		Content:        content,
-		Project:        project,
-		Tags:           stringSliceArg(args, "tags"),
-		Metadata:       mapArg(args, "metadata"),
-		IdempotencyKey: idempotencyKey,
+	req := toolsvc.WriteKnowledgeRequest{
+		Kind:                  kind,
+		Content:               content,
+		Project:               project,
+		Tags:                  stringSliceArg(args, "tags"),
+		Metadata:              mapArg(args, "metadata"),
+		IdempotencyKey:        idempotencyKey,
+		EvidenceRefs:          stringSliceArg(args, "evidence_refs"),
+		MemoryState:           stringArg(args, "memory_state"),
+		MemoryRelationKind:    stringArg(args, "memory_relation_kind"),
+		MemoryRelationTargets: stringSliceArg(args, "memory_relation_targets"),
 	}
+	// memory_confidence is a *float64: absent must stay nil so legacy writes keep
+	// their byte-exact serialization. A non-numeric value is left nil; the service
+	// rejects an absent confidence on a proposed write itself.
+	if raw, present := args["memory_confidence"]; present {
+		if conf, ok := raw.(float64); ok {
+			req.MemoryConfidence = &conf
+		}
+	}
+	return req
 }
 
 func stringSliceArg(args map[string]interface{}, key string) []string {
@@ -1097,6 +1196,31 @@ func (r *ToolRegistry) handleImportDocument(args map[string]interface{}) (*ToolC
 	if err != nil {
 		return errorResult(fmt.Sprintf("Failed to convert document: %v", err)), nil
 	}
+	// Memory Defense: screen converted content before writing to durable storage.
+	// bundlePath is the knowledge dir (e.g. <repo>/.okf/knowledge); LoadPolicy
+	// expects the repo root (parent of .okf).
+	repoRoot := bundlePath
+	if filepath.Base(repoRoot) == "knowledge" {
+		repoRoot = filepath.Dir(repoRoot)
+	} else if filepath.Base(repoRoot) == ".okf" {
+		repoRoot = filepath.Dir(repoRoot)
+	}
+	pol, polErr := memorydefense.LoadPolicy(repoRoot)
+	if polErr != nil {
+		return errorResult(fmt.Sprintf("memory_defense config: %v", polErr)), nil
+	}
+	screenedMD, defenseHits, screenErr := memorydefense.Screen(res.Markdown, pol)
+	if screenErr != nil {
+		return errorResult(fmt.Sprintf("memory_defense blocked import: %v", screenErr)), nil
+	}
+	res.Markdown = screenedMD
+	if len(defenseHits) > 0 {
+		var ids []string
+		for _, h := range defenseHits {
+			ids = append(ids, h.DetectorID)
+		}
+		r.importDefenseNotes = append(r.importDefenseNotes, fmt.Sprintf("redacted: %s", strings.Join(ids, ",")))
+	}
 	title := res.Title
 	if titleOverride != "" {
 		title = titleOverride
@@ -1152,6 +1276,10 @@ func (r *ToolRegistry) handleImportDocument(args map[string]interface{}) (*ToolC
 	} else {
 		sb.WriteString("Warnings: 0\n")
 	}
+	for _, note := range r.importDefenseNotes {
+		sb.WriteString(fmt.Sprintf("Memory defense: %s\n", note))
+	}
+	r.importDefenseNotes = nil
 	return &ToolCallResult{Content: []ContentItem{TextContent(sb.String())}}, nil
 }
 
@@ -1195,8 +1323,56 @@ func toLintConcepts(concepts []*okf.Concept) []*lint.Concept {
 			result[i].GeneratedBy = c.Generated.By
 			result[i].GeneratedAt = c.Generated.At
 		}
+		// Additive temporal projection (S06/T3.3). Nil when the concept carries
+		// no memory_* fields, preserving legacy-bundle parity.
+		result[i].OKFID = identity.FromConcept(c).ID
+		result[i].Project = mcpEffectiveProject(c)
+		result[i].Temporal = mcpBuildLintTemporal(c)
 	}
 	return result
+}
+
+// mcpEffectiveProject mirrors memorymeta.effectiveProject.
+func mcpEffectiveProject(c *okf.Concept) string {
+	if c == nil || c.CustomFields == nil {
+		return ""
+	}
+	if v, ok := c.CustomFields["project"].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// mcpBuildLintTemporal projects memorymeta's parsed temporal metadata onto the
+// additive lint.TemporalInfo. Nil when no memory_* field is present.
+func mcpBuildLintTemporal(c *okf.Concept) *lint.TemporalInfo {
+	if c == nil || c.CustomFields == nil {
+		return nil
+	}
+	_, hasState := c.CustomFields["memory_state"]
+	_, hasConf := c.CustomFields["memory_confidence"]
+	_, hasRel := c.CustomFields["memory_relation"]
+	_, hasReview := c.CustomFields["memory_review"]
+	if !hasState && !hasConf && !hasRel && !hasReview {
+		return nil
+	}
+
+	state, stateWarn := memorymeta.State(c)
+	rel, relWarn := memorymeta.Relation(c)
+	conf, hasConfVal, confWarn := memorymeta.Confidence(c)
+
+	return &lint.TemporalInfo{
+		HasTemporal:     true,
+		State:           string(state),
+		StateWarn:       stateWarn,
+		Confidence:      conf,
+		HasConfidence:   hasConfVal,
+		ConfidenceWarn:  confWarn,
+		RelationKind:    string(rel.Kind),
+		RelationTargets: rel.Targets,
+		RelationWarn:    relWarn,
+		HasReviewRecord: hasReview,
+	}
 }
 
 // targetFile 是一次原子提交中的单个目标文件。

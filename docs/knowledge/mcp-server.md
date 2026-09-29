@@ -40,6 +40,7 @@ okf mcp --repo /path/to/repository --dir .okf/knowledge
 | `okf_log` | Yes | Persist an explicit durable `event` concept |
 | `okf_feedback` | Yes | Persist an explicit reusable feedback `principle`, `category`, and `evidence_refs` |
 | `okf_ask` | No | Query only `note`, `event`, and `feedback` through the shared query service |
+| `okf_memory_review` | Yes | Compare-and-set approve/decline/undo of one `proposed` durable concept |
 
 Read-only tools advertise read-only, idempotent, closed-world MCP annotations.
 Mutating tools advertise mutating, non-destructive, idempotent, closed-world annotations.
@@ -78,6 +79,34 @@ An uninitialized repository returns `knowledge_not_initialized`; `okf_status` do
 
 All MCP/JSON fields use underscores; the equivalent CLI flags use hyphens (`--for-path`, `--max-tokens`, `--stale-refs`, `--memory-check`, `--dup-threshold`, `--refs`).
 
+### Temporal memory parameters
+
+Temporal memory tracks how durable knowledge evolves. Currentness is computed on demand from approved `updates` edges over stable `okf_id`s; there is no graph database, second index, or cache.
+
+`okf_query` accepts these additional fields (all optional):
+
+- `memory_view` (string): `current` (default; hides historical/proposed/declined durable memories once temporal metadata exists) | `all` (explicit audit view, adds temporal annotations, never bodies) | `history`.
+- `refs` (string array): with `memory_view=history`, exactly one stable ref; returns the ordered update chain in a dedicated history envelope. Forbidden in other query modes.
+- `memory_review_queue` (boolean): list body-free `proposed` durable concepts ordered by confidence desc, then created asc, then `okf_id` asc (limit default 20, max 100). Requires empty `query` and forbids `refs`/history.
+
+`okf_context` accepts:
+
+- `memory_view` (string): `current` (default) | `all`. `history` is rejected here (history has its own `okf_query` mode). Explicitly requested refs to historical/proposed/declined items are still returned and annotated with `memory_state`/`memory_current` rather than hidden.
+
+The three durable write tools (`okf_note`, `okf_log`, `okf_feedback`) additionally accept:
+
+- `memory_state` (string): `approved` (default) | `proposed`.
+- `memory_confidence` (number, optional): required for `proposed`, finite in `[0,1]`; omitted for approved writes.
+- `memory_relation_kind` (string): `updates` | `extends`.
+- `memory_relation_targets` (string array): stable `okf_id` targets; `updates` takes exactly one, `extends` 1–8.
+- `evidence_refs` (string array): supporting evidence; required for `proposed` writes. Now exposed on all three durable write tools.
+
+New tool `okf_memory_review` (mutating/destructive/non-idempotent) accepts:
+
+- `ref` (string, required): stable ref of one durable (`note`/`event`/`feedback`) concept.
+- `action` (string, required): `approve` | `decline` | `undo`.
+- `expected_state` (string, required): compare-and-set guard; a mismatch returns `memory_state_conflict` and writes nothing.
+
 ### Durable writes and idempotency
 
 `okf_note` and `okf_log` accept:
@@ -88,7 +117,7 @@ All MCP/JSON fields use underscores; the equivalent CLI flags use hyphens (`--fo
 - `tags` (optional string array)
 - `metadata` (optional JSON object)
 
-`okf_feedback` replaces `content` with required `principle` and `category`, and additionally accepts optional `evidence_refs` as a string array.
+`okf_feedback` replaces `content` with required `principle` and `category`. All three durable write tools accept optional `evidence_refs` as a string array, plus the optional temporal fields documented under [Temporal memory parameters](#temporal-memory-parameters).
 
 A stable identity is derived from canonical repository root, concept kind, and `idempotency_key`.
 Repeating the same key with the same normalized payload returns the original identity with `created=false`.
@@ -160,7 +189,7 @@ The server exposes a canonical Agent Skill at `skill://okf/SKILL.md`:
 
 ## Modern tool catalog
 
-The modern `2026-07-28` era exposes exactly 11 service-backed tools (sorted): `okf_ask`, `okf_context`, `okf_feedback`, `okf_init`, `okf_log`, `okf_manifest`, `okf_note`, `okf_query`, `okf_refresh`, `okf_resolve`, `okf_status`. Legacy bundle-state tools (`okf_load_bundle`, `okf_search`, `okf_semantic_search`, etc.) are not available in the modern era.
+The modern `2026-07-28` era exposes exactly 12 service-backed tools (sorted): `okf_ask`, `okf_context`, `okf_feedback`, `okf_init`, `okf_log`, `okf_manifest`, `okf_memory_review`, `okf_note`, `okf_query`, `okf_refresh`, `okf_resolve`, `okf_status`. Legacy bundle-state tools (`okf_load_bundle`, `okf_search`, `okf_semantic_search`, etc.) are not available in the modern era.
 
 ## Security and trust boundaries
 

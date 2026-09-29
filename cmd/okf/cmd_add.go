@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/superops-team/okf/pkg/convert"
+	"github.com/superops-team/okf/pkg/memorydefense"
 	okf "github.com/superops-team/okf/pkg/okf"
 )
 
@@ -140,6 +141,29 @@ func cmdAdd(args []string) int {
 	}
 	if stagingDir != "" {
 		importSource = stagingDir
+	}
+	// Memory Defense: screen all markdown files in the import source before
+	// they reach the knowledge base. If defense is enabled but no staging dir
+	// exists (pure .md import), we must NOT modify the user's original files.
+	// Instead, create a staging copy and screen that.
+	pol, polErr := memorydefense.LoadPolicy(resolveRepoRoot(kbDir))
+	if polErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: memory_defense config: %v\n", polErr)
+		return 1
+	}
+	if pol.Enabled && stagingDir == "" {
+		// Create staging copy so we never mutate the user's source files.
+		stagingDir, cleanup = stageForDefense(srcPath)
+		if cleanup != nil {
+			defer cleanup()
+		}
+		importSource = stagingDir
+	}
+	if pol.Enabled {
+		if serr := screenImportTree(importSource, pol); serr != nil {
+			fmt.Fprintf(os.Stderr, "Error: memory defense blocked import: %v\n", serr)
+			return 1
+		}
 	}
 	// If the source contained documents but none could be converted, that is
 	// a hard failure (all-or-nothing for a single document / all-failed batch),
@@ -624,4 +648,97 @@ func wrapFrontmatter(title, filename, format, body string) string {
 	// receive a random okf_id (design §3.3). The explicit `okf identity ensure`
 	// migration adds ids at the final destination later.
 	return convert.WrapConcept(title, filename, format, "source", body, "")
+}
+
+// resolveRepoRoot returns the directory containing .okf/. If kbDir ends in
+// "knowledge", its parent is the repo root; otherwise kbDir itself is used.
+func resolveRepoRoot(kbDir string) string {
+	abs, err := filepath.Abs(kbDir)
+	if err != nil {
+		return kbDir
+	}
+	if filepath.Base(abs) == "knowledge" {
+		return filepath.Dir(abs)
+	}
+	return abs
+}
+
+// stageForDefense copies .md files from src into a temp staging dir so that
+// screenImportTree can redact without mutating the user's original files.
+func stageForDefense(src string) (string, func()) {
+	info, err := os.Stat(src)
+	if err != nil {
+		return "", nil
+	}
+	tmp, err := os.MkdirTemp("", "okf-defense-stage-*")
+	if err != nil {
+		return "", nil
+	}
+	cleanup := func() { os.RemoveAll(tmp) }
+	copyFile := func(dst, src string) error {
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, data, 0o644)
+	}
+	if info.IsDir() {
+		_ = filepath.Walk(src, func(path string, fi os.FileInfo, werr error) error {
+			if werr != nil || fi.IsDir() {
+				return nil
+			}
+			if strings.HasSuffix(strings.ToLower(path), ".md") {
+				rel, _ := filepath.Rel(src, path)
+				dst := filepath.Join(tmp, rel)
+				os.MkdirAll(filepath.Dir(dst), 0o755)
+				_ = copyFile(dst, path)
+			}
+			return nil
+		})
+	} else if strings.HasSuffix(strings.ToLower(src), ".md") {
+		_ = copyFile(filepath.Join(tmp, filepath.Base(src)), src)
+	}
+	return tmp, cleanup
+}
+
+// screenImportTree walks all .md files under root and applies Memory Defense.
+// In redact mode, files are overwritten with redacted content in-place.
+// In block mode, the first high-severity hit returns an error; callers should
+// clean up the staging directory (which defer cleanup already handles).
+// Errors never include the original secret text.
+func screenImportTree(root string, pol memorydefense.Policy) error {
+	info, err := os.Stat(root)
+	if err != nil {
+		return err
+	}
+	var files []string
+	if info.IsDir() {
+		_ = filepath.Walk(root, func(path string, fi os.FileInfo, werr error) error {
+			if werr != nil || fi.IsDir() {
+				return nil
+			}
+			if strings.HasSuffix(strings.ToLower(path), ".md") {
+				files = append(files, path)
+			}
+			return nil
+		})
+	} else if strings.HasSuffix(strings.ToLower(root), ".md") {
+		files = append(files, root)
+	}
+	for _, f := range files {
+		data, rerr := os.ReadFile(f)
+		if rerr != nil {
+			return rerr
+		}
+		redacted, hits, serr := memorydefense.Screen(string(data), pol)
+		if serr != nil {
+			return serr // ErrBlocked — never leaks secret text
+		}
+		if len(hits) > 0 && pol.Action == "redact" {
+			if werr := os.WriteFile(f, []byte(redacted), 0o644); werr != nil {
+				return werr
+			}
+		}
+	}
+	return nil
 }

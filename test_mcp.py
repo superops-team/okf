@@ -174,8 +174,8 @@ def main():
         tools = result["result"]["tools"]
         print(f"  ✓ Found {len(tools)} tools:")
         tool_names = [t["name"] for t in tools]
-        assert len(tools) == 20, f"Legacy tools/list must expose exactly 20 tools, got {len(tools)}: {tool_names}"
-        assert len(set(tool_names)) == 20, f"Legacy tools/list contains duplicate names: {tool_names}"
+        assert len(tools) == 23, f"tools/list must expose exactly 23 tools, got {len(tools)}: {tool_names}"
+        assert len(set(tool_names)) == 23, f"tools/list contains duplicate names: {tool_names}"
         for t in tools:
             print(f"    - {t['name']}: {t['description'][:60]}")
         expected_tools = ["okf_load_bundle", "okf_bundle_stats", "okf_list_concepts",
@@ -312,6 +312,96 @@ def main():
         print("\n[Test 13] agent-facing note survives MCP server restart")
         test_note_survives_restart()
         print("  ✓ Note persisted and remained queryable after restart")
+
+        # Test 14: okf_reflect (needs repo mode; use temp repo)
+        print("\n[Test 14] tools/call okf_reflect")
+        with tempfile.TemporaryDirectory(prefix="okf-mcp-reflect-") as repo:
+            subprocess.run(["git", "init", "-q", repo], check=True)
+            subprocess.run(["git", "-C", repo, "config", "user.name", "E2E"], check=True)
+            subprocess.run(["git", "-C", repo, "config", "user.email", "e2e@test.invalid"], check=True)
+            srv = _start_server("--repo", repo, "--dir", ".okf/knowledge")
+            try:
+                _initialize_server(srv, msg_id=1400)
+                init_env = _tool_envelope(srv, "okf_init", {}, msg_id=1401)
+                assert init_env["ok"], init_env
+                _tool_envelope(srv, "okf_note", {
+                    "content": "PostgreSQL 15 with read replicas in us-east-1",
+                    "project": "e2e",
+                    "idempotency_key": "reflect-note-1",
+                }, msg_id=1402)
+                result = rpc_call(srv, "tools/call", {
+                    "name": "okf_reflect",
+                    "arguments": {"question": "postgresql"}
+                }, msg_id=1403)
+                env = json.loads(result["result"]["content"][0]["text"])
+                print(f"  ✓ ok={env.get('ok')}, evidence={len(env.get('result',{}).get('evidence') or [])}")
+                assert env["ok"], env
+            finally:
+                srv.terminate()
+                srv.wait(timeout=5)
+
+        # Test 15: okf_reflect with empty question (should error)
+        print("\n[Test 15] tools/call okf_reflect empty question")
+        with tempfile.TemporaryDirectory(prefix="okf-mcp-reflect-empty-") as repo:
+            subprocess.run(["git", "init", "-q", repo], check=True)
+            subprocess.run(["git", "-C", repo, "config", "user.name", "E2E"], check=True)
+            subprocess.run(["git", "-C", repo, "config", "user.email", "e2e@test.invalid"], check=True)
+            srv = _start_server("--repo", repo, "--dir", ".okf/knowledge")
+            try:
+                _initialize_server(srv, msg_id=1500)
+                _tool_envelope(srv, "okf_init", {}, msg_id=1501)
+                result = rpc_call(srv, "tools/call", {
+                    "name": "okf_reflect",
+                    "arguments": {"question": ""}
+                }, msg_id=1502)
+                env = json.loads(result["result"]["content"][0]["text"])
+                print(f"  ✓ ok={env.get('ok')}, code={env.get('error',{}).get('code')}")
+                assert not env["ok"], "empty question should fail"
+            finally:
+                srv.terminate()
+                srv.wait(timeout=5)
+
+        # Test 16: okf_relation_recall (needs repo mode)
+        print("\n[Test 16] tools/call okf_relation_recall")
+        with tempfile.TemporaryDirectory(prefix="okf-mcp-rel-") as repo:
+            subprocess.run(["git", "init", "-q", repo], check=True)
+            subprocess.run(["git", "-C", repo, "config", "user.name", "E2E"], check=True)
+            subprocess.run(["git", "-C", repo, "config", "user.email", "e2e@test.invalid"], check=True)
+            srv = _start_server("--repo", repo, "--dir", ".okf/knowledge")
+            try:
+                _initialize_server(srv, msg_id=1600)
+                _tool_envelope(srv, "okf_init", {}, msg_id=1601)
+                result = rpc_call(srv, "tools/call", {
+                    "name": "okf_relation_recall",
+                    "arguments": {"anchor": "okf_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+                }, msg_id=1602)
+                env = json.loads(result["result"]["content"][0]["text"])
+                print(f"  ✓ ok={env.get('ok')} (unknown anchor expected error)")
+                assert "error" in env, f"expected not_found error, got: {env}"
+            finally:
+                srv.terminate()
+                srv.wait(timeout=5)
+
+        # Test 17: okf_relation_recall with empty anchor
+        print("\n[Test 17] tools/call okf_relation_recall empty anchor")
+        with tempfile.TemporaryDirectory(prefix="okf-mcp-rel-empty-") as repo:
+            subprocess.run(["git", "init", "-q", repo], check=True)
+            subprocess.run(["git", "-C", repo, "config", "user.name", "E2E"], check=True)
+            subprocess.run(["git", "-C", repo, "config", "user.email", "e2e@test.invalid"], check=True)
+            srv = _start_server("--repo", repo, "--dir", ".okf/knowledge")
+            try:
+                _initialize_server(srv, msg_id=1700)
+                _tool_envelope(srv, "okf_init", {}, msg_id=1701)
+                result = rpc_call(srv, "tools/call", {
+                    "name": "okf_relation_recall",
+                    "arguments": {"anchor": ""}
+                }, msg_id=1702)
+                env = json.loads(result["result"]["content"][0]["text"])
+                print(f"  ✓ ok={env.get('ok')}, code={env.get('error',{}).get('code')}")
+                assert not env["ok"], "empty anchor should fail"
+            finally:
+                srv.terminate()
+                srv.wait(timeout=5)
 
         print("\n" + "=" * 60)
         print("ALL TESTS PASSED!")
