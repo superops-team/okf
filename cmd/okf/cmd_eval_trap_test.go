@@ -140,7 +140,6 @@ func TestCmdEvalTrap_NoDemoFallback(t *testing.T) {
 
 func TestCmdEvalTrap_ExpectedEvidenceScore(t *testing.T) {
 	repo := initTrapTestRepo(t)
-	// Question matches approved concept → expected evidence should be found.
 	golden := `[
 		{
 			"question": "PostgreSQL deployment tuning",
@@ -150,7 +149,52 @@ func TestCmdEvalTrap_ExpectedEvidenceScore(t *testing.T) {
 	]`
 	p := writeGolden(t, repo, golden)
 	code := cmdEvalTrap([]string{"-golden", p, "-repo", repo})
+	if code != 0 {
+		t.Fatalf("expected exit 0 (no poison leak), got %d", code)
+	}
+}
+
+func TestCmdEvalTrap_JSONOutput(t *testing.T) {
+	repo := initTrapTestRepo(t)
+	golden := `[
+		{
+			"question": "quantum gravity",
+			"case_type": "abstain",
+			"abstain_ok": true
+		}
+	]`
+	p := writeGolden(t, repo, golden)
+	code := cmdEvalTrap([]string{"-golden", p, "-repo", repo, "-json"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+}
+
+func TestCmdEvalTrap_ForbiddenEvidenceLeaks(t *testing.T) {
+	repo := initTrapTestRepo(t)
+	kb := repo + "/.okf/knowledge"
+	forbidden := `---
+okf_id: okf_forbidden_00000000000000000000000001
+title: "PostgreSQL deployment leaked"
+type: note
+memory_state: approved
+---
+# Forbidden
+PostgreSQL deployment shared_buffers replication leaked content.
+`
+	os.WriteFile(kb+"/forbidden.md", []byte(forbidden), 0o644)
+	golden := `[
+		{
+			"question": "PostgreSQL deployment",
+			"case_type": "single-hop",
+			"forbidden_evidence": ["okf_forbidden_00000000000000000000000001"]
+		}
+	]`
+	p := writeGolden(t, repo, golden)
+	code := cmdEvalTrap([]string{"-golden", p, "-repo", repo})
+	// Either: forbidden not in evidence (exit 0) or leak detected (exit 1).
+	// We only assert it doesn't crash. The poison_blocked metric reflects this.
 	if code != 0 && code != 1 {
-		t.Fatalf("unexpected exit code: %d", code)
+		t.Fatalf("unexpected exit: %d", code)
 	}
 }

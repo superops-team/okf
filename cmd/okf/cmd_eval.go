@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -271,6 +272,7 @@ func cmdEvalTrap(args []string) int {
 	golden := fs.String("golden", "", "Path to trap golden cases JSON (required)")
 	repo := fs.String("repo", "", "Knowledge repo path for live Reflect evaluation (required)")
 	verbose := fs.Bool("verbose", false, "Print per-case results")
+	jsonOut := fs.Bool("json", false, "Output JSON report")
 	fs.Parse(args)
 
 	if *golden == "" {
@@ -304,7 +306,11 @@ func cmdEvalTrap(args []string) int {
 			})
 			continue
 		}
-		result := resp.Result.(tool.ReflectResult)
+		result, ok := resp.Result.(tool.ReflectResult)
+		if !ok {
+			scores = append(scores, trapeval.CaseScore{CaseType: c.CaseType, AbstentionScore: trapeval.ScoreAbstention(c, true)})
+			continue
+		}
 		refs := make([]string, 0, len(result.Evidence))
 		for _, ev := range result.Evidence {
 			refs = append(refs, ev.ID)
@@ -337,8 +343,18 @@ func cmdEvalTrap(args []string) int {
 	}
 
 	report := trapeval.Summarize(cases, scores)
-	fmt.Printf("answer_hit_mean=%.2f evidence_support_mean=%.2f abstain_score=%.2f poison_blocked=%.2f\n",
-		meanAnswer(report), meanEvidence(report), meanAbstain(report), report.PoisonBlockedOverall)
+	if *jsonOut {
+		out, _ := json.Marshal(map[string]any{
+			"answer_hit_mean":       meanAnswer(report),
+			"evidence_support_mean": meanEvidence(report),
+			"abstain_score":         meanAbstain(report),
+			"poison_blocked":        report.PoisonBlockedOverall,
+		})
+		fmt.Println(string(out))
+	} else {
+		fmt.Printf("answer_hit_mean=%.2f evidence_support_mean=%.2f abstain_score=%.2f poison_blocked=%.2f\n",
+			meanAnswer(report), meanEvidence(report), meanAbstain(report), report.PoisonBlockedOverall)
+	}
 	if *verbose {
 		for ct, pt := range report.PerType {
 			fmt.Printf("  %s: count=%d answer=%.2f evidence=%.2f abstain=%.2f\n",
