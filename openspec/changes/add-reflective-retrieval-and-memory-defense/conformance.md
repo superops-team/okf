@@ -52,13 +52,15 @@
 | WI-03 write tools through defense | ✓ WriteKnowledge Screen | write_defense_test.go | aligned |
 | WI-04 Agent Skill/workflow manifest | ✓ W09/W10 clauses + okf_reflect/relation_recall tools | agentconfig tests 10 clauses | aligned |
 
-## Gaps
-- RR-04 graceful degradation: unit test exists for Recall returning warnings, but end-to-end Service test not added.
-- TE-05 poison block gate: CLI exits 1 on poison_blocked<1.0, but integrated trap bundle not included as fixture.
-- WI-01/WI-02: now aligned (test_mcp.py 17/17 + Codex MCP E2E).
-- 10k concept latency: benchmarked (Screen10k=1.15ms/op, Recall10k=0.38ms/op, see evidence.md).
-- Document import path defense: covered. MCP handleImportDocument AND CLI okf add both call memorydefense.Screen before writing durable markdown. Default disabled (backward compatible). Enabled via .okf/config.yaml; block rejects import, redact replaces secrets. Tests: TestImportDocumentDefense* (pkg/mcp), TestScreenImportTree* (cmd/okf).
-- MCP parity: unified ToolRegistry (registerCoreTools + registerAgentTools served by same server). No separate legacy MCP entry exists. New tools available in all server start paths.
+## Gaps (all closed 2026-09-29)
+- ~~RR-04 graceful degradation~~: CLOSED. `relation_graceful_test.go` covers unknown/cycle/fork/dangling/corrupted/empty; `relation_cli_mcp_parity_test.go` covers CLI↔MCP subprocess parity with full hit structure comparison.
+- ~~TE-05 poison block gate~~: CLOSED. `cmd_eval_trap_test.go` covers repo/golden required, invalid golden, poison blocked, need_clarify, empty cases, deterministic rerun, no demo fallback, expected evidence, JSON output, forbidden evidence.
+- ~~WI-01/WI-02~~: aligned (test_mcp.py 17/17 + Codex MCP E2E).
+- 10k concept latency: benchmarked (Screen10k=1.52ms/op, Recall10k=0.64ms/op, see evidence.md).
+- Document import path defense: covered. MCP handleImportDocument AND CLI okf add both call memorydefense.Screen. Default disabled (backward compatible).
+- MCP parity: unified ToolRegistry. No separate legacy MCP entry.
+- Agent Skill lifecycle: `lifecycle_w09_w10_test.go` covers Plan/Apply/Status/Remove for cursor/claude/codex.
+- Codex persisted-Skill E2E: verified self+extends relation, stable reflect refs, need_clarify, 0 writes.
 
 ## Review A/B fixes mapping (2026-09-29)
 
