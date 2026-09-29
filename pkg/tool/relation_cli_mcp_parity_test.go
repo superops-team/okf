@@ -77,32 +77,23 @@ func TestCLI_MCP_RelationParity(t *testing.T) {
 	if cliEnv["ok"] != true {
 		t.Fatalf("CLI A not ok: %s", cliOut)
 	}
-	cliHits := extractHitIDs(t, cliEnv)
+	cliHits := extractHits(t, cliEnv)
 	if len(cliHits) < 1 {
 		t.Fatal("CLI A: expected at least self hit")
 	}
 
-	// MCP: success (A extends B) — extract hits.
+	// MCP: success (A extends B) — extract full hits.
 	mcpEnv := callMCPRelationEnv(t, bin, repo, idA)
 	if mcpEnv["ok"] != true {
 		t.Fatalf("MCP A not ok: %+v", mcpEnv)
 	}
-	mcpHits := extractHitIDs(t, mcpEnv)
+	mcpHits := extractHits(t, mcpEnv)
 	if len(mcpHits) < 1 {
 		t.Fatal("MCP A: expected at least self hit")
 	}
 
-	// Compare hit counts.
-	if len(cliHits) != len(mcpHits) {
-		t.Fatalf("hit count mismatch: CLI=%d MCP=%d (CLI=%v MCP=%v)",
-			len(cliHits), len(mcpHits), cliHits, mcpHits)
-	}
-	// Compare hit IDs in order.
-	for i, id := range cliHits {
-		if id != mcpHits[i] {
-			t.Fatalf("hit[%d] mismatch: CLI=%s MCP=%s", i, id, mcpHits[i])
-		}
-	}
+	// Compare full hit structures.
+	compareHits(t, "A", cliHits, mcpHits)
 
 	// CLI: unknown anchor → error.
 	cliUnknown, _ := exec.Command(bin, "tool", "relation", "--anchor", idZ, "--repo", repo, "--json").CombinedOutput()
@@ -125,27 +116,71 @@ func TestCLI_MCP_RelationParity(t *testing.T) {
 	if cliDanglingEnv["ok"] != true {
 		t.Fatalf("CLI dangling should not panic: %s", cliDangling)
 	}
+
+	// MCP: dangling → ok (no panic).
+	mcpDanglingEnv := callMCPRelationEnv(t, bin, repo, idD)
+	if mcpDanglingEnv["ok"] != true {
+		t.Fatalf("MCP dangling should not panic: %+v", mcpDanglingEnv)
+	}
+
+	// Compare dangling hits (should both return self only).
+	compareHits(t, "dangling", extractHits(t, cliDanglingEnv), extractHits(t, mcpDanglingEnv))
 }
 
-func extractHitIDs(t *testing.T, env map[string]any) []string {
+// hitStruct represents a relation hit for comparison.
+type hitStruct struct {
+	OKFID       string `json:"okf_id"`
+	Edge        string `json:"edge"`
+	State       string `json:"state"`
+	IsChainHead bool   `json:"is_chain_head"`
+}
+
+// extractHits parses full hit structures from an envelope.
+func extractHits(t *testing.T, env map[string]any) []hitStruct {
 	t.Helper()
 	result, ok := env["result"].(map[string]any)
 	if !ok {
 		return nil
 	}
-	hits, ok := result["hits"].([]any)
+	hitsRaw, ok := result["hits"].([]any)
 	if !ok {
 		return nil
 	}
-	var ids []string
-	for _, h := range hits {
-		if hm, ok := h.(map[string]any); ok {
-			if id, ok := hm["okf_id"].(string); ok {
-				ids = append(ids, id)
-			}
+	out := make([]hitStruct, 0, len(hitsRaw))
+	for _, h := range hitsRaw {
+		hm, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		hs := hitStruct{}
+		if v, ok := hm["okf_id"].(string); ok {
+			hs.OKFID = v
+		}
+		if v, ok := hm["edge"].(string); ok {
+			hs.Edge = v
+		}
+		if v, ok := hm["state"].(string); ok {
+			hs.State = v
+		}
+		if v, ok := hm["is_chain_head"].(bool); ok {
+			hs.IsChainHead = v
+		}
+		out = append(out, hs)
+	}
+	return out
+}
+
+// compareHits asserts two hit slices are identical in order and fields.
+func compareHits(t *testing.T, label string, cli, mcp []hitStruct) {
+	t.Helper()
+	if len(cli) != len(mcp) {
+		t.Fatalf("%s: hit count mismatch CLI=%d MCP=%d", label, len(cli), len(mcp))
+	}
+	for i := range cli {
+		if cli[i] != mcp[i] {
+			t.Fatalf("%s: hit[%d] mismatch CLI=%+v MCP=%+v", label, i, cli[i], mcp[i])
 		}
 	}
-	return ids
 }
 
 func callMCPRelationEnv(t *testing.T, bin, repo, anchor string) map[string]any {
