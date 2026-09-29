@@ -442,9 +442,9 @@ found the prior "closed" gaps were still fake-green. Real fixes and fresh gates:
 | go vet ./... | PASS |
 | gofmt -l pkg/ cmd/ | clean |
 | staticcheck ./... | clean |
-| go test ./... -count=1 | 24 packages ok |
-| go test -race (changed pkgs) | ok |
-| go test -shuffle=on (changed pkgs) | ok |
+| go test ./... -count=1 | 24 packages ok, exit 0 (~99s) |
+| go test -race ./... -count=1 | 24 packages ok, 0 data races, exit 0 (~84s) |
+| go test -shuffle=on ./... -count=1 | 24 packages ok, exit 0 (~94s) |
 | coverage new pkgs | memorydefense 90.8% / relationrecall 94.6% / reflect 96.4% / trapeval 86.6% |
 | fuzz FuzzScreenNeverCrashes 30s | 119,208 execs, 0 crash |
 | go mod verify | all modules verified |
