@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -151,11 +150,7 @@ func TestCmdEvalTrap_ExpectedEvidenceScore(t *testing.T) {
 	]`
 	p := writeGolden(t, repo, golden)
 	code := cmdEvalTrap([]string{"-golden", p, "-repo", repo})
-	// If expected evidence is found, poison_blocked=1.0 → exit 0.
-	// If not found, evidence_score=0.5 but no poison → still exit 0.
-	// We only assert it doesn't crash and exits 0 or 1 based on poison.
 	if code != 0 && code != 1 {
 		t.Fatalf("unexpected exit code: %d", code)
 	}
-	_ = strings.Contains
 }
