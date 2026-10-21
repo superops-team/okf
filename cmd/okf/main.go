@@ -11,8 +11,10 @@ import (
 
 	"github.com/superops-team/okf/pkg/dashboard"
 	"github.com/superops-team/okf/pkg/git"
+	"github.com/superops-team/okf/pkg/identity"
 	"github.com/superops-team/okf/pkg/lint"
 	"github.com/superops-team/okf/pkg/mcp"
+	"github.com/superops-team/okf/pkg/memorymeta"
 	"github.com/superops-team/okf/pkg/okf"
 	"github.com/superops-team/okf/pkg/okf/meta"
 	"github.com/superops-team/okf/pkg/query"
@@ -676,9 +678,59 @@ func lintBundleWithConfig(b *okf.KnowledgeBundle, cfg *lint.Config) *lint.Result
 			concepts[i].GeneratedBy = c.Generated.By
 			concepts[i].GeneratedAt = c.Generated.At
 		}
+		// Additive temporal projection (S06/T3.3). Nil when the concept carries
+		// no memory_* fields, preserving legacy-bundle parity.
+		concepts[i].OKFID = identity.FromConcept(c).ID
+		concepts[i].Project = effectiveProject(c)
+		concepts[i].Temporal = buildLintTemporal(c)
 	}
 
 	return lint.LintBundle(concepts, cfg)
+}
+
+// effectiveProject mirrors memorymeta.effectiveProject: the string under the
+// "project" custom field, defaulting to "".
+func effectiveProject(c *okf.Concept) string {
+	if c == nil || c.CustomFields == nil {
+		return ""
+	}
+	if v, ok := c.CustomFields["project"].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// buildLintTemporal projects memorymeta's parsed temporal metadata onto the
+// additive lint.TemporalInfo. It returns nil when the concept has none of the
+// memory_state / memory_confidence / memory_relation / memory_review fields.
+func buildLintTemporal(c *okf.Concept) *lint.TemporalInfo {
+	if c == nil || c.CustomFields == nil {
+		return nil
+	}
+	_, hasState := c.CustomFields["memory_state"]
+	_, hasConf := c.CustomFields["memory_confidence"]
+	_, hasRel := c.CustomFields["memory_relation"]
+	_, hasReview := c.CustomFields["memory_review"]
+	if !hasState && !hasConf && !hasRel && !hasReview {
+		return nil
+	}
+
+	state, stateWarn := memorymeta.State(c)
+	rel, relWarn := memorymeta.Relation(c)
+	conf, hasConfVal, confWarn := memorymeta.Confidence(c)
+
+	return &lint.TemporalInfo{
+		HasTemporal:     true,
+		State:           string(state),
+		StateWarn:       stateWarn,
+		Confidence:      conf,
+		HasConfidence:   hasConfVal,
+		ConfidenceWarn:  confWarn,
+		RelationKind:    string(rel.Kind),
+		RelationTargets: rel.Targets,
+		RelationWarn:    relWarn,
+		HasReviewRecord: hasReview,
+	}
 }
 
 func cmdMCP(args []string) {

@@ -72,14 +72,14 @@ func TestModernDiscover(t *testing.T) {
 	}
 }
 
-func TestModernToolsListHas11Tools(t *testing.T) {
+func TestModernToolsListHas12Tools(t *testing.T) {
 	s := newTestServer(t)
 	s.feed(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":` + modernMeta() + `}`)
 	resp := s.lastResponse()
 	result := resp["result"].(map[string]any)
 	tools := result["tools"].([]any)
-	if len(tools) != 11 {
-		t.Errorf("expected 11 modern tools, got %d", len(tools))
+	if len(tools) != 12 {
+		t.Errorf("expected 12 modern tools, got %d", len(tools))
 	}
 	// Verify sorted and no legacy-only tools
 	names := make([]string, len(tools))

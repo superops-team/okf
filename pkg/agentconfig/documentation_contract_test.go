@@ -15,15 +15,30 @@ func TestDocumentationContracts(t *testing.T) {
 
 	// Required governed-memory guidance tokens.
 	for _, want := range []string{
-		"hold",         // W02 surfaces a matching governance hold
-		"advisory",     // hold is advisory, never a hard block
-		"memory_check", // W06 search-before-write duplicate check
-		"for_path",     // W02/W03 lexical code-path governance lookup
-		"refs",         // W03 okf_context refs for full body
+		"hold",              // W02 surfaces a matching governance hold
+		"advisory",          // hold is advisory, never a hard block
+		"memory_check",      // W06 search-before-write duplicate check
+		"for_path",          // W02/W03 lexical code-path governance lookup
+		"refs",              // W03 okf_context refs for full body
+		"proposed",          // W08: inferred knowledge is written as proposed
+		"memory_confidence", // W08: proposals carry a confidence
+		"evidence_refs",     // W08: proposals cite their evidence
+		"okf_memory_review", // W08: the review tool
 	} {
 		if !strings.Contains(skill, want) {
 			t.Errorf("Agent Skill guidance missing required token %q", want)
 		}
+	}
+
+	// W08: the agent must never self-approve its own proposals and may review
+	// only after an explicit user instruction.
+	for _, want := range []string{"explicit user instruction", "never", "proposed"} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("Agent Skill guidance missing W08 token %q", want)
+		}
+	}
+	if !strings.Contains(skill, "never") {
+		t.Errorf("Agent Skill guidance must forbid self-approval")
 	}
 
 	// hold is advisory: the guidance must clarify the server does not block
@@ -68,7 +83,7 @@ func TestDocumentationContracts(t *testing.T) {
 }
 
 // TestDocumentationClausesOnceInAgentSkill supplements TestCanonicalWorkflowCoverage
-// by pinning W01..W07 exactly-once coverage specifically in the portable Agent
+// by pinning W01..W08 exactly-once coverage specifically in the portable Agent
 // Skill rendering.
 func TestDocumentationClausesOnceInAgentSkill(t *testing.T) {
 	skill := RenderAgentSkill()
@@ -77,7 +92,7 @@ func TestDocumentationClausesOnceInAgentSkill(t *testing.T) {
 			t.Errorf("Agent Skill guidance: clause %q appears %d times, want exactly once", id, got)
 		}
 	}
-	if len(clauseIDs()) != 7 {
-		t.Fatalf("expected 7 canonical clauses, got %d", len(clauseIDs()))
+	if len(clauseIDs()) != 10 {
+		t.Fatalf("expected 10 canonical clauses, got %d", len(clauseIDs()))
 	}
 }

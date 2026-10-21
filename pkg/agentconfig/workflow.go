@@ -19,6 +19,9 @@ var (
 		"okf_note",
 		"okf_feedback",
 		"okf_resolve",
+		"okf_memory_review",
+		"okf_reflect",
+		"okf_relation_recall",
 	}
 
 	// RegisteredCommands is the allowlist of OKF CLI commands that rendered
@@ -34,7 +37,7 @@ var (
 )
 
 // Clause is one typed canonical workflow rule. ID is the stable clause
-// identifier (W01..W07) that must appear exactly once in every applicable
+// identifier (W01..W08) that must appear exactly once in every applicable
 // rendered output.
 type Clause struct {
 	ID       string
@@ -42,7 +45,7 @@ type Clause struct {
 	Guidance string
 }
 
-// CanonicalClauses is the fixed, ordered, seven-clause workflow model. Each
+// CanonicalClauses is the fixed, ordered, eight-clause workflow model. Each
 // clause has a unique ID and behavior that client wrappers may not change.
 func CanonicalClauses() []Clause {
 	return []Clause{
@@ -93,6 +96,32 @@ func CanonicalClauses() []Clause {
 			Heading:  "Never store secrets or private content",
 			Guidance: "Never store credentials, tokens, secrets or unrelated private content in the knowledge base.",
 		},
+		{
+			ID:      "W08",
+			Heading: "Propose, never self-approve",
+			Guidance: "Write inferred or reusable knowledge as a `proposed` concept, always supplying a finite " +
+				"`memory_confidence` in [0,1] and the supporting `evidence_refs`; never silently promote it to " +
+				"approved. You MAY list and explain proposals to the user (read `memory_review_queue` via " +
+				"`okf_query`, or read a proposal's body through `okf_context` with `refs`). Call `okf_memory_review` " +
+				"with approve, decline, or undo ONLY after an explicit user instruction for that concept; never " +
+				"auto-approve or otherwise self-approve a proposal you created.",
+		},
+		{
+			ID:      "W09",
+			Heading: "Use Reflect for multi-hop questions, abstain when evidence is thin",
+			Guidance: "For questions requiring multi-hop synthesis or relation traversal, call `okf_reflect` instead of " +
+				"raw `okf_query`. Reflect is read-only and bounded (max 3 rounds). If `need_clarify=true`, do not " +
+				"fabricate an answer; ask the user for clarification. Cite stable concept IDs from evidence. " +
+				"Use `okf_relation_recall` to traverse extends/updates chains from an anchor concept.",
+		},
+		{
+			ID:      "W10",
+			Heading: "Memory Defense is non-negotiable",
+			Guidance: "Memory Defense scans all writes for secrets (tokens, keys, PEM, credit cards). If a write is " +
+				"blocked, do not attempt to bypass or rephrase the secret to evade detection. Redacted content appears " +
+				"as `[REDACTED:type]`; never reconstruct the original secret. Proposed/declined/poison concepts are " +
+				"never cited as evidence.",
+		},
 	}
 }
 
@@ -106,7 +135,7 @@ func clauseIDs() []string {
 	return ids
 }
 
-// renderCore renders the shared, numbered, seven-clause workflow body. Each
+// renderCore renders the shared, numbered, eight-clause workflow body. Each
 // clause ID is emitted as a bracketed marker exactly once so conformance tests
 // can assert exact-once coverage.
 func renderCore() string {
@@ -163,7 +192,7 @@ func RenderCodexBlock() string {
 
 // RenderAgentSkill renders the portable canonical Agent Skill (SKILL.md).
 // It contains minimum YAML frontmatter (name, description) and exactly one
-// rendering of W01-W07. It excludes client ownership markers, install/remove
+// rendering of W01-W08. It excludes client ownership markers, install/remove
 // instructions, credentials, absolute paths, hooks, scripts and allowed-tools.
 func RenderAgentSkill() string {
 	var b strings.Builder

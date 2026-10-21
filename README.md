@@ -23,6 +23,7 @@
 - [Installation — Quick Start (30 seconds)](#installation--quick-start-30-seconds)
 - [Usage](#usage)
 - [Stable Identity, Manifest & Agent Discovery](#stable-identity-manifest--agent-discovery)
+- [Temporal Memory & Review Workflow](#temporal-memory--review-workflow)
 - [Documentation](#documentation)
 - [Project Structure](#project-structure)
 - [Module Reference](#module-reference)
@@ -45,6 +46,7 @@
 - **🔎 Advanced Query** — Filter by type, tags, or full-text search
 - **🧠 Hybrid Semantic Search** — Local natural-language search: chunk-level MiniLM embeddings + BM25, fused with weighted RRF; large imported documents also gain source-tracked derived chunks and per-source result deduplication (fully offline, no CGO)
 - **🤖 Agent-facing MCP** — Standard MCP tools for repository status/init/refresh/query/context plus durable note/event/feedback capture
+- [⏳ Temporal memory & review](#temporal-memory--review-workflow) — `updates`/`extends` relations, current/all/history views, and a propose→approve/decline/undo review queue with compare-and-set (no graph DB, computed currentness)
 - **🏗 Modular Architecture** — Clean, layered design following Go best practices
 
 ## How it works
@@ -145,12 +147,12 @@ okf mcp --repo /your/repo --dir .okf/knowledge
 ### Agent-facing MCP tools
 
 The MCP server supports **dual protocol eras** from the same `okf mcp` entry point:
-- **Legacy `2024-11-05`**: initialize-based, 20 tools, Prompts, Resources, ping — unchanged.
+- **Legacy `2024-11-05`**: initialize-based, 21 tools, Prompts, Resources, ping — unchanged except the added `okf_memory_review`.
 - **Modern `2026-07-28`**: stateless, per-request `_meta` validation, `server/discover`, `resultType: complete` + serverInfo `_meta` on all success responses. One era per stdio process; mixed-era requests rejected.
 
-The modern era exposes exactly 11 service-backed tools: `okf_status`, `okf_init`, `okf_refresh`, `okf_query`, `okf_context`, `okf_note`, `okf_log`, `okf_feedback`, `okf_ask`, `okf_resolve`, `okf_manifest`. Legacy bundle-state tools (`okf_load_bundle`, `okf_search`, etc.) are not available in the modern era.
+The modern era exposes exactly 12 service-backed tools: `okf_status`, `okf_init`, `okf_refresh`, `okf_query`, `okf_context`, `okf_note`, `okf_log`, `okf_feedback`, `okf_ask`, `okf_resolve`, `okf_manifest`, `okf_memory_review`. Legacy bundle-state tools (`okf_load_bundle`, `okf_search`, etc.) are not available in the modern era.
 
-A **portable Agent Skill** (`skill://okf/SKILL.md`) renders the canonical W01–W07 workflow. It is available as a Resource in both eras and via `skills/list`/`skills/get` in the modern era (client capability gate). The immutable registry provides SHA-256 digest, size validation, URI confinement, and zero knowledge-runtime I/O for Skill operations.
+A **portable Agent Skill** (`skill://okf/SKILL.md`) renders the canonical W01–W08 workflow. It is available as a Resource in both eras and via `skills/list`/`skills/get` in the modern era (client capability gate). The immutable registry provides SHA-256 digest, size validation, URI confinement, and zero knowledge-runtime I/O for Skill operations.
 
 Writes require a stable `idempotency_key`, use deterministic identities, reject unknown or incorrectly typed fields, and fail closed for path escape, symlink-root, size-limit, and credential-like metadata violations. The server persists only feedback explicitly submitted by the caller; it does not inspect a host application's private event bus. See [`docs/knowledge/mcp-server.md`](docs/knowledge/mcp-server.md) and [`docs/knowledge/durable-capture.md`](docs/knowledge/durable-capture.md).
 
@@ -328,6 +330,43 @@ okf tool context --refs okf_abc123,okf_def456 --budget-tokens 2000
 ### CLI vs MCP naming
 
 CLI flags use hyphens (`--for-path`, `--max-tokens`, `--stale-refs`, `--memory-check`, `--dup-threshold`, `--refs`). MCP/JSON fields use underscores (`for_path`, `max_tokens`, `stale_refs`, `memory_check`, `dup_threshold`, `refs`).
+
+## Temporal Memory & Review Workflow
+
+Temporal memory builds on the same `CustomFields` mechanism: a durable note/event/feedback may carry optional `memory_state`, `memory_confidence`, a `memory_relation`, and a latest `memory_review` record. The core `Concept` struct is unchanged, and there is no graph database, second index, or cache — currentness is a deterministic projection over stable `okf_id` edges computed on demand.
+
+### Relations and views
+
+```bash
+# current (default), explicit audit view, or one-ref history
+okf tool query -q "current architecture decision" --memory-view current
+okf tool query -q "..." --memory-view all
+okf tool query --memory-view history --refs okf_22222222222222222222222222222222
+```
+
+- **`updates`** — a new memory supersedes one earlier memory (which moves to history); **`extends`** enriches other memories while all stay current.
+- **`current`** (default) hides historical/proposed/declined durable memories once temporal fields exist; **`all`** is the explicit audit view and adds `memory_state` / `memory_current` / `memory_relation_kind` / `memory_relation_targets` annotations (never bodies); **`history`** returns the ordered update chain for exactly one ref.
+
+### Proposed review queue
+
+```bash
+okf tool query --memory-review-queue --limit 20   # body-free, confidence desc → oldest → id asc
+```
+
+### Review with compare-and-set
+
+```bash
+okf tool memory-review --ref okf_22222222222222222222222222222222 \
+    --action approve --expected-state proposed
+```
+
+`approve` activates the proposal, `decline` quarantines it (kept on disk, excluded from current), and `undo` returns it to `proposed` and restores its original confidence. `expected_state` makes the mutation compare-and-set: a stale caller gets `memory_state_conflict` and no file changes. Declined histories are never deleted — decline is reversible and Git-auditable.
+
+### Agent rule (W08)
+
+The Agent Skill teaches **W08 "Propose, never self-approve"**: inferred/reusable knowledge is written as `proposed` with a finite `memory_confidence` and supporting `evidence_refs`; the agent may list or read proposals via the review queue / `okf_context refs`, but calls `okf_memory_review` approve/decline only on explicit user instruction — never on a proposal it created.
+
+CLI flags use hyphens (`--memory-view`, `--refs`, `--memory-review-queue`); MCP/JSON fields use underscores (`memory_view`, `refs`, `memory_review_queue`, plus `memory_state`/`memory_confidence`/`memory_relation_kind`/`memory_relation_targets`/`evidence_refs` on the write tools). The dedicated review tool is `okf_memory_review`.
 
 ## Documentation
 

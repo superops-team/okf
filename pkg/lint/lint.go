@@ -27,6 +27,35 @@ type Concept struct {
 	Status      string
 	StaleAfter  string
 	Runtime     string // for Attested Computation
+
+	// Temporal carries parsed durable-memory temporal metadata. It is populated
+	// only at the conversion sites (which may import memorymeta) and read back by
+	// pkg/lint's self-contained temporal graph pass. A nil Temporal means the
+	// concept has no temporal data, preserving byte/semantic parity for legacy
+	// bundles (no temporal issues are emitted).
+	Temporal *TemporalInfo
+	// OKFID is the stable canonical okf id (additive; "" for legacy-unstable).
+	// It lets the self-contained temporal graph resolve relation targets without
+	// importing memorymeta.
+	OKFID string
+	// Project is the effective project used for cross-project relation checks.
+	Project string
+}
+
+// TemporalInfo is the additive parsed temporal-memory projection of one concept.
+// Field values come from memorymeta accessors at conversion time; pkg/lint never
+// calls memorymeta directly (it would create an import cycle).
+type TemporalInfo struct {
+	HasTemporal     bool
+	State           string // approved|proposed|declined (normalized; "" when absent)
+	StateWarn       string // malformed state warning
+	Confidence      float64
+	HasConfidence   bool
+	ConfidenceWarn  string
+	RelationKind    string // updates|extends|""
+	RelationTargets []string
+	RelationWarn    string // malformed relation warning
+	HasReviewRecord bool
 }
 
 // Severity represents lint warning severity levels.
@@ -373,6 +402,14 @@ func LintBundle(concepts []*Concept, cfg *Config) *Result {
 				Suggestion: "Each concept should have a unique title",
 			})
 		}
+	}
+
+	// Whole-bundle temporal pass: only runs when any concept carries temporal
+	// metadata. In non-strict mode its findings are warnings (bundle still
+	// usable); in StrictMode they are errors. Legacy bundles (all Temporal ==
+	// nil) produce nothing, preserving parity.
+	if hasAnyTemporal(concepts) {
+		result.Issues = append(result.Issues, temporalIssues(concepts, cfg)...)
 	}
 
 	for _, issue := range result.Issues {

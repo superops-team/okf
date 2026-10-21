@@ -1,0 +1,7 @@
+schema: openspec/changes
+change_id: add-temporal-memory-relations
+title: Temporal Memory Relations and Review
+status: draft
+version: 0.1.0
+spec:
+  - temporal-memory-relations

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -9,6 +11,8 @@ import (
 	"github.com/superops-team/okf/pkg/embeddings"
 	"github.com/superops-team/okf/pkg/eval"
 	"github.com/superops-team/okf/pkg/query"
+	"github.com/superops-team/okf/pkg/tool"
+	"github.com/superops-team/okf/pkg/trapeval"
 	"github.com/superops-team/okf/pkg/vectorindex"
 )
 
@@ -17,6 +21,9 @@ import (
 // 存在意义：改造检索质量时必须有可复现的量化依据，否则只能凭感觉调参。
 // 该命令让 golden set 评测从"只能在测试里跑"变成用户可直接执行。
 func cmdEval(args []string) int {
+	if len(args) > 0 && args[0] == "trap" {
+		return cmdEvalTrap(args[1:])
+	}
 	fs := flag.NewFlagSet("eval", flag.ExitOnError)
 	path := fs.String("path", "", "Knowledge base path (default: current directory)")
 	golden := fs.String("golden", "", "Path to golden query set JSON (required)")
@@ -254,4 +261,164 @@ func sortedKeys(m map[string]*eval.EvalReport) []string {
 		}
 	}
 	return out
+}
+
+// cmdEvalTrap runs live trap evaluation: for each golden case, calls
+// Service.Reflect against the given repo and scores evidence/abstention
+// deterministically. Exits non-zero if poison_blocked < 1.0.
+// Both -golden and -repo are required; no demo/hardcoded fallback.
+func cmdEvalTrap(args []string) int {
+	fs := flag.NewFlagSet("eval trap", flag.ExitOnError)
+	golden := fs.String("golden", "", "Path to trap golden cases JSON (required)")
+	repo := fs.String("repo", "", "Knowledge repo path for live Reflect evaluation (required)")
+	verbose := fs.Bool("verbose", false, "Print per-case results")
+	jsonOut := fs.Bool("json", false, "Output JSON report")
+	fs.Parse(args)
+
+	if *golden == "" {
+		fmt.Println("Error: -golden is required")
+		fmt.Println("Example: okf eval trap -golden pkg/trapeval/testdata/cases.json -repo .")
+		return 1
+	}
+	if *repo == "" {
+		fmt.Println("Error: -repo is required for live trap evaluation")
+		fmt.Println("Example: okf eval trap -golden cases.json -repo .")
+		return 1
+	}
+	cases, err := trapeval.LoadCases(*golden)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return 1
+	}
+
+	// isPoison marks a trap case that must not cite any forbidden evidence.
+	// A case is a poison trap iff it declares forbidden_evidence; the gate
+	// (poison_blocked < 1.0 → exit 1) only counts such cases. Without this the
+	// gate is dead: Summarize skips scores with IsPoison=false, so an approved
+	// doc listed as forbidden that leaked into evidence would still yield
+	// poison_blocked=1.0 and exit 0.
+	isPoison := func(c trapeval.Case) bool { return len(c.ForbiddenEvidence) > 0 }
+
+	// Live evaluation: call Service.Reflect for each case.
+	svc := tool.NewService(tool.Config{RepoPath: *repo})
+	var scores []trapeval.CaseScore
+	for _, c := range cases {
+		resp := svc.Reflect(context.Background(), tool.ReflectRequest{Question: c.Question})
+		if !resp.OK {
+			// Reflect error = no evidence; treat as abstain (no fabricated score).
+			// No evidence cited → forbidden evidence could not leak → blocked.
+			scores = append(scores, trapeval.CaseScore{
+				CaseType:        c.CaseType,
+				IsPoison:        isPoison(c),
+				TrapLeak:        false,
+				AnswerScore:     0,
+				EvidenceScore:   0,
+				AbstentionScore: trapeval.ScoreAbstention(c, true),
+			})
+			continue
+		}
+		result, ok := resp.Result.(tool.ReflectResult)
+		if !ok {
+			scores = append(scores, trapeval.CaseScore{
+				CaseType:        c.CaseType,
+				IsPoison:        isPoison(c),
+				TrapLeak:        false,
+				AbstentionScore: trapeval.ScoreAbstention(c, true),
+			})
+			continue
+		}
+		refs := make([]string, 0, len(result.Evidence))
+		for _, ev := range result.Evidence {
+			refs = append(refs, ev.ID)
+		}
+		exists := map[string]bool{}
+		for _, r := range refs {
+			exists[r] = true
+		}
+		// AnswerScore: N/A in deterministic eval (no generated answer text).
+		// Use evidence presence as a deterministic proxy: 1.0 if evidence found, 0.0 if not.
+		answerScore := 0.0
+		if len(refs) > 0 {
+			answerScore = 1.0
+		}
+		leak := false
+		for _, r := range refs {
+			for _, f := range c.ForbiddenEvidence {
+				if r == f {
+					leak = true
+				}
+			}
+		}
+		scores = append(scores, trapeval.CaseScore{
+			CaseType:        c.CaseType,
+			IsPoison:        isPoison(c),
+			TrapLeak:        leak,
+			AnswerScore:     answerScore,
+			EvidenceScore:   trapeval.ScoreEvidence(c, refs, exists),
+			AbstentionScore: trapeval.ScoreAbstention(c, result.NeedClarify),
+		})
+	}
+
+	report := trapeval.Summarize(cases, scores)
+	if *jsonOut {
+		out, _ := json.Marshal(map[string]any{
+			"answer_hit_mean":       meanAnswer(report),
+			"evidence_support_mean": meanEvidence(report),
+			"abstain_score":         meanAbstain(report),
+			"poison_blocked":        report.PoisonBlockedOverall,
+		})
+		fmt.Println(string(out))
+	} else {
+		fmt.Printf("answer_hit_mean=%.2f evidence_support_mean=%.2f abstain_score=%.2f poison_blocked=%.2f\n",
+			meanAnswer(report), meanEvidence(report), meanAbstain(report), report.PoisonBlockedOverall)
+	}
+	if *verbose {
+		for ct, pt := range report.PerType {
+			fmt.Printf("  %s: count=%d answer=%.2f evidence=%.2f abstain=%.2f\n",
+				ct, pt.Count, pt.AnswerMean, pt.EvidenceMean, pt.AbstentionMean)
+		}
+	}
+	if report.PoisonBlockedOverall < 1.0 {
+		return 1
+	}
+	return 0
+}
+
+func meanAnswer(r trapeval.Report) float64 {
+	var sum float64
+	var n int
+	for _, pt := range r.PerType {
+		sum += pt.AnswerMean * float64(pt.Count)
+		n += pt.Count
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
+}
+
+func meanEvidence(r trapeval.Report) float64 {
+	var sum float64
+	var n int
+	for _, pt := range r.PerType {
+		sum += pt.EvidenceMean * float64(pt.Count)
+		n += pt.Count
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
+}
+
+func meanAbstain(r trapeval.Report) float64 {
+	var sum float64
+	var n int
+	for _, pt := range r.PerType {
+		sum += pt.AbstentionMean * float64(pt.Count)
+		n += pt.Count
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
 }
