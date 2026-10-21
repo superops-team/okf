@@ -1,0 +1,19 @@
+id: add-okf-project-gate
+name: OKF Project Admission Gate
+description: Add a lightweight OKF-specific admission gate that validates repository invariants, OpenSpec change completeness, conformance mapping, and gate self-tests before the heavy gauntlet runs.
+author: okf-team
+version: 0.1.0
+status: proposed
+created_at: "2026-10-21"
+updated_at: "2026-10-21"
+related_changes:
+  - add-agent-knowledge-discovery
+  - add-document-format-import
+specs:
+  - specs/okf-project-gate/spec.md
+requires:
+  - go >= 1.26.0
+impacts:
+  - tools/okf-project-gate.sh: lightweight read-only repository and change admission checks
+  - tools/verify-okf-project-gate.sh: positive and negative controls for the project gate
+  - tools/gauntlet.sh: L0 invocation of the lightweight project gate before heavyweight execution

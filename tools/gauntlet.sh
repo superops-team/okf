@@ -26,6 +26,9 @@ step() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 # can read a prior run's output.
 rm -f ./coverage.out ./coverage.html
 
+step "L0 OKF project gate: tools/okf-project-gate.sh"
+bash tools/okf-project-gate.sh
+
 step "L1 types: go build ./..."
 "$GO" build ./...
 
@@ -172,4 +175,4 @@ if ! grep -q "source=" "$WORK/out_semantic.txt"; then
 fi
 
 echo
-echo "GAUNTLET PASS: build/vet/staticcheck/tests/tests(-race)/coverage(${COV}%)/shuffle/new-package/property(${PROP_RUN})/secret-scan/mod-verify/mutation/agent-mutation/governed-mutation/temporal-mutation/real-exec"
+echo "GAUNTLET PASS: project-gate/build/vet/staticcheck/tests/tests(-race)/coverage(${COV}%)/shuffle/new-package/property(${PROP_RUN})/secret-scan/mod-verify/mutation/agent-mutation/governed-mutation/temporal-mutation/real-exec"
